@@ -10,13 +10,22 @@
 
 ## 构建
 
-在项目根目录执行：
+首次构建或 `build/` 目录为空时，先配置交叉编译：
 
 ```bash
 cmake -S . -B build \
   -DCMAKE_TOOLCHAIN_FILE=toolchain-t113.cmake
-cmake --build build
 ```
+
+VS Code 的构建任务只执行增量构建，不会自动创建或重新配置 CMake 构建目录。
+
+也可以直接执行：
+
+```bash
+cmake --build build -j
+```
+
+对应 VS Code 任务为 `T113: Build`，使用 GCC 问题匹配器显示编译错误。
 
 生成的可执行文件为：
 
@@ -26,31 +35,76 @@ build/t113_terminal
 
 除非任务明确要求，不要删除或覆盖用户已有的构建产物和本地修改。
 
+## VS Code 远程调试
+
+项目的 `.vscode/launch.json` 和 `.vscode/tasks.json` 配置了 `T113 Remote Debug` 调试流程：
+
+```text
+T113: Build
+    -> T113: Deploy
+        -> T113: Start gdbserver
+            -> VS Code 连接 gdbserver
+```
+
+当前配置的具体信息：
+
+- 本地调试程序：`${workspaceFolder}/build/t113_terminal`
+- 本地工作目录：`${workspaceFolder}`
+- 调试器：`/usr/bin/gdb-multiarch`
+- 调试方式：GDB/MI (`MIMode: gdb`)
+- 远程 GDB 服务：`192.168.34.238:2345`
+- 调试启动时在程序入口暂停（`stopAtEntry: true`）
+- 需要在 WSL 中安装 `gdb-multiarch`，并在 VS Code 中安装 C/C++ 扩展
+
+点击 `T113 Remote Debug` 前，必须确保：
+
+- WSL 可以使用 `cmake`、`arm-linux-gnueabihf-gcc`、`scp`、`ssh` 和 `gdb-multiarch`；
+- T113 板端已安装并可执行 `gdbserver`；
+- WSL 可以通过 SSH 以 `root` 用户访问目标板，且已配置好认证；
+- 目标板的 `2345` 端口可从 WSL 访问。
+
 ## T113 远程访问
 
 - 通过 SSH 访问 T113 开发板。
 - 当前已知 IP 为 `192.168.34.238`，但该地址可能变化。
-- 不要把该 IP 硬编码到源码、脚本或构建配置中。
-- 执行远程操作前，优先通过环境变量或 SSH 配置确认地址，例如：
+- 当前 VS Code 配置使用 `root@192.168.34.238`，不要把这个地址当作永久地址。
+- 如果 IP 发生变化，需要同步修改 `.vscode/launch.json` 中的 `miDebuggerServerAddress`，以及 `.vscode/tasks.json` 中 `T113: Deploy` 和 `T113: Start gdbserver` 的 SSH/SCP 地址。
+- 不要把 SSH 密钥、密码或令牌提交到仓库。
+
+手动检查连接时，可以使用环境变量保存当前地址：
 
 ```bash
 export T113_HOST=192.168.34.238
-ssh "$T113_HOST"
+ssh root@"$T113_HOST"
 ```
 
-如果已在 `~/.ssh/config` 中配置主机别名，应优先使用别名。SSH 用户名、端口、密钥和远程部署目录以本地 SSH 配置或任务明确说明为准，不要猜测或提交敏感信息。
+如果已在 `~/.ssh/config` 中配置主机别名，应优先使用别名。当前 VS Code 任务尚未使用 `T113_HOST` 环境变量，因此仅设置该变量不会自动更新任务中的目标地址。
 
-## 部署与验证
+## 部署与 gdbserver
 
-在确认目标地址和远程路径后，可按以下流程操作：
+当前 VS Code 部署任务执行：
 
 ```bash
-cmake --build build
-scp build/t113_terminal "$T113_HOST":/tmp/t113_terminal
-ssh "$T113_HOST" 'chmod +x /tmp/t113_terminal && /tmp/t113_terminal'
+scp build/t113_terminal root@192.168.34.238:/mnt/UDISK/t113_terminal
 ```
 
-远程操作前应先确认网络连通性和目标设备身份。除非明确要求，不要执行会删除远程文件、重启设备或修改系统服务的操作。
+程序部署到板端后，启动任务会执行以下操作：
+
+```bash
+ssh root@192.168.34.238 \
+  'chmod +x /mnt/UDISK/t113_terminal; \
+   pkill gdbserver 2>/dev/null || true; \
+   nohup gdbserver :2345 /mnt/UDISK/t113_terminal \
+     >/tmp/gdbserver.log 2>&1 </dev/null &'
+```
+
+该操作会结束板端已有的 `gdbserver` 进程，并在 `2345` 端口后台启动新的服务。调试异常时，可在板端查看：
+
+```bash
+ssh root@"$T113_HOST" 'cat /tmp/gdbserver.log'
+```
+
+除非明确要求，不要删除远程文件、重启设备或修改系统服务。
 
 ## 修改约定
 
