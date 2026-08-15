@@ -27,6 +27,14 @@
 
 - 当前代码结构保持精简：`src/main.c` 负责入口，`src/can_receiver.c` 负责双 CAN 接收，接口声明位于 `include/can_receiver.h`。
 
+## 外接 USB 存储
+
+- 当前 T113 已将 USB 设备挂载到 `/mnt/usb`。
+- 已通过 SSH 确认该挂载为 exFAT、`rw`，目录当前可写。
+- 下一阶段 logger 的主存储目录使用 `/mnt/usb`，例如 `/mnt/usb/log/`。
+- logger 启动时必须检查 `/mnt/usb` 是否已挂载且可写；如果 USB 未挂载，不得静默把大量日志写入根分区 `/` 或 `/root`。
+- 不要格式化、重新挂载或删除 `/mnt/usb` 中的已有文件，除非任务明确要求。
+
 ## 构建
 
 首次构建或 `build/` 目录为空时，先配置交叉编译：
