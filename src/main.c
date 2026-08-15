@@ -17,6 +17,7 @@ int main(void)
     }
 
     result = can_receiver_run(&receiver);
+    can_receiver_print_stats(&receiver);
     can_receiver_close(&receiver);
 
     if (result < 0) {

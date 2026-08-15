@@ -14,6 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
+#include <linux/can/error.h>
 #include <linux/can/raw.h>
 
 static volatile sig_atomic_t receiver_running;
@@ -45,6 +46,7 @@ static void can_receiver_reset(CanReceiver *receiver)
 {
     unsigned int bus;
 
+    memset(receiver, 0, sizeof(*receiver));
     receiver->epoll_fd = -1;
     for (bus = 0; bus < CAN_RECEIVER_BUS_COUNT; ++bus) {
         receiver->socket_fd[bus] = -1;
@@ -55,6 +57,7 @@ static int can_receiver_open_socket(const char *ifname)
 {
     struct ifreq interface_request;
     struct sockaddr_can address;
+    int ifindex;
     int socket_fd;
 
     socket_fd = socket(PF_CAN, SOCK_RAW | SOCK_NONBLOCK, CAN_RAW);
@@ -72,10 +75,36 @@ static int can_receiver_open_socket(const char *ifname)
         close(socket_fd);
         return -1;
     }
+    ifindex = interface_request.ifr_ifindex;
+
+    if (ioctl(socket_fd, SIOCGIFFLAGS, &interface_request) < 0) {
+        fprintf(stderr, "Cannot read flags for CAN interface %s: %s\n", ifname,
+                strerror(errno));
+        close(socket_fd);
+        return -1;
+    }
+    if ((interface_request.ifr_flags & IFF_UP) == 0) {
+        fprintf(stderr, "CAN interface %s is down\n", ifname);
+        close(socket_fd);
+        errno = ENETDOWN;
+        return -1;
+    }
+
+    {
+        can_err_mask_t error_mask = CAN_ERR_MASK;
+
+        if (setsockopt(socket_fd, SOL_CAN_RAW, CAN_RAW_ERR_FILTER,
+                       &error_mask, sizeof(error_mask)) < 0) {
+            fprintf(stderr, "Cannot enable CAN error frames on %s: %s\n",
+                    ifname, strerror(errno));
+            close(socket_fd);
+            return -1;
+        }
+    }
 
     memset(&address, 0, sizeof(address));
     address.can_family = AF_CAN;
-    address.can_ifindex = interface_request.ifr_ifindex;
+    address.can_ifindex = ifindex;
     if (bind(socket_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
         fprintf(stderr, "Cannot bind CAN interface %s: %s\n", ifname,
                 strerror(errno));
@@ -118,6 +147,24 @@ static void can_receiver_print_message(const CanMessage *message,
     fflush(stdout);
 }
 
+static void can_receiver_print_error_frame(unsigned int bus,
+                                           const struct can_frame *frame)
+{
+    uint32_t error_mask = frame->can_id & CAN_ERR_MASK;
+
+    fprintf(stderr, "CAN%u error frame: class=0x%08x", bus, error_mask);
+    if ((error_mask & CAN_ERR_BUSOFF) != 0) {
+        fprintf(stderr, " BUS-OFF");
+    }
+    if ((error_mask & CAN_ERR_ACK) != 0) {
+        fprintf(stderr, " ACK");
+    }
+    if ((error_mask & CAN_ERR_BUSERROR) != 0) {
+        fprintf(stderr, " BUS-ERROR");
+    }
+    fprintf(stderr, "\n");
+}
+
 static int can_receiver_handle_socket(CanReceiver *receiver, unsigned int bus)
 {
     for (;;) {
@@ -134,23 +181,40 @@ static int can_receiver_handle_socket(CanReceiver *receiver, unsigned int bus)
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 return 0;
             }
+            receiver->stats[bus].read_errors++;
+            receiver->stats[bus].interface_failed = true;
             fprintf(stderr, "CAN%u receive failed: %s\n", bus,
                     strerror(errno));
             return -1;
         }
 
         if (received == CANFD_MTU) {
+            receiver->stats[bus].malformed_frames++;
             fprintf(stderr, "CAN%u received unsupported CAN FD frame\n", bus);
             continue;
         }
         if (received != CAN_MTU) {
+            receiver->stats[bus].malformed_frames++;
             fprintf(stderr, "CAN%u received invalid frame size: %zd\n", bus,
                     received);
             continue;
         }
         if (frame.can_dlc > CAN_MAX_DLEN) {
+            receiver->stats[bus].malformed_frames++;
             fprintf(stderr, "CAN%u received invalid DLC: %u\n", bus,
                     (unsigned int)frame.can_dlc);
+            continue;
+        }
+
+        if ((frame.can_id & CAN_ERR_FLAG) != 0) {
+            receiver->stats[bus].error_frames++;
+            can_receiver_print_error_frame(bus, &frame);
+            if ((frame.can_id & CAN_ERR_BUSOFF) != 0) {
+                receiver->stats[bus].bus_off_events++;
+                receiver->stats[bus].interface_failed = true;
+                receiver_running = 0;
+                return -1;
+            }
             continue;
         }
 
@@ -160,6 +224,7 @@ static int can_receiver_handle_socket(CanReceiver *receiver, unsigned int bus)
         message.can_id = frame.can_id & CAN_EFF_MASK;
         message.dlc = frame.can_dlc;
         memcpy(message.data, frame.data, message.dlc);
+        receiver->stats[bus].rx_frames++;
         can_receiver_print_message(&message,
                                    (frame.can_id & CAN_EFF_FLAG) != 0);
     }
@@ -212,6 +277,8 @@ int can_receiver_init(CanReceiver *receiver,
         event.data.u32 = bus;
         if (epoll_ctl(receiver->epoll_fd, EPOLL_CTL_ADD,
                       receiver->socket_fd[bus], &event) < 0) {
+            receiver->stats[bus].epoll_errors++;
+            receiver->stats[bus].interface_failed = true;
             fprintf(stderr, "epoll_ctl(CAN%u): %s\n", bus,
                     strerror(errno));
             can_receiver_close(receiver);
@@ -245,6 +312,7 @@ int can_receiver_run(CanReceiver *receiver)
             if (errno == EINTR) {
                 continue;
             }
+            receiver->epoll_wait_errors++;
             perror("epoll_wait");
             return -1;
         }
@@ -258,11 +326,11 @@ int can_receiver_run(CanReceiver *receiver)
                 return -1;
             }
             if ((event_flags & (EPOLLERR | EPOLLHUP)) != 0) {
+                receiver->stats[bus].epoll_errors++;
+                receiver->stats[bus].interface_failed = true;
                 fprintf(stderr, "CAN%u interface event: 0x%x\n", bus,
                         event_flags);
-                if ((event_flags & EPOLLIN) == 0) {
-                    return -1;
-                }
+                return -1;
             }
             if ((event_flags & EPOLLIN) != 0 &&
                 can_receiver_handle_socket(receiver, bus) < 0) {
@@ -278,6 +346,34 @@ void can_receiver_stop(CanReceiver *receiver)
 {
     (void)receiver;
     receiver_running = 0;
+}
+
+void can_receiver_print_stats(const CanReceiver *receiver)
+{
+    unsigned int bus;
+
+    if (receiver == NULL) {
+        return;
+    }
+
+    printf("CAN statistics:\n");
+    for (bus = 0; bus < CAN_RECEIVER_BUS_COUNT; ++bus) {
+        const CanReceiverStats *stats = &receiver->stats[bus];
+
+        printf("  CAN%u (%s): rx_frames=%llu error_frames=%llu "
+               "malformed_frames=%llu read_errors=%llu epoll_errors=%llu "
+               "bus_off_events=%llu interface_failed=%s\n",
+               bus, receiver->interface_name[bus],
+               (unsigned long long)stats->rx_frames,
+               (unsigned long long)stats->error_frames,
+               (unsigned long long)stats->malformed_frames,
+               (unsigned long long)stats->read_errors,
+               (unsigned long long)stats->epoll_errors,
+               (unsigned long long)stats->bus_off_events,
+               stats->interface_failed ? "yes" : "no");
+    }
+    printf("  epoll_wait_errors=%llu\n",
+           (unsigned long long)receiver->epoll_wait_errors);
 }
 
 void can_receiver_close(CanReceiver *receiver)
