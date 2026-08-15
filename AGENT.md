@@ -8,6 +8,22 @@
 - CMake 工具链文件为 `toolchain-t113.cmake`。
 - 程序入口为 `src/main.c`，构建目标名为 `t113_terminal`。
 
+## 当前开发阶段：双 CAN 接收器
+
+- 当前程序同时监听 `awlink0` 和 `awlink1`。
+- 两路接口各使用一个非阻塞 SocketCAN RAW socket，由同一个 `epoll` 实例和线程统一监听。
+- `bus = 0` 对应 `awlink0`，`bus = 1` 对应 `awlink1`。
+- 每帧统一转换为包含 `timestamp_us`、`bus`、`can_id`、`dlc` 和 `data[8]` 的 `CanMessage`。
+- 时间戳使用 `CLOCK_MONOTONIC`，单位为微秒。
+- 当前阶段只打印原始 CAN 帧，不加入日志、协议解析、蓝牙、数据库或 GUI。
+- 程序无命令行参数，直接运行即可开始双 CAN 接收：
+
+```bash
+./build/t113_terminal
+```
+
+- 当前代码结构保持精简：`src/main.c` 负责入口，`src/can_receiver.c` 负责双 CAN 接收，接口声明位于 `include/can_receiver.h`。
+
 ## 构建
 
 首次构建或 `build/` 目录为空时，先配置交叉编译：
