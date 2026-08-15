@@ -227,6 +227,10 @@ static int can_receiver_handle_socket(CanReceiver *receiver, unsigned int bus)
         receiver->stats[bus].rx_frames++;
         can_receiver_print_message(&message,
                                    (frame.can_id & CAN_EFF_FLAG) != 0);
+        if (receiver->message_sink != NULL) {
+            receiver->message_sink(&message,
+                                   receiver->message_sink_context);
+        }
     }
 }
 
@@ -346,6 +350,17 @@ void can_receiver_stop(CanReceiver *receiver)
 {
     (void)receiver;
     receiver_running = 0;
+}
+
+void can_receiver_set_message_sink(CanReceiver *receiver,
+                                   CanMessageSink sink, void *context)
+{
+    if (receiver == NULL) {
+        return;
+    }
+
+    receiver->message_sink = sink;
+    receiver->message_sink_context = context;
 }
 
 void can_receiver_print_stats(const CanReceiver *receiver)

@@ -27,12 +27,16 @@ typedef struct {
     bool interface_failed;
 } CanReceiverStats;
 
+typedef void (*CanMessageSink)(const CanMessage *message, void *context);
+
 typedef struct {
     int epoll_fd;
     int socket_fd[CAN_RECEIVER_BUS_COUNT];
     char interface_name[CAN_RECEIVER_BUS_COUNT][IF_NAMESIZE];
     CanReceiverStats stats[CAN_RECEIVER_BUS_COUNT];
     uint64_t epoll_wait_errors;
+    CanMessageSink message_sink;
+    void *message_sink_context;
 } CanReceiver;
 
 int can_receiver_init(CanReceiver *receiver,
@@ -41,6 +45,9 @@ int can_receiver_init(CanReceiver *receiver,
 int can_receiver_run(CanReceiver *receiver);
 
 void can_receiver_stop(CanReceiver *receiver);
+
+void can_receiver_set_message_sink(CanReceiver *receiver,
+                                    CanMessageSink sink, void *context);
 
 void can_receiver_print_stats(const CanReceiver *receiver);
 
