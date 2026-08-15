@@ -16,6 +16,9 @@
 - 每帧统一转换为包含 `timestamp_us`、`bus`、`can_id`、`dlc` 和 `data[8]` 的 `CanMessage`。
 - 时间戳使用 `CLOCK_MONOTONIC`，单位为微秒。
 - 当前阶段只打印原始 CAN 帧，不加入日志、协议解析、蓝牙、数据库或 GUI。
+- 第二阶段增加每路 `rx_frames`、错误帧、非法帧、读取错误、epoll 错误和 bus-off 统计。
+- SocketCAN 已启用 error frame 过滤；检测到 `CAN_ERR_BUSOFF` 时标记接口失败并停止接收，避免静默运行。
+- 程序退出时打印两路 CAN 的统计汇总。
 - 程序无命令行参数，直接运行即可开始双 CAN 接收：
 
 ```bash
