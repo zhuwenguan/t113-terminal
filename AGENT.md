@@ -8,7 +8,7 @@
 - CMake 工具链文件为 `toolchain-t113.cmake`。
 - 程序入口为 `src/main.c`，构建目标名为 `t113_terminal`。
 
-## 当前开发阶段：双 CAN 接收器
+## 当前开发阶段：双 CAN + LapPro 统一 APP
 
 - 当前程序同时监听 `awlink0` 和 `awlink1`。
 - 两路接口各使用一个非阻塞 SocketCAN RAW socket，由同一个 `epoll` 实例和线程统一监听。
@@ -22,13 +22,41 @@
 - 第三阶段增加一个 logger 线程和固定容量内存队列；接收线程只入队，不直接执行文件写入。
 - logger 每最多 32 帧或 1 秒批量写入一次 CSV，不对每帧执行 `fsync`。
 - 每次运行生成独立的 `/mnt/usb/log/can_*.csv` 文件，并统计入队、写入、丢弃和写错误数量。
-- 程序无命令行参数，直接运行即可开始双 CAN 接收：
+- logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
+- LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
+- LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
+- 当前默认目标地址为 `B0:A6:04:20:DF:3A`，位于 `LapProConfig` 中，可替换；默认地址类型为 LE public。
+- 当前已知 ATT 参数集中定义在 `src/lappro.c`：
+  - FF01 Notify value `0x002A`
+  - FF01 CCCD `0x002B`
+  - FF02 Write value `0x002D`
+- Transport 使用 `AA 55 + TYPE + BE length + payload + LE CRC`，支持跨 Notify 重组、单次 Notify 多帧、CRC 校验和长度限制。
+- 已实现四步认证：PrefixKey 派生 AuthKey、HMAC-SHA256、AES-256-CTR、RND_S/RND_C 校验和 SessionKey。
+- 认证成功后读取 `product`、`active`、`bleMac`、`mtu`，再开启 `gpsDataReport`。
+- TYPE 2 GPS/IMU 数据已按 27-byte GpsPacket 更新 `LapProState`。
+- 当前不实现首次绑定写入流程；实机已验证这只设备认证后可直接进入正常会话。
+- 程序无命令行参数，直接运行即可开始双 CAN 和 LapPro worker：
 
 ```bash
 ./build/t113_terminal
 ```
 
-- 当前代码结构保持精简：`src/main.c` 负责入口，`src/can_receiver.c` 负责双 CAN 接收，接口声明位于 `include/can_receiver.h`。
+- 当前代码结构保持精简：
+  - `src/main.c`：APP 生命周期、CAN/LapPro/logger 汇合和退出清理。
+  - `src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理。
+  - `src/logger.c`：固定队列、批量 CSV 写入。
+  - `src/lappro.c`：LapPro worker、ATT、认证、JSON、GPS 状态更新。
+  - `src/lappro_transport.c`：Transport 编解码、CRC 和分片自测。
+  - `src/lappro_crypto.c`：SHA-256、HMAC-SHA256、AES-256-CTR 和固定向量自测。
+
+### LapPro 实机验证状态
+
+- T113 上已验证 ARMv7/hard-float 程序可通过原生 L2CAP 连接 LapPro。
+- ATT MTU 协商结果为 247，FF01 Notify 订阅成功。
+- Auth Step 1 重组、Step 2 发送、Step 3 解密校验、Step 4 发送均成功。
+- 已收到并解密设备属性响应：`product=LapProMax`、`active=1`、`mtu=247`。
+- 已开启 GPS 数据流并持续收到 TYPE 2；当前测试环境设备返回 `fix=0`、`numSV=0`，没有有效 GPS fix，程序保留该真实状态。
+- CAN 与 LapPro 并行运行期间，两路 CAN 初始化和统计正常；LapPro 连接失败不会结束 APP。
 
 ## 外接 USB 存储
 
