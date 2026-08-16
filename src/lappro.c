@@ -87,6 +87,7 @@ typedef struct {
     uint64_t authenticated_at_us;
     bool json_request_sent;
     bool json_response_received;
+    bool gps_request_sent;
 } lappro_connection;
 
 static void lappro_log(const char *format, ...)
@@ -353,29 +354,53 @@ static void lappro_auth_failed(lappro_connection *connection,
     lappro_log("authentication failed: %s", reason);
 }
 
-static int lappro_send_properties_request(lappro_connection *connection)
+static int lappro_send_json_request(lappro_connection *connection,
+                                    const char *request)
 {
-    static const char request[] =
-        "{\"method\":\"read\",\"properties\":[\"product\",\"active\",\"bleMac\",\"mtu\"]}";
     uint8_t iv[LAPPRO_AES_BLOCK_SIZE];
-    uint8_t encrypted[sizeof(request) - 1U];
-    uint8_t payload[LAPPRO_AES_BLOCK_SIZE + sizeof(request) - 1U];
+    uint8_t encrypted[LAPPRO_TRANSPORT_MAX_PAYLOAD];
+    uint8_t payload[LAPPRO_AES_BLOCK_SIZE + LAPPRO_TRANSPORT_MAX_PAYLOAD];
+    size_t request_length = strlen(request);
+
+    if (request_length > LAPPRO_TRANSPORT_MAX_PAYLOAD -
+                             LAPPRO_AES_BLOCK_SIZE) {
+        return -1;
+    }
 
     if (lappro_random_bytes(iv, sizeof(iv)) < 0) {
         return -1;
     }
-    lappro_aes256_ctr(connection->session_key, iv,
-                      (const uint8_t *)request, sizeof(request) - 1U,
-                      encrypted);
+    lappro_aes256_ctr(connection->session_key, iv, (const uint8_t *)request,
+                      request_length, encrypted);
     memcpy(payload, iv, sizeof(iv));
-    memcpy(payload + sizeof(iv), encrypted, sizeof(encrypted));
-    if (lappro_send_transport(connection, 0x01U, payload, sizeof(payload)) <
-        0) {
+    memcpy(payload + sizeof(iv), encrypted, request_length);
+    return lappro_send_transport(connection, 0x01U, payload,
+                                 sizeof(iv) + request_length);
+}
+
+static int lappro_send_properties_request(lappro_connection *connection)
+{
+    static const char request[] =
+        "{\"method\":\"read\",\"properties\":[\"product\",\"active\",\"bleMac\",\"mtu\"]}";
+
+    if (lappro_send_json_request(connection, request) < 0) {
         return -1;
     }
-
     connection->json_request_sent = true;
     lappro_log("product query sent");
+    return 0;
+}
+
+static int lappro_send_gps_enable_request(lappro_connection *connection)
+{
+    static const char request[] =
+        "{\"method\":\"write\",\"properties\":{\"gpsDataReport\":1}}";
+
+    if (lappro_send_json_request(connection, request) < 0) {
+        return -1;
+    }
+    connection->gps_request_sent = true;
+    lappro_log("GPS stream enabled");
     return 0;
 }
 
@@ -397,7 +422,103 @@ static void lappro_handle_json_frame(lappro_connection *connection,
                       ciphertext_length, plaintext);
     plaintext[ciphertext_length] = '\0';
     lappro_log("product response: %s", (const char *)plaintext);
-    connection->json_response_received = true;
+    if (!connection->json_response_received) {
+        connection->json_response_received = true;
+        if (lappro_send_gps_enable_request(connection) < 0) {
+            lappro_auth_failed(connection, "cannot enable GPS stream");
+        }
+    }
+}
+
+static uint16_t lappro_read_be16(const uint8_t *data)
+{
+    return (uint16_t)data[0] << 8U | data[1];
+}
+
+static uint32_t lappro_read_be32(const uint8_t *data)
+{
+    return (uint32_t)data[0] << 24U | (uint32_t)data[1] << 16U |
+           (uint32_t)data[2] << 8U | data[3];
+}
+
+static void lappro_handle_gps_frame(lappro_connection *connection,
+                                    const uint8_t *payload,
+                                    size_t payload_length)
+{
+    uint8_t plaintext[27];
+    unsigned int year;
+    unsigned int month;
+    unsigned int day;
+    unsigned int hour;
+    unsigned int minute;
+    unsigned int second;
+    unsigned int millisecond;
+    uint8_t fix_type;
+    uint8_t num_sv;
+    double speed_kmh;
+    double heading_deg;
+    double hacc_m;
+    double altitude;
+    double longitude;
+    double latitude;
+    double acc_x;
+    double acc_y;
+    double acc_z;
+    uint64_t timestamp_us;
+
+    if (payload_length != LAPPRO_AES_BLOCK_SIZE + sizeof(plaintext)) {
+        lappro_log("invalid GPS payload length=%zu", payload_length);
+        return;
+    }
+
+    lappro_aes256_ctr(connection->session_key, payload, payload + 16U,
+                      sizeof(plaintext), plaintext);
+    year = 2025U + (unsigned int)(plaintext[0] >> 4U);
+    month = plaintext[0] & 0x0FU;
+    day = plaintext[1] >> 3U;
+    fix_type = plaintext[1] & 0x07U;
+    hour = plaintext[2] >> 3U;
+    minute = ((unsigned int)(plaintext[2] & 0x07U) << 3U) |
+             (plaintext[3] >> 5U);
+    second = ((unsigned int)(plaintext[3] & 0x1FU) << 1U) |
+             (plaintext[4] >> 7U);
+    millisecond = ((unsigned int)(plaintext[4] & 0x7FU) << 3U) |
+                  (plaintext[5] >> 5U);
+    num_sv = plaintext[5] & 0x1FU;
+    speed_kmh = (double)lappro_read_be16(plaintext + 6U) / 100.0;
+    heading_deg = (double)lappro_read_be16(plaintext + 8U) / 100.0;
+    hacc_m = (double)plaintext[10] / 10.0;
+    altitude = (double)lappro_read_be16(plaintext + 11U);
+    longitude = (double)lappro_read_be32(plaintext + 13U) / 10000000.0;
+    latitude = (double)lappro_read_be32(plaintext + 17U) / 10000000.0;
+    acc_x = (double)(int16_t)lappro_read_be16(plaintext + 21U) / 4096.0;
+    acc_y = (double)(int16_t)lappro_read_be16(plaintext + 23U) / 4096.0;
+    acc_z = (double)(int16_t)lappro_read_be16(plaintext + 25U) / 4096.0;
+    timestamp_us = lappro_monotonic_us();
+
+    pthread_mutex_lock(&connection->lappro->mutex);
+    connection->lappro->state.speed_kmh = speed_kmh;
+    connection->lappro->state.heading_deg = heading_deg;
+    connection->lappro->state.hacc_m = hacc_m;
+    connection->lappro->state.altitude = altitude;
+    connection->lappro->state.longitude = longitude;
+    connection->lappro->state.latitude = latitude;
+    connection->lappro->state.acc_x = acc_x;
+    connection->lappro->state.acc_y = acc_y;
+    connection->lappro->state.acc_z = acc_z;
+    connection->lappro->state.fix_type = fix_type;
+    connection->lappro->state.num_sv = num_sv;
+    connection->lappro->state.last_update_monotonic_us = timestamp_us;
+    connection->lappro->state.streaming = true;
+    pthread_mutex_unlock(&connection->lappro->mutex);
+
+    lappro_log("GPS %04u-%02u-%02u %02u:%02u:%02u.%03u fix=%u sv=%u "
+               "speed=%.2f heading=%.2f hAcc=%.1f altitude=%.0f "
+               "lat=%.7f lon=%.7f acc=(%.4f,%.4f,%.4f)",
+               year, month, day, hour, minute, second, millisecond,
+               (unsigned int)fix_type, (unsigned int)num_sv, speed_kmh,
+               heading_deg, hacc_m, altitude, latitude, longitude, acc_x,
+               acc_y, acc_z);
 }
 
 static void lappro_handle_transport_frame(uint8_t type, const uint8_t *payload,
@@ -475,6 +596,11 @@ static void lappro_handle_transport_frame(uint8_t type, const uint8_t *payload,
 
     if (type == 0x01U && connection->authenticated) {
         lappro_handle_json_frame(connection, payload, payload_length);
+        return;
+    }
+
+    if (type == 0x02U && connection->authenticated) {
+        lappro_handle_gps_frame(connection, payload, payload_length);
         return;
     }
 
