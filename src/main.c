@@ -16,14 +16,18 @@ int main(void)
     LapProConfig lappro_config;
     LapPro lappro;
     bool lappro_ready = false;
+    bool logger_ready = false;
     int result;
 
     if (logger_init(&logger) < 0) {
-        return EXIT_FAILURE;
-    }
-    if (logger_start(&logger) < 0) {
+        fprintf(stderr,
+                "warning: CAN logger unavailable; continuing without file logging\n");
+    } else if (logger_start(&logger) < 0) {
         logger_stop(&logger);
-        return EXIT_FAILURE;
+        fprintf(stderr,
+                "warning: CAN logger did not start; continuing without file logging\n");
+    } else {
+        logger_ready = true;
     }
 
     lappro_config_default(&lappro_config);
@@ -40,19 +44,25 @@ int main(void)
         if (lappro_ready) {
             lappro_stop(&lappro);
         }
-        logger_stop(&logger);
+        if (logger_ready) {
+            logger_stop(&logger);
+        }
         return EXIT_FAILURE;
     }
 
-    can_receiver_set_message_sink(&receiver, logger_message_sink, &logger);
+    if (logger_ready) {
+        can_receiver_set_message_sink(&receiver, logger_message_sink, &logger);
+    }
     result = can_receiver_run(&receiver);
     can_receiver_print_stats(&receiver);
     can_receiver_close(&receiver);
     if (lappro_ready) {
         lappro_stop(&lappro);
     }
-    logger_stop(&logger);
-    logger_print_stats(&logger);
+    if (logger_ready) {
+        logger_stop(&logger);
+        logger_print_stats(&logger);
+    }
 
     if (result < 0) {
         fprintf(stderr, "CAN receiver stopped with an error\n");
