@@ -42,8 +42,9 @@
 #define LAPPRO_HANDLE_WRITE_VALUE 0x002DU
 
 #define LAPPRO_RECONNECT_DELAY_MS 2000U
-#define LAPPRO_RECEIVE_TIMEOUT_SEC 1
+#define LAPPRO_RECEIVE_TIMEOUT_MS 100U
 #define LAPPRO_AUTH_TIMEOUT_US 5000000ULL
+#define LAPPRO_JSON_DELAY_US 500000ULL
 
 enum lappro_auth_step {
     LAPPRO_AUTH_WAIT_STEP1 = 0,
@@ -83,6 +84,9 @@ typedef struct {
     enum lappro_auth_step auth_step;
     bool authenticated;
     bool auth_failed;
+    uint64_t authenticated_at_us;
+    bool json_request_sent;
+    bool json_response_received;
 } lappro_connection;
 
 static void lappro_log(const char *format, ...)
@@ -237,8 +241,8 @@ static int lappro_connect(LapPro *lappro)
         return -1;
     }
 
-    receive_timeout.tv_sec = LAPPRO_RECEIVE_TIMEOUT_SEC;
-    receive_timeout.tv_usec = 0;
+    receive_timeout.tv_sec = 0;
+    receive_timeout.tv_usec = LAPPRO_RECEIVE_TIMEOUT_MS * 1000U;
     if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout,
                    sizeof(receive_timeout)) < 0) {
         lappro_log("cannot set L2CAP receive timeout: %s", strerror(errno));
@@ -349,80 +353,133 @@ static void lappro_auth_failed(lappro_connection *connection,
     lappro_log("authentication failed: %s", reason);
 }
 
+static int lappro_send_properties_request(lappro_connection *connection)
+{
+    static const char request[] =
+        "{\"method\":\"read\",\"properties\":[\"product\",\"active\",\"bleMac\",\"mtu\"]}";
+    uint8_t iv[LAPPRO_AES_BLOCK_SIZE];
+    uint8_t encrypted[sizeof(request) - 1U];
+    uint8_t payload[LAPPRO_AES_BLOCK_SIZE + sizeof(request) - 1U];
+
+    if (lappro_random_bytes(iv, sizeof(iv)) < 0) {
+        return -1;
+    }
+    lappro_aes256_ctr(connection->session_key, iv,
+                      (const uint8_t *)request, sizeof(request) - 1U,
+                      encrypted);
+    memcpy(payload, iv, sizeof(iv));
+    memcpy(payload + sizeof(iv), encrypted, sizeof(encrypted));
+    if (lappro_send_transport(connection, 0x01U, payload, sizeof(payload)) <
+        0) {
+        return -1;
+    }
+
+    connection->json_request_sent = true;
+    lappro_log("product query sent");
+    return 0;
+}
+
+static void lappro_handle_json_frame(lappro_connection *connection,
+                                     const uint8_t *payload,
+                                     size_t payload_length)
+{
+    uint8_t plaintext[LAPPRO_TRANSPORT_MAX_PAYLOAD];
+    size_t ciphertext_length;
+
+    if (payload_length < LAPPRO_AES_BLOCK_SIZE ||
+        payload_length - LAPPRO_AES_BLOCK_SIZE >= sizeof(plaintext)) {
+        lappro_log("invalid JSON payload length=%zu", payload_length);
+        return;
+    }
+
+    ciphertext_length = payload_length - LAPPRO_AES_BLOCK_SIZE;
+    lappro_aes256_ctr(connection->session_key, payload, payload + 16U,
+                      ciphertext_length, plaintext);
+    plaintext[ciphertext_length] = '\0';
+    lappro_log("product response: %s", (const char *)plaintext);
+    connection->json_response_received = true;
+}
+
 static void lappro_handle_transport_frame(uint8_t type, const uint8_t *payload,
                                           size_t payload_length, void *context)
 {
     lappro_connection *connection = context;
 
-    if (type != 0x00U) {
-        lappro_log("transport frame type=0x%02X payload_len=%zu", type,
-                   payload_length);
+    if (type == 0x00U) {
+        if (connection->auth_step == LAPPRO_AUTH_WAIT_STEP1) {
+            uint8_t step2_payload[48];
+            uint8_t encrypted_random[32];
+
+            if (payload_length != 38U) {
+                lappro_auth_failed(connection, "invalid Auth Step 1 length");
+                return;
+            }
+            memcpy(connection->rnd_s, payload + 6U,
+                   sizeof(connection->rnd_s));
+            lappro_hmac_sha256(lappro_prefix_key, sizeof(lappro_prefix_key),
+                               payload, 6U, connection->auth_key);
+            if (lappro_random_bytes(connection->rnd_c,
+                                    sizeof(connection->rnd_c)) < 0) {
+                lappro_auth_failed(connection, "cannot obtain random bytes");
+                return;
+            }
+            lappro_aes256_ctr(connection->auth_key, connection->rnd_c,
+                              connection->rnd_s, sizeof(connection->rnd_s),
+                              encrypted_random);
+            memcpy(step2_payload, connection->rnd_c,
+                   sizeof(connection->rnd_c));
+            memcpy(step2_payload + sizeof(connection->rnd_c),
+                   encrypted_random, sizeof(encrypted_random));
+            if (lappro_send_transport(connection, 0x00U, step2_payload,
+                                      sizeof(step2_payload)) < 0) {
+                lappro_auth_failed(connection, "cannot send Auth Step 2");
+                return;
+            }
+            connection->auth_step = LAPPRO_AUTH_WAIT_STEP3;
+            lappro_log("auth step 1 received");
+            lappro_log("auth step 2 sent");
+        } else if (connection->auth_step == LAPPRO_AUTH_WAIT_STEP3) {
+            uint8_t plaintext[64];
+            uint8_t step4_payload = 0x00U;
+
+            if (payload_length != 80U) {
+                lappro_auth_failed(connection, "invalid Auth Step 3 length");
+                return;
+            }
+            lappro_aes256_ctr(connection->auth_key, payload, payload + 16U,
+                              64U, plaintext);
+            if (memcmp(plaintext, connection->rnd_s,
+                       sizeof(connection->rnd_s)) != 0) {
+                lappro_auth_failed(connection,
+                                   "Auth Step 3 challenge mismatch");
+                return;
+            }
+            memcpy(connection->session_key, plaintext + 32U,
+                   sizeof(connection->session_key));
+            lappro_log("auth step 3 verified");
+            if (lappro_send_transport(connection, 0x00U, &step4_payload, 1U) <
+                0) {
+                lappro_auth_failed(connection, "cannot send Auth Step 4");
+                return;
+            }
+            connection->auth_step = LAPPRO_AUTHENTICATED;
+            connection->authenticated = true;
+            connection->authenticated_at_us = lappro_monotonic_us();
+            lappro_set_authenticated(connection->lappro);
+            lappro_log("authenticated");
+        } else {
+            lappro_log("unexpected Auth frame after authentication");
+        }
         return;
     }
 
-    if (connection->auth_step == LAPPRO_AUTH_WAIT_STEP1) {
-        uint8_t step2_payload[48];
-        uint8_t encrypted_random[32];
-
-        if (payload_length != 38U) {
-            lappro_auth_failed(connection, "invalid Auth Step 1 length");
-            return;
-        }
-        memcpy(connection->rnd_s, payload + 6U, sizeof(connection->rnd_s));
-        lappro_hmac_sha256(lappro_prefix_key, sizeof(lappro_prefix_key),
-                           payload, 6U, connection->auth_key);
-        if (lappro_random_bytes(connection->rnd_c,
-                                sizeof(connection->rnd_c)) < 0) {
-            lappro_auth_failed(connection, "cannot obtain random bytes");
-            return;
-        }
-        lappro_aes256_ctr(connection->auth_key, connection->rnd_c,
-                          connection->rnd_s, sizeof(connection->rnd_s),
-                          encrypted_random);
-        memcpy(step2_payload, connection->rnd_c, sizeof(connection->rnd_c));
-        memcpy(step2_payload + sizeof(connection->rnd_c), encrypted_random,
-               sizeof(encrypted_random));
-        if (lappro_send_transport(connection, 0x00U, step2_payload,
-                                  sizeof(step2_payload)) < 0) {
-            lappro_auth_failed(connection, "cannot send Auth Step 2");
-            return;
-        }
-        connection->auth_step = LAPPRO_AUTH_WAIT_STEP3;
-        lappro_log("auth step 1 received");
-        lappro_log("auth step 2 sent");
+    if (type == 0x01U && connection->authenticated) {
+        lappro_handle_json_frame(connection, payload, payload_length);
         return;
     }
 
-    if (connection->auth_step == LAPPRO_AUTH_WAIT_STEP3) {
-        uint8_t plaintext[64];
-        uint8_t step4_payload = 0x00U;
-
-        if (payload_length != 80U) {
-            lappro_auth_failed(connection, "invalid Auth Step 3 length");
-            return;
-        }
-        lappro_aes256_ctr(connection->auth_key, payload, payload + 16U, 64U,
-                          plaintext);
-        if (memcmp(plaintext, connection->rnd_s, sizeof(connection->rnd_s)) !=
-            0) {
-            lappro_auth_failed(connection, "Auth Step 3 challenge mismatch");
-            return;
-        }
-        memcpy(connection->session_key, plaintext + 32U,
-               sizeof(connection->session_key));
-        lappro_log("auth step 3 verified");
-        if (lappro_send_transport(connection, 0x00U, &step4_payload, 1U) < 0) {
-            lappro_auth_failed(connection, "cannot send Auth Step 4");
-            return;
-        }
-        connection->auth_step = LAPPRO_AUTHENTICATED;
-        connection->authenticated = true;
-        lappro_set_authenticated(connection->lappro);
-        lappro_log("authenticated");
-        return;
-    }
-
-    lappro_log("unexpected Auth frame after authentication");
+    lappro_log("transport frame type=0x%02X payload_len=%zu", type,
+               payload_length);
 }
 
 static void lappro_handle_notification(lappro_connection *connection,
@@ -449,6 +506,25 @@ static void lappro_handle_notification(lappro_connection *connection,
                                connection) < 0) {
         lappro_log("transport feed failed");
     }
+}
+
+static int lappro_maybe_send_properties_request(lappro_connection *connection)
+{
+    uint64_t now;
+
+    if (!connection->authenticated || connection->json_request_sent) {
+        return 0;
+    }
+    now = lappro_monotonic_us();
+    if (now == 0U || now < connection->authenticated_at_us +
+                              LAPPRO_JSON_DELAY_US) {
+        return 0;
+    }
+    if (lappro_send_properties_request(connection) < 0) {
+        lappro_log("cannot send product query");
+        return -1;
+    }
+    return 0;
 }
 
 static int lappro_receive_packet(LapPro *lappro, int socket_fd,
@@ -600,6 +676,9 @@ static int lappro_receive_notifications(lappro_connection *connection)
     uint8_t packet[512];
 
     while (!lappro_should_stop(connection->lappro)) {
+        if (lappro_maybe_send_properties_request(connection) < 0) {
+            return -1;
+        }
         int received = lappro_receive_packet(connection->lappro,
                                              connection->socket_fd, packet,
                                              sizeof(packet));
