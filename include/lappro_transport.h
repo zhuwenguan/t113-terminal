@@ -27,6 +27,10 @@ uint16_t lappro_crc(const uint8_t *data, size_t length);
 
 void lappro_transport_init(LapproTransport *transport);
 
+int lappro_transport_encode(uint8_t type, const uint8_t *payload,
+                            size_t payload_length, uint8_t *frame,
+                            size_t frame_capacity, size_t *frame_length);
+
 int lappro_transport_feed(LapproTransport *transport, const uint8_t *data,
                           size_t length,
                           LapproTransportFrameHandler handler,

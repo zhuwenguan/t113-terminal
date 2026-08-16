@@ -209,9 +209,9 @@ static void lappro_transport_test_capture_frame(uint8_t type,
     capture->frames++;
 }
 
-static int lappro_transport_make_frame(uint8_t type, const uint8_t *payload,
-                                       size_t payload_length, uint8_t *frame,
-                                       size_t frame_capacity, size_t *length)
+int lappro_transport_encode(uint8_t type, const uint8_t *payload,
+                            size_t payload_length, uint8_t *frame,
+                            size_t frame_capacity, size_t *length)
 {
     uint16_t crc;
 
@@ -290,9 +290,8 @@ int lappro_transport_self_test(void)
 
     if (lappro_crc(vector_one, 6U) != 0x1CDDU ||
         lappro_crc(vector_two, 8U) != 0x5F5DU ||
-        lappro_transport_make_frame(0x00U, (const uint8_t[]){0x00}, 1U,
-                                    invalid_crc, sizeof(invalid_crc),
-                                    &index) < 0 ||
+        lappro_transport_encode(0x00U, (const uint8_t[]){0x00}, 1U,
+                                invalid_crc, sizeof(invalid_crc), &index) < 0 ||
         memcmp(invalid_crc, vector_one, sizeof(vector_one)) != 0) {
         return -1;
     }
@@ -300,10 +299,10 @@ int lappro_transport_self_test(void)
     for (index = 0; index < sizeof(payload); ++index) {
         payload[index] = (uint8_t)index;
     }
-    if (lappro_transport_make_frame(0x00U, payload, sizeof(payload),
-                                    fragmented_frame,
-                                    sizeof(fragmented_frame),
-                                    &fragmented_length) < 0 ||
+    if (lappro_transport_encode(0x00U, payload, sizeof(payload),
+                                fragmented_frame,
+                                sizeof(fragmented_frame),
+                                &fragmented_length) < 0 ||
         fragmented_length != sizeof(fragmented_frame)) {
         return -1;
     }
