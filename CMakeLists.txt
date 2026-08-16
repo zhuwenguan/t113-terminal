@@ -15,6 +15,7 @@ add_executable(t113_terminal
     src/can_receiver.c
     src/logger.c
     src/lappro.c
+    src/lappro_transport.c
 )
 
 target_include_directories(t113_terminal PRIVATE

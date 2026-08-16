@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "lappro.h"
+#include "lappro_transport.h"
 
 #include <errno.h>
 #include <stdarg.h>
@@ -204,17 +205,39 @@ static int lappro_send_packet(int socket_fd, const uint8_t *packet,
     return 0;
 }
 
-static void lappro_print_hex(const char *prefix, const uint8_t *data,
-                             size_t data_length)
+static void lappro_handle_transport_frame(uint8_t type, const uint8_t *payload,
+                                          size_t payload_length, void *context)
 {
-    size_t index;
+    (void)payload;
+    (void)context;
 
-    fputs(prefix, stdout);
-    for (index = 0; index < data_length; ++index) {
-        printf("%s%02X", index == 0 ? "" : " ", data[index]);
+    lappro_log("transport frame type=0x%02X payload_len=%zu", type,
+               payload_length);
+}
+
+static void lappro_handle_notification(LapproTransport *transport,
+                                       const uint8_t *packet, size_t length)
+{
+    uint16_t handle;
+
+    if (length < 3U) {
+        lappro_log("malformed notification length=%zu", length);
+        return;
     }
-    fputc('\n', stdout);
-    fflush(stdout);
+    if (packet[0] != LAPPRO_ATT_OP_HANDLE_VALUE_NOTIFICATION) {
+        return;
+    }
+
+    handle = (uint16_t)packet[1] | (uint16_t)packet[2] << 8U;
+    if (handle != LAPPRO_HANDLE_NOTIFY_VALUE) {
+        lappro_log("notification from unexpected handle=0x%04X", handle);
+        return;
+    }
+
+    if (lappro_transport_feed(transport, packet + 3U, length - 3U,
+                               lappro_handle_transport_frame, NULL) < 0) {
+        lappro_log("transport feed failed");
+    }
 }
 
 static int lappro_receive_packet(LapPro *lappro, int socket_fd,
@@ -240,23 +263,8 @@ static int lappro_receive_packet(LapPro *lappro, int socket_fd,
     return (int)received;
 }
 
-static void lappro_handle_notification(const uint8_t *packet, size_t length)
-{
-    if (length < 3U) {
-        lappro_log("malformed notification length=%zu", length);
-        return;
-    }
-    if (packet[0] != LAPPRO_ATT_OP_HANDLE_VALUE_NOTIFICATION) {
-        return;
-    }
-
-    lappro_log("notification handle=0x%04X length=%zu",
-               (unsigned int)packet[1] | ((unsigned int)packet[2] << 8),
-               length - 3U);
-    lappro_print_hex("[LapPro] notify data: ", packet + 3U, length - 3U);
-}
-
 static int lappro_wait_for_response(LapPro *lappro, int socket_fd,
+                                    LapproTransport *transport,
                                     uint8_t expected_opcode)
 {
     uint8_t packet[512];
@@ -274,7 +282,7 @@ static int lappro_wait_for_response(LapPro *lappro, int socket_fd,
             continue;
         }
         if (packet[0] == LAPPRO_ATT_OP_HANDLE_VALUE_NOTIFICATION) {
-            lappro_handle_notification(packet, (size_t)received);
+            lappro_handle_notification(transport, packet, (size_t)received);
             continue;
         }
         if (packet[0] == LAPPRO_ATT_OP_ERROR_RESPONSE) {
@@ -294,7 +302,8 @@ static int lappro_wait_for_response(LapPro *lappro, int socket_fd,
     }
 }
 
-static int lappro_exchange_mtu(LapPro *lappro, int socket_fd)
+static int lappro_exchange_mtu(LapPro *lappro, int socket_fd,
+                               LapproTransport *transport)
 {
     uint8_t request[3] = {
         LAPPRO_ATT_OP_EXCHANGE_MTU_REQUEST,
@@ -303,7 +312,7 @@ static int lappro_exchange_mtu(LapPro *lappro, int socket_fd)
     };
 
     if (lappro_send_packet(socket_fd, request, sizeof(request)) < 0 ||
-        lappro_wait_for_response(lappro, socket_fd,
+        lappro_wait_for_response(lappro, socket_fd, transport,
                                  LAPPRO_ATT_OP_EXCHANGE_MTU_RESPONSE) < 0) {
         lappro_log("ATT MTU exchange failed; using default MTU %u",
                    LAPPRO_ATT_DEFAULT_MTU);
@@ -314,7 +323,8 @@ static int lappro_exchange_mtu(LapPro *lappro, int socket_fd)
     return 0;
 }
 
-static int lappro_write_cccd(LapPro *lappro, int socket_fd)
+static int lappro_write_cccd(LapPro *lappro, int socket_fd,
+                             LapproTransport *transport)
 {
     uint8_t request[5] = {
         LAPPRO_ATT_OP_WRITE_REQUEST,
@@ -325,7 +335,7 @@ static int lappro_write_cccd(LapPro *lappro, int socket_fd)
     };
 
     if (lappro_send_packet(socket_fd, request, sizeof(request)) < 0 ||
-        lappro_wait_for_response(lappro, socket_fd,
+        lappro_wait_for_response(lappro, socket_fd, transport,
                                  LAPPRO_ATT_OP_WRITE_RESPONSE) < 0) {
         lappro_log("FF01 notify subscription failed");
         return -1;
@@ -336,7 +346,8 @@ static int lappro_write_cccd(LapPro *lappro, int socket_fd)
     return 0;
 }
 
-static int lappro_receive_notifications(LapPro *lappro, int socket_fd)
+static int lappro_receive_notifications(LapPro *lappro, int socket_fd,
+                                        LapproTransport *transport)
 {
     uint8_t packet[512];
 
@@ -350,7 +361,7 @@ static int lappro_receive_notifications(LapPro *lappro, int socket_fd)
             continue;
         }
         if (packet[0] == LAPPRO_ATT_OP_HANDLE_VALUE_NOTIFICATION) {
-            lappro_handle_notification(packet, (size_t)received);
+            lappro_handle_notification(transport, packet, (size_t)received);
         } else {
             lappro_log("received ATT opcode=0x%02X length=%d", packet[0],
                        received);
@@ -381,10 +392,13 @@ static void *lappro_worker(void *context)
         int socket_fd = lappro_connect(lappro);
 
         if (socket_fd >= 0) {
+            LapproTransport transport;
+
+            lappro_transport_init(&transport);
             lappro_set_connection_state(lappro, true);
-            if (lappro_exchange_mtu(lappro, socket_fd) == 0 &&
-                lappro_write_cccd(lappro, socket_fd) == 0) {
-                lappro_receive_notifications(lappro, socket_fd);
+            if (lappro_exchange_mtu(lappro, socket_fd, &transport) == 0 &&
+                lappro_write_cccd(lappro, socket_fd, &transport) == 0) {
+                lappro_receive_notifications(lappro, socket_fd, &transport);
             }
 
             lappro_set_connection_state(lappro, false);
@@ -418,6 +432,10 @@ int lappro_init(LapPro *lappro, const LapProConfig *config)
 
     if (lappro == NULL || config == NULL || config->mac[0] == '\0') {
         errno = EINVAL;
+        return -1;
+    }
+    if (lappro_transport_self_test() < 0) {
+        errno = EPROTO;
         return -1;
     }
 
