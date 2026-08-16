@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "lappro.h"
+#include "lappro_crypto.h"
 #include "lappro_transport.h"
 
 #include <errno.h>
@@ -435,6 +436,10 @@ int lappro_init(LapPro *lappro, const LapProConfig *config)
         return -1;
     }
     if (lappro_transport_self_test() < 0) {
+        errno = EPROTO;
+        return -1;
+    }
+    if (lappro_crypto_self_test() < 0) {
         errno = EPROTO;
         return -1;
     }

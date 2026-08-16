@@ -16,6 +16,7 @@ add_executable(t113_terminal
     src/logger.c
     src/lappro.c
     src/lappro_transport.c
+    src/lappro_crypto.c
 )
 
 target_include_directories(t113_terminal PRIVATE
