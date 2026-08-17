@@ -21,7 +21,7 @@
 - 程序退出时打印两路 CAN 的统计汇总。
 - 第三阶段增加一个 logger 线程和固定容量内存队列；接收线程只入队，不直接执行文件写入。
 - logger 每最多 32 帧或 1 秒批量写入一次 CSV，不对每帧执行 `fsync`。
-- 每次运行生成独立的 `/mnt/usb/log/can_*.csv` 文件，并统计入队、写入、丢弃和写错误数量。
+- 每次运行生成独立的 `/mnt/usb/sda/log/can_*.csv` 文件，并统计入队、写入、丢弃和写错误数量。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
@@ -60,11 +60,11 @@
 
 ## 外接 USB 存储
 
-- 当前 T113 已将 USB 设备挂载到 `/mnt/usb`。
+- 当前 T113 将 USB 设备挂载到 `/mnt/usb/sda`。
 - 已通过 SSH 确认该挂载为 exFAT、`rw`，目录当前可写。
-- 下一阶段 logger 的主存储目录使用 `/mnt/usb`，例如 `/mnt/usb/log/`。
-- logger 启动时必须检查 `/mnt/usb` 是否已挂载且可写；如果 USB 未挂载，不得静默把大量日志写入根分区 `/` 或 `/root`。
-- 不要格式化、重新挂载或删除 `/mnt/usb` 中的已有文件，除非任务明确要求。
+- 下一阶段 logger 的主存储目录使用 `/mnt/usb/sda`，例如 `/mnt/usb/sda/log/`。
+- logger 启动时必须检查 `/mnt/usb/sda` 是否已挂载且可写；如果 USB 未挂载，不得静默把大量日志写入根分区 `/` 或 `/root`。
+- 不要格式化、重新挂载或删除 `/mnt/usb/sda` 中的已有文件，除非任务明确要求。
 
 ## 构建
 
