@@ -15,6 +15,7 @@ add_executable(t113_terminal
     src/main.c
     src/can_receiver.c
     src/can_decoder.c
+    src/lap_logic.c
     src/logger.c
     src/replay.c
     src/lappro.c
@@ -34,4 +35,5 @@ target_compile_options(t113_terminal PRIVATE
 
 target_link_libraries(t113_terminal PRIVATE
     Threads::Threads
+    m
 )

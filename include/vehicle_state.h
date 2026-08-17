@@ -52,6 +52,8 @@ typedef struct {
     uint32_t lap_number;
     bool lap_valid;
     double lap_time_s;
+    double current_lap_time_s;
+    double last_lap_time_s;
     double best_lap_time_s;
     double delta_time_s;
     double track_distance_m;
