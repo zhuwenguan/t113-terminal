@@ -7,11 +7,11 @@
 #include "can_receiver.h"
 #include "vehicle_state.h"
 
-/* Replace these placeholders when the vehicle CAN matrix is available. */
+/* CAN IDs are centralized here; add future signals as the matrix expands. */
 #define CAN_DECODER_ID_UNASSIGNED 0xffffffffU
-#define CAN_DECODER_ID_MOTOR_STATUS CAN_DECODER_ID_UNASSIGNED
-#define CAN_DECODER_ID_BATTERY_STATUS CAN_DECODER_ID_UNASSIGNED
-#define CAN_DECODER_ID_LOW_VOLTAGE_STATUS CAN_DECODER_ID_UNASSIGNED
+#define CAN_DECODER_ID_MOTOR_STATUS 0x121U
+#define CAN_DECODER_ID_TOTAL_VOLTAGE 0x201U
+#define CAN_DECODER_ID_DC_CURRENT 0x123U
 
 typedef struct {
     uint8_t bit_offset;

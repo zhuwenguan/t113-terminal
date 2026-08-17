@@ -22,7 +22,7 @@
 - logger 使用一个线程和固定容量 `LogRecord` 队列；CAN/LapPro/Vehicle State producer 只入队，不直接执行文件写入。
 - logger 每最多 32 条记录或首条记录起 1 秒批量写入一次 CSV，不对每条记录执行 `fsync`。
 - 每次运行按系统本地时间生成 `/mnt/usb/sda/log/can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv` 和 `vehicle_state_YYYYMMDD_HHMMSS.csv` 文件；文件内记录时间戳仍使用 `CLOCK_MONOTONIC`，并统计入队、写入、丢弃和写错误数量。
-- Vehicle State 框架包含车速、姿态/GPS、加速度，以及 `motor_rpm`、`torque_nm`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent` 和 `lv_voltage_v`；融合算法接入前未提供的字段保持预留状态。
+- Vehicle State 框架包含车速、姿态/GPS、加速度，以及 `motor_rpm`、`torque_nm`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent` 和 `lv_voltage_v`；当前 CAN Decoder 已接入 `0x121`、`0x201`、`0x123`，`hv_power_w` 由高压电压和电流计算，其他未提供的字段保持预留状态。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。

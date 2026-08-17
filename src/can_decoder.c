@@ -14,42 +14,30 @@ typedef struct {
 
 typedef struct {
     uint32_t id;
-    CanSignalDefinition hv_voltage_v;
-    CanSignalDefinition hv_current_a;
-    CanSignalDefinition hv_power_w;
-    CanSignalDefinition hv_soc_percent;
-} BatteryStatusDefinition;
-
-typedef struct {
-    uint32_t id;
-    CanSignalDefinition lv_voltage_v;
-} LowVoltageStatusDefinition;
+    CanSignalDefinition signal;
+} SingleSignalDefinition;
 
 /*
- * Signal maps are deliberately unassigned until the vehicle CAN matrix is
- * confirmed. bit_offset uses LSB-first bit numbering within the CAN payload.
+ * bit_offset uses LSB-first bit numbering within the CAN payload. The
+ * configured values below come from the currently available CAN matrix.
  */
-#define CAN_SIGNAL_UNASSIGNED \
-    { 0U, 0U, 1.0, 0.0, false }
-
 static const MotorStatusDefinition motor_status_definition = {
     CAN_DECODER_ID_MOTOR_STATUS,
-    CAN_SIGNAL_UNASSIGNED, /* TODO: motor_rpm bit/length/scale/offset */
-    CAN_SIGNAL_UNASSIGNED  /* TODO: torque_nm bit/length/scale/offset */
+    { 0U, 16U, 1.0, -15000.0, false }, /* motor_rpm */
+    { 16U, 16U, 1.0, -5000.0, false } /* torque_nm */
 };
 
-static const BatteryStatusDefinition battery_status_definition = {
-    CAN_DECODER_ID_BATTERY_STATUS,
-    CAN_SIGNAL_UNASSIGNED, /* TODO: hv_voltage_v bit/length/scale/offset */
-    CAN_SIGNAL_UNASSIGNED, /* TODO: hv_current_a bit/length/scale/offset */
-    CAN_SIGNAL_UNASSIGNED, /* TODO: hv_power_w bit/length/scale/offset */
-    CAN_SIGNAL_UNASSIGNED  /* TODO: hv_soc_percent bit/length/scale/offset */
+static const SingleSignalDefinition total_voltage_definition = {
+    CAN_DECODER_ID_TOTAL_VOLTAGE,
+    { 0U, 16U, 0.1, 0.0, false } /* hv_voltage_v */
 };
 
-static const LowVoltageStatusDefinition low_voltage_status_definition = {
-    CAN_DECODER_ID_LOW_VOLTAGE_STATUS,
-    CAN_SIGNAL_UNASSIGNED /* TODO: lv_voltage_v bit/length/scale/offset */
+static const SingleSignalDefinition dc_current_definition = {
+    CAN_DECODER_ID_DC_CURRENT,
+    { 16U, 16U, 1.0, -1000.0, false } /* hv_current_a */
 };
+
+/* No CAN mapping has been supplied yet for HV SOC or LV voltage. */
 
 static bool can_decoder_read_signal(const CanMessage *message,
                                     const CanSignalDefinition *definition,
@@ -148,27 +136,40 @@ bool can_decoder_process(const CanMessage *message, VehicleState *state)
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> torque=%.3fNm",
                       message->id, state->torque_nm);
         }
-    } else if (message->id == battery_status_definition.id &&
+    } else if (message->id == total_voltage_definition.id &&
                message->id != CAN_DECODER_ID_UNASSIGNED) {
         bool voltage_updated = can_decoder_apply_signal(
-            message, &battery_status_definition.hv_voltage_v,
+            message, &total_voltage_definition.signal,
             VEHICLE_STATE_VALID_HV_VOLTAGE_V, &state->hv_voltage_v, state);
-        bool current_updated = can_decoder_apply_signal(
-            message, &battery_status_definition.hv_current_a,
-            VEHICLE_STATE_VALID_HV_CURRENT_A, &state->hv_current_a, state);
-        bool power_updated = can_decoder_apply_signal(
-            message, &battery_status_definition.hv_power_w,
-            VEHICLE_STATE_VALID_HV_POWER_W, &state->hv_power_w, state);
-        bool soc_updated = can_decoder_apply_signal(
-            message, &battery_status_definition.hv_soc_percent,
-            VEHICLE_STATE_VALID_HV_SOC_PERCENT, &state->hv_soc_percent, state);
+        bool power_updated = false;
 
-        updated = voltage_updated || current_updated || power_updated ||
-                  soc_updated;
+        if ((state->valid_mask & VEHICLE_STATE_VALID_HV_CURRENT_A) != 0U) {
+            state->hv_power_w = state->hv_voltage_v * state->hv_current_a;
+            state->valid_mask |= VEHICLE_STATE_VALID_HV_POWER_W;
+            power_updated = voltage_updated;
+        }
+        updated = voltage_updated;
         if (voltage_updated) {
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_voltage=%.3fV",
                       message->id, state->hv_voltage_v);
         }
+        if (power_updated) {
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_power=%.3fW",
+                      message->id, state->hv_power_w);
+        }
+    } else if (message->id == dc_current_definition.id &&
+               message->id != CAN_DECODER_ID_UNASSIGNED) {
+        bool current_updated = can_decoder_apply_signal(
+            message, &dc_current_definition.signal,
+            VEHICLE_STATE_VALID_HV_CURRENT_A, &state->hv_current_a, state);
+        bool power_updated = false;
+
+        if ((state->valid_mask & VEHICLE_STATE_VALID_HV_VOLTAGE_V) != 0U) {
+            state->hv_power_w = state->hv_voltage_v * state->hv_current_a;
+            state->valid_mask |= VEHICLE_STATE_VALID_HV_POWER_W;
+            power_updated = current_updated;
+        }
+        updated = current_updated;
         if (current_updated) {
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_current=%.3fA",
                       message->id, state->hv_current_a);
@@ -176,19 +177,6 @@ bool can_decoder_process(const CanMessage *message, VehicleState *state)
         if (power_updated) {
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_power=%.3fW",
                       message->id, state->hv_power_w);
-        }
-        if (soc_updated) {
-            LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_soc=%.3f%%",
-                      message->id, state->hv_soc_percent);
-        }
-    } else if (message->id == low_voltage_status_definition.id &&
-               message->id != CAN_DECODER_ID_UNASSIGNED) {
-        updated = can_decoder_apply_signal(
-            message, &low_voltage_status_definition.lv_voltage_v,
-            VEHICLE_STATE_VALID_LV_VOLTAGE_V, &state->lv_voltage_v, state);
-        if (updated) {
-            LOG_DEBUG("DECODER: CAN ID=0x%08x -> lv_voltage=%.3fV",
-                      message->id, state->lv_voltage_v);
         }
     }
 
