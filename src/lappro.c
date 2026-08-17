@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <poll.h>
 #include <string.h>
 #include <sys/random.h>
 #include <sys/socket.h>
@@ -144,6 +145,56 @@ static void lappro_set_active_fd(LapPro *lappro, int fd)
     pthread_mutex_unlock(&lappro->mutex);
 }
 
+static int lappro_wait_for_connect(LapPro *lappro, int socket_fd)
+{
+    struct pollfd descriptor;
+
+    memset(&descriptor, 0, sizeof(descriptor));
+    descriptor.fd = socket_fd;
+    descriptor.events = POLLOUT | POLLERR | POLLHUP;
+
+    for (;;) {
+        int poll_result;
+        int socket_error;
+        socklen_t socket_error_length = sizeof(socket_error);
+
+        if (lappro_should_stop(lappro)) {
+            errno = ECANCELED;
+            return -1;
+        }
+
+        poll_result = poll(&descriptor, 1, LAPPRO_RECEIVE_TIMEOUT_MS);
+        if (poll_result < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (poll_result == 0) {
+            continue;
+        }
+        if ((descriptor.revents & POLLNVAL) != 0) {
+            errno = EBADF;
+            return -1;
+        }
+
+        if (getsockopt(socket_fd, SOL_SOCKET, SO_ERROR, &socket_error,
+                       &socket_error_length) < 0) {
+            return -1;
+        }
+        if (socket_error != 0) {
+            errno = socket_error;
+            return -1;
+        }
+        if ((descriptor.revents & POLLOUT) != 0) {
+            return 0;
+        }
+
+        errno = ECONNABORTED;
+        return -1;
+    }
+}
+
 static void lappro_set_connection_state(LapPro *lappro, bool connected)
 {
     pthread_mutex_lock(&lappro->mutex);
@@ -238,6 +289,7 @@ static int lappro_connect(LapPro *lappro)
     struct lappro_sockaddr_l2 local_address;
     struct lappro_sockaddr_l2 remote_address;
     struct timeval receive_timeout;
+    int socket_flags;
     int socket_fd;
 
     socket_fd = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
@@ -277,14 +329,48 @@ static int lappro_connect(LapPro *lappro)
     }
 
     lappro_set_active_fd(lappro, socket_fd);
+    if (lappro_should_stop(lappro)) {
+        lappro_set_active_fd(lappro, -1);
+        close(socket_fd);
+        errno = ECANCELED;
+        return -1;
+    }
+
+    socket_flags = fcntl(socket_fd, F_GETFL, 0);
+    if (socket_flags < 0 ||
+        fcntl(socket_fd, F_SETFL, socket_flags | O_NONBLOCK) < 0) {
+        lappro_log("cannot make L2CAP socket non-blocking: %s",
+                   strerror(errno));
+        lappro_set_active_fd(lappro, -1);
+        close(socket_fd);
+        return -1;
+    }
+
     lappro_log("connecting to %s", lappro->config.mac);
     if (connect(socket_fd, (struct sockaddr *)&remote_address,
-                sizeof(remote_address)) < 0) {
+                sizeof(remote_address)) < 0 &&
+        (errno != EINPROGRESS ||
+         lappro_wait_for_connect(lappro, socket_fd) < 0)) {
         if (!lappro_should_stop(lappro)) {
             lappro_log("L2CAP connect failed: %s", strerror(errno));
         }
         lappro_set_active_fd(lappro, -1);
         close(socket_fd);
+        return -1;
+    }
+
+    if (fcntl(socket_fd, F_SETFL, socket_flags) < 0) {
+        lappro_log("cannot restore L2CAP socket mode: %s", strerror(errno));
+        lappro_set_active_fd(lappro, -1);
+        close(socket_fd);
+        return -1;
+    }
+
+    if (lappro_should_stop(lappro)) {
+        lappro_set_active_fd(lappro, -1);
+        shutdown(socket_fd, SHUT_RDWR);
+        close(socket_fd);
+        errno = ECANCELED;
         return -1;
     }
 
@@ -870,10 +956,12 @@ static void *lappro_worker(void *context)
             connection.auth_deadline_us = lappro_monotonic_us() +
                                           LAPPRO_AUTH_TIMEOUT_US;
             connection.auth_step = LAPPRO_AUTH_WAIT_STEP1;
-            lappro_set_connection_state(lappro, true);
-            if (lappro_exchange_mtu(&connection) == 0 &&
-                lappro_write_cccd(&connection) == 0) {
-                lappro_receive_notifications(&connection);
+            if (!lappro_should_stop(lappro)) {
+                lappro_set_connection_state(lappro, true);
+                if (lappro_exchange_mtu(&connection) == 0 &&
+                    lappro_write_cccd(&connection) == 0) {
+                    lappro_receive_notifications(&connection);
+                }
             }
 
             lappro_set_connection_state(lappro, false);
