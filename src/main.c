@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "can_decoder.h"
 #include "can_receiver.h"
@@ -181,6 +182,7 @@ int main(int argc, char *argv[])
         logger_stop(&logger);
         logger_print_stats(&logger);
     }
+    sync();
     pthread_mutex_destroy(&can_context.mutex);
 
     if (result < 0) {
