@@ -154,7 +154,9 @@ static int logger_write_header(Logger *logger, LogRecordType type)
         if (fprintf(logger->file[type],
                     "# t113 Vehicle State log v1\n"
                     "# timestamp_us,valid_mask,speed_kmh,heading_deg,hacc_m,"
-                    "altitude,longitude,latitude,acc_x,acc_y,acc_z\n") < 0) {
+                    "altitude,longitude,latitude,acc_x,acc_y,acc_z,"
+                    "motor_rpm,torque_nm,hv_voltage_v,hv_current_a,hv_power_w,"
+                    "hv_soc_percent,lv_voltage_v\n") < 0) {
             return -1;
         }
     } else {
@@ -313,12 +315,14 @@ static int logger_write_vehicle_state_record(FILE *file,
 
     return fprintf(file,
                    "%llu,0x%08x,%.6f,%.6f,%.6f,%.6f,%.8f,%.8f,"
-                   "%.6f,%.6f,%.6f\n",
+                   "%.6f,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
                    (unsigned long long)record->timestamp_us,
                    state->valid_mask, state->speed_kmh, state->heading_deg,
                    state->hacc_m, state->altitude, state->longitude,
                    state->latitude, state->acc_x, state->acc_y,
-                   state->acc_z) < 0
+                   state->acc_z, state->motor_rpm, state->torque_nm,
+                   state->hv_voltage_v, state->hv_current_a, state->hv_power_w,
+                   state->hv_soc_percent, state->lv_voltage_v) < 0
                ? -1
                : 0;
 }

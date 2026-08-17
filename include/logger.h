@@ -40,6 +40,13 @@ typedef struct {
     double acc_x;
     double acc_y;
     double acc_z;
+    double motor_rpm;
+    double torque_nm;
+    double hv_voltage_v;
+    double hv_current_a;
+    double hv_power_w;
+    double hv_soc_percent;
+    double lv_voltage_v;
     uint8_t reserved[32];
 } VehicleState;
 
