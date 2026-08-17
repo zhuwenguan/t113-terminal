@@ -25,6 +25,7 @@
 - Vehicle State 框架包含车速、姿态/GPS、加速度，以及 `motor_rpm`、`torque_nm`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent` 和 `lv_voltage_v`；当前 CAN Decoder 已接入 `0x121`、`0x201`、`0x123`，`hv_power_w` 由高压电压和电流计算，其他未提供的字段保持预留状态。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
+- LapPro worker 每约 1 秒输出一条 INFO 状态摘要；GPS 原始逐条数据仅在 DEBUG 模式输出。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
 - 当前默认目标地址为 `B0:A6:04:20:DF:3A`，位于 `LapProConfig` 中，可替换；默认地址类型为 LE public。
 - 当前已知 ATT 参数集中定义在 `src/lappro.c`：

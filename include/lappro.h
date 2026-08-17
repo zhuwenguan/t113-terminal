@@ -50,6 +50,7 @@ typedef struct {
     bool initialized;
     bool started;
     bool stop_requested;
+    uint64_t last_status_report_us;
 } LapPro;
 
 void lappro_config_default(LapProConfig *config);

@@ -228,6 +228,53 @@ static void lappro_set_authenticated(LapPro *lappro)
     pthread_mutex_unlock(&lappro->mutex);
 }
 
+static void lappro_report_status_if_due(LapPro *lappro)
+{
+    LapProState state;
+    uint64_t now_us;
+    uint64_t gps_age_ms = 0;
+    bool gps_age_valid;
+
+    now_us = lappro_monotonic_us();
+    if (now_us == 0U ||
+        (lappro->last_status_report_us != 0U &&
+         now_us >= lappro->last_status_report_us &&
+         now_us - lappro->last_status_report_us < 1000000ULL)) {
+        return;
+    }
+    lappro->last_status_report_us = now_us;
+
+    pthread_mutex_lock(&lappro->mutex);
+    state = lappro->state;
+    pthread_mutex_unlock(&lappro->mutex);
+
+    gps_age_valid = state.last_update_monotonic_us != 0U &&
+                    now_us >= state.last_update_monotonic_us;
+    if (gps_age_valid) {
+        gps_age_ms = (now_us - state.last_update_monotonic_us) / 1000ULL;
+    }
+
+    if (gps_age_valid) {
+        LOG_INFO("LapPro status: connected=%s authenticated=%s streaming=%s "
+                 "fix=%u sv=%u speed=%.2fkm/h heading=%.2fdeg gps_age_ms=%llu",
+                 state.connected ? "yes" : "no",
+                 state.authenticated ? "yes" : "no",
+                 state.streaming ? "yes" : "no",
+                 (unsigned int)state.fix_type, (unsigned int)state.num_sv,
+                 state.speed_kmh, state.heading_deg,
+                 (unsigned long long)gps_age_ms);
+    } else {
+        LOG_INFO("LapPro status: connected=%s authenticated=%s streaming=%s "
+                 "fix=%u sv=%u speed=%.2fkm/h heading=%.2fdeg "
+                 "gps_age_ms=n/a",
+                 state.connected ? "yes" : "no",
+                 state.authenticated ? "yes" : "no",
+                 state.streaming ? "yes" : "no",
+                 (unsigned int)state.fix_type, (unsigned int)state.num_sv,
+                 state.speed_kmh, state.heading_deg);
+    }
+}
+
 static int lappro_parse_mac(const char *text, lappro_bdaddr_t *address)
 {
     const char *cursor = text;
@@ -916,6 +963,7 @@ static int lappro_receive_notifications(lappro_connection *connection)
     uint8_t packet[512];
 
     while (!lappro_should_stop(connection->lappro)) {
+        lappro_report_status_if_due(connection->lappro);
         if (lappro_maybe_send_properties_request(connection) < 0) {
             return -1;
         }
@@ -955,6 +1003,7 @@ static void lappro_sleep_before_reconnect(LapPro *lappro)
            !lappro_should_stop(lappro)) {
         struct timespec delay = {0, 100000000L};
 
+        lappro_report_status_if_due(lappro);
         nanosleep(&delay, NULL);
         elapsed += 100U;
     }
@@ -965,6 +1014,7 @@ static void *lappro_worker(void *context)
     LapPro *lappro = context;
 
     while (!lappro_should_stop(lappro)) {
+        lappro_report_status_if_due(lappro);
         int socket_fd = lappro_connect(lappro);
 
         if (socket_fd >= 0) {
