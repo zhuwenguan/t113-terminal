@@ -94,48 +94,97 @@ static int logger_prepare_storage(void)
     return 0;
 }
 
-static int logger_make_path(Logger *logger)
+static uint64_t logger_monotonic_us(void)
 {
-    time_t current_time;
-    struct tm local_time;
-    char timestamp[32];
+    struct timespec timestamp;
 
-    current_time = time(NULL);
-    if (localtime_r(&current_time, &local_time) == NULL ||
-        strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S",
-                 &local_time) == 0) {
-        snprintf(timestamp, sizeof(timestamp), "unknown_time");
+    if (clock_gettime(CLOCK_MONOTONIC, &timestamp) < 0) {
+        return 0;
     }
 
-    if (snprintf(logger->log_path, sizeof(logger->log_path),
-                 "%s/can_%s.csv", LOGGER_LOG_DIRECTORY, timestamp) >=
-        (int)sizeof(logger->log_path)) {
-        errno = ENAMETOOLONG;
+    return (uint64_t)timestamp.tv_sec * 1000000ULL +
+           (uint64_t)timestamp.tv_nsec / 1000ULL;
+}
+
+static int logger_make_paths(Logger *logger)
+{
+    static const char *const names[LOG_RECORD_TYPE_COUNT] = {
+        "can", "lappro", "vehicle_state"
+    };
+    uint64_t timestamp_us = logger_monotonic_us();
+    unsigned int type;
+
+    if (timestamp_us == 0U) {
+        errno = EIO;
         return -1;
+    }
+
+    for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        if (snprintf(logger->log_path[type],
+                     sizeof(logger->log_path[type]),
+                     "%s/%s_%llu.csv", LOGGER_LOG_DIRECTORY, names[type],
+                     (unsigned long long)timestamp_us) >=
+            (int)sizeof(logger->log_path[type])) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
     }
 
     return 0;
 }
 
-static int logger_write_header(Logger *logger)
+static int logger_write_header(Logger *logger, LogRecordType type)
 {
     struct stat file_status;
 
-    if (fstat(fileno(logger->file), &file_status) < 0) {
+    if (fstat(fileno(logger->file[type]), &file_status) < 0) {
         return -1;
     }
     if (file_status.st_size != 0) {
         return 0;
     }
 
-    if (fprintf(logger->file,
-                "# t113 CAN log v1\n"
-                "# timestamp_us,bus,id,flags,dlc,data\n") < 0 ||
-        fflush(logger->file) < 0) {
+    if (type == LOG_RECORD_TYPE_CAN) {
+        if (fprintf(logger->file[type],
+                    "# t113 CAN log v1\n"
+                    "# timestamp_us,bus,id,flags,dlc,data\n") < 0) {
+            return -1;
+        }
+    } else if (type == LOG_RECORD_TYPE_LAPPRO) {
+        if (fprintf(logger->file[type],
+                    "# t113 LapPro raw log v1\n"
+                    "# timestamp_us,length,data\n") < 0) {
+            return -1;
+        }
+    } else if (type == LOG_RECORD_TYPE_VEHICLE_STATE) {
+        if (fprintf(logger->file[type],
+                    "# t113 Vehicle State log v1\n"
+                    "# timestamp_us,valid_mask,speed_kmh,heading_deg,hacc_m,"
+                    "altitude,longitude,latitude,acc_x,acc_y,acc_z\n") < 0) {
+            return -1;
+        }
+    } else {
+        errno = EINVAL;
+        return -1;
+    }
+
+    if (fflush(logger->file[type]) < 0) {
         return -1;
     }
 
     return 0;
+}
+
+static void logger_close_files(Logger *logger)
+{
+    unsigned int type;
+
+    for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        if (logger->file[type] != NULL) {
+            fclose(logger->file[type]);
+            logger->file[type] = NULL;
+        }
+    }
 }
 
 int logger_init(Logger *logger)
@@ -143,6 +192,8 @@ int logger_init(Logger *logger)
     int condition_result;
     int attribute_result;
     pthread_condattr_t condition_attributes;
+    unsigned int type;
+    unsigned int opened_files = 0;
 
     if (logger == NULL) {
         errno = EINVAL;
@@ -150,29 +201,37 @@ int logger_init(Logger *logger)
     }
 
     memset(logger, 0, sizeof(*logger));
-    if (logger_prepare_storage() < 0 || logger_make_path(logger) < 0) {
+    if (logger_prepare_storage() < 0 || logger_make_paths(logger) < 0) {
         return -1;
     }
 
-    logger->file = fopen(logger->log_path, "a");
-    if (logger->file == NULL) {
-        LOG_ERROR("Cannot open logger file %s: %s", logger->log_path,
-                  strerror(errno));
-        return -1;
+    for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        logger->file[type] = fopen(logger->log_path[type], "a");
+        if (logger->file[type] == NULL) {
+            logger->stats.file_failed[type] = true;
+            LOG_ERROR("Cannot open logger file %s: %s",
+                      logger->log_path[type], strerror(errno));
+            continue;
+        }
+        setvbuf(logger->file[type], NULL, _IOFBF, 16U * 1024U);
+        if (logger_write_header(logger, (LogRecordType)type) < 0) {
+            logger->stats.file_failed[type] = true;
+            LOG_ERROR("Cannot write logger header %s: %s",
+                      logger->log_path[type], strerror(errno));
+            fclose(logger->file[type]);
+            logger->file[type] = NULL;
+            continue;
+        }
+        opened_files++;
     }
-    setvbuf(logger->file, NULL, _IOFBF, 16U * 1024U);
-    if (logger_write_header(logger) < 0) {
-        LOG_ERROR("Cannot write logger header %s: %s", logger->log_path,
-                  strerror(errno));
-        fclose(logger->file);
-        logger->file = NULL;
+    if (opened_files == 0U) {
+        logger_close_files(logger);
         return -1;
     }
 
     if (pthread_mutex_init(&logger->mutex, NULL) != 0) {
         LOG_ERROR("Cannot initialize logger mutex");
-        fclose(logger->file);
-        logger->file = NULL;
+        logger_close_files(logger);
         return -1;
     }
     attribute_result = pthread_condattr_init(&condition_attributes);
@@ -180,8 +239,7 @@ int logger_init(Logger *logger)
         LOG_ERROR("Cannot initialize logger condition attributes: %s",
                   strerror(attribute_result));
         pthread_mutex_destroy(&logger->mutex);
-        fclose(logger->file);
-        logger->file = NULL;
+        logger_close_files(logger);
         return -1;
     }
     attribute_result = pthread_condattr_setclock(&condition_attributes,
@@ -191,8 +249,7 @@ int logger_init(Logger *logger)
                   strerror(attribute_result));
         pthread_condattr_destroy(&condition_attributes);
         pthread_mutex_destroy(&logger->mutex);
-        fclose(logger->file);
-        logger->file = NULL;
+        logger_close_files(logger);
         return -1;
     }
     condition_result = pthread_cond_init(&logger->condition,
@@ -202,8 +259,7 @@ int logger_init(Logger *logger)
         LOG_ERROR("Cannot initialize logger condition: %s",
                   strerror(condition_result));
         pthread_mutex_destroy(&logger->mutex);
-        fclose(logger->file);
-        logger->file = NULL;
+        logger_close_files(logger);
         return -1;
     }
 
@@ -211,57 +267,128 @@ int logger_init(Logger *logger)
     return 0;
 }
 
-static void logger_write_batch(Logger *logger, const CanMessage *batch,
-                               size_t count)
+static int logger_write_hex(FILE *file, const uint8_t *data, size_t length)
 {
     size_t index;
 
-    if (logger->stats.file_failed) {
-        logger->stats.dropped_frames += count;
-        return;
+    for (index = 0; index < length; ++index) {
+        if (fprintf(file, "%s%02x", index == 0U ? "" : " ",
+                    data[index]) < 0) {
+            return -1;
+        }
     }
+
+    return 0;
+}
+
+static int logger_write_can_record(FILE *file, const LogRecord *record)
+{
+    const CanMessage *message = &record->payload.can;
+
+    if (fprintf(file, "%llu,%u,0x%08x,0x%08x,%u,",
+                (unsigned long long)record->timestamp_us,
+                (unsigned int)message->bus, message->id, message->flags,
+                (unsigned int)message->dlc) < 0 ||
+        logger_write_hex(file, message->data, message->dlc) < 0 ||
+        fputc('\n', file) == EOF) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int logger_write_lappro_record(FILE *file, const LogRecord *record)
+{
+    const LapProRawSample *sample = &record->payload.lappro;
+
+    if (fprintf(file, "%llu,%u,",
+                (unsigned long long)record->timestamp_us,
+                (unsigned int)sample->length) < 0 ||
+        logger_write_hex(file, sample->data, sample->length) < 0 ||
+        fputc('\n', file) == EOF) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int logger_write_vehicle_state_record(FILE *file,
+                                             const LogRecord *record)
+{
+    const VehicleState *state = &record->payload.vehicle_state;
+
+    return fprintf(file,
+                   "%llu,0x%08x,%.6f,%.6f,%.6f,%.6f,%.8f,%.8f,"
+                   "%.6f,%.6f,%.6f\n",
+                   (unsigned long long)record->timestamp_us,
+                   state->valid_mask, state->speed_kmh, state->heading_deg,
+                   state->hacc_m, state->altitude, state->longitude,
+                   state->latitude, state->acc_x, state->acc_y,
+                   state->acc_z) < 0
+               ? -1
+               : 0;
+}
+
+static int logger_write_record(Logger *logger, const LogRecord *record)
+{
+    FILE *file;
+
+    if ((int)record->type < 0 || record->type >= LOG_RECORD_TYPE_COUNT) {
+        errno = EINVAL;
+        return -1;
+    }
+    file = logger->file[record->type];
+
+    if (record->type == LOG_RECORD_TYPE_CAN) {
+        return logger_write_can_record(file, record);
+    }
+    if (record->type == LOG_RECORD_TYPE_LAPPRO) {
+        return logger_write_lappro_record(file, record);
+    }
+    if (record->type == LOG_RECORD_TYPE_VEHICLE_STATE) {
+        return logger_write_vehicle_state_record(file, record);
+    }
+
+    errno = EINVAL;
+    return -1;
+}
+
+static void logger_write_batch(Logger *logger, const LogRecord *batch,
+                               size_t count)
+{
+    bool touched[LOG_RECORD_TYPE_COUNT] = {false};
+    size_t index;
 
     for (index = 0; index < count; ++index) {
-        const CanMessage *message = &batch[index];
-        unsigned int data_index;
+        const LogRecord *record = &batch[index];
 
-        if (fprintf(logger->file, "%llu,%u,0x%08x,0x%08x,%u,",
-                    (unsigned long long)message->timestamp_us,
-                    (unsigned int)message->bus,
-                    message->id,
-                    message->flags,
-                    (unsigned int)message->dlc) < 0) {
+        if ((int)record->type < 0 || record->type >= LOG_RECORD_TYPE_COUNT ||
+            logger->file[record->type] == NULL ||
+            logger->stats.file_failed[record->type]) {
+            logger->stats.dropped_records++;
+            continue;
+        }
+        if (logger_write_record(logger, record) < 0) {
             logger->stats.write_errors++;
-            logger->stats.file_failed = true;
-            logger->stats.dropped_frames += count - index;
-            return;
+            logger->stats.file_failed[record->type] = true;
+            logger->stats.dropped_records++;
+            continue;
         }
-
-        for (data_index = 0; data_index < message->dlc; ++data_index) {
-            if (fprintf(logger->file, "%s%02x",
-                        data_index == 0 ? "" : " ",
-                        message->data[data_index]) < 0) {
-                logger->stats.write_errors++;
-                logger->stats.file_failed = true;
-                logger->stats.dropped_frames += count - index;
-                return;
-            }
-        }
-        if (fputc('\n', logger->file) == EOF) {
-            logger->stats.write_errors++;
-            logger->stats.file_failed = true;
-            logger->stats.dropped_frames += count - index;
-            return;
-        }
-        logger->stats.written_frames++;
+        logger->stats.written_records++;
+        touched[record->type] = true;
     }
 
-    if (fflush(logger->file) < 0) {
-        logger->stats.write_errors++;
-        logger->stats.file_failed = true;
-        return;
+    for (index = 0; index < LOG_RECORD_TYPE_COUNT; ++index) {
+        if (!touched[index] || logger->stats.file_failed[index]) {
+            continue;
+        }
+        if (fflush(logger->file[index]) < 0) {
+            logger->stats.write_errors++;
+            logger->stats.file_failed[index] = true;
+        } else {
+            logger->stats.flushes++;
+        }
     }
-    logger->stats.flushes++;
 }
 
 static void logger_make_deadline(uint64_t first_timestamp_us,
@@ -289,7 +416,7 @@ static void *logger_thread_main(void *context)
     Logger *logger = context;
 
     for (;;) {
-        CanMessage batch[LOGGER_BATCH_SIZE];
+        LogRecord batch[LOGGER_BATCH_SIZE];
         size_t batch_count = 0;
         bool should_exit;
         bool deadline_set = false;
@@ -360,11 +487,11 @@ int logger_start(Logger *logger)
     return 0;
 }
 
-void logger_message_sink(const CanMessage *message, void *context)
+void logger_record_sink(const LogRecord *record, void *context)
 {
     Logger *logger = context;
 
-    if (logger == NULL || message == NULL || !logger->initialized ||
+    if (logger == NULL || record == NULL || !logger->initialized ||
         !logger->started) {
         return;
     }
@@ -373,22 +500,75 @@ void logger_message_sink(const CanMessage *message, void *context)
         return;
     }
 
-    if (logger->stop_requested || logger->queue_count >= LOGGER_QUEUE_CAPACITY) {
-        logger->stats.dropped_frames++;
+    if ((int)record->type < 0 || record->type >= LOG_RECORD_TYPE_COUNT ||
+        (record->type == LOG_RECORD_TYPE_CAN &&
+         record->payload.can.dlc > sizeof(record->payload.can.data)) ||
+        (record->type == LOG_RECORD_TYPE_LAPPRO &&
+         record->payload.lappro.length > LOGGER_LAPPRO_RAW_DATA_MAX) ||
+        logger->stop_requested || logger->queue_count >= LOGGER_QUEUE_CAPACITY) {
+        logger->stats.dropped_records++;
         pthread_mutex_unlock(&logger->mutex);
         return;
     }
 
-    logger->queue[logger->queue_tail] = *message;
+    logger->queue[logger->queue_tail] = *record;
     logger->queue_tail =
         (logger->queue_tail + 1U) % LOGGER_QUEUE_CAPACITY;
     logger->queue_count++;
-    logger->stats.enqueued_frames++;
+    logger->stats.enqueued_records++;
     if (logger->queue_count > logger->stats.queue_high_watermark) {
         logger->stats.queue_high_watermark = logger->queue_count;
     }
     pthread_cond_signal(&logger->condition);
     pthread_mutex_unlock(&logger->mutex);
+}
+
+void logger_message_sink(const CanMessage *message, void *context)
+{
+    LogRecord record;
+
+    if (message == NULL) {
+        return;
+    }
+
+    memset(&record, 0, sizeof(record));
+    record.timestamp_us = message->timestamp_us;
+    record.type = LOG_RECORD_TYPE_CAN;
+    record.payload.can = *message;
+    logger_record_sink(&record, context);
+}
+
+void logger_lappro_sink(uint64_t timestamp_us, const uint8_t *data,
+                        size_t length, void *context)
+{
+    LogRecord record;
+
+    if (data == NULL || length > LOGGER_LAPPRO_RAW_DATA_MAX) {
+        return;
+    }
+
+    memset(&record, 0, sizeof(record));
+    record.timestamp_us = timestamp_us;
+    record.type = LOG_RECORD_TYPE_LAPPRO;
+    record.payload.lappro.length = (uint16_t)length;
+    memcpy(record.payload.lappro.data, data, length);
+    logger_record_sink(&record, context);
+}
+
+void logger_vehicle_state_sink(uint64_t timestamp_us,
+                               const VehicleState *state, void *context)
+{
+    LogRecord record;
+
+    if (state == NULL) {
+        return;
+    }
+
+    memset(&record, 0, sizeof(record));
+    record.timestamp_us = timestamp_us;
+    record.type = LOG_RECORD_TYPE_VEHICLE_STATE;
+    record.payload.vehicle_state = *state;
+    logger_record_sink(&record, context);
 }
 
 void logger_stop(Logger *logger)
@@ -406,15 +586,23 @@ void logger_stop(Logger *logger)
         logger->started = false;
     }
 
-    if (logger->file != NULL) {
-        if (!logger->stats.file_failed && fflush(logger->file) < 0) {
-            logger->stats.write_errors++;
-            logger->stats.file_failed = true;
-            LOG_ERROR("Cannot flush logger file %s: %s", logger->log_path,
-                      strerror(errno));
+    {
+        unsigned int type;
+
+        for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
+            if (logger->file[type] == NULL) {
+                continue;
+            }
+            if (!logger->stats.file_failed[type] &&
+                fflush(logger->file[type]) < 0) {
+                logger->stats.write_errors++;
+                logger->stats.file_failed[type] = true;
+                LOG_ERROR("Cannot flush logger file %s: %s",
+                          logger->log_path[type], strerror(errno));
+            }
+            fclose(logger->file[type]);
+            logger->file[type] = NULL;
         }
-        fclose(logger->file);
-        logger->file = NULL;
     }
 
     pthread_cond_destroy(&logger->condition);
@@ -424,10 +612,15 @@ void logger_stop(Logger *logger)
 
 const char *logger_get_path(const Logger *logger)
 {
-    if (logger == NULL) {
+    return logger_get_path_for_type(logger, LOG_RECORD_TYPE_CAN);
+}
+
+const char *logger_get_path_for_type(const Logger *logger, LogRecordType type)
+{
+    if (logger == NULL || (int)type < 0 || type >= LOG_RECORD_TYPE_COUNT) {
         return NULL;
     }
-    return logger->log_path;
+    return logger->log_path[type];
 }
 
 void logger_print_stats(const Logger *logger)
@@ -436,15 +629,22 @@ void logger_print_stats(const Logger *logger)
         return;
     }
 
-    LOG_INFO("Logger statistics: path=%s enqueued_frames=%llu "
-             "written_frames=%llu dropped_frames=%llu write_errors=%llu "
-             "flushes=%llu queue_high_watermark=%zu file_failed=%s",
-             logger->log_path,
-             (unsigned long long)logger->stats.enqueued_frames,
-             (unsigned long long)logger->stats.written_frames,
-             (unsigned long long)logger->stats.dropped_frames,
+    LOG_INFO("Logger statistics: can=%s lappro=%s vehicle_state=%s "
+             "enqueued_records=%llu written_records=%llu "
+             "dropped_records=%llu write_errors=%llu flushes=%llu "
+             "queue_high_watermark=%zu file_failed=%s/%s/%s",
+             logger->log_path[LOG_RECORD_TYPE_CAN],
+             logger->log_path[LOG_RECORD_TYPE_LAPPRO],
+             logger->log_path[LOG_RECORD_TYPE_VEHICLE_STATE],
+             (unsigned long long)logger->stats.enqueued_records,
+             (unsigned long long)logger->stats.written_records,
+             (unsigned long long)logger->stats.dropped_records,
              (unsigned long long)logger->stats.write_errors,
              (unsigned long long)logger->stats.flushes,
              logger->stats.queue_high_watermark,
-             logger->stats.file_failed ? "yes" : "no");
+             logger->stats.file_failed[LOG_RECORD_TYPE_CAN] ? "yes" : "no",
+             logger->stats.file_failed[LOG_RECORD_TYPE_LAPPRO] ? "yes" : "no",
+             logger->stats.file_failed[LOG_RECORD_TYPE_VEHICLE_STATE]
+                 ? "yes"
+                 : "no");
 }

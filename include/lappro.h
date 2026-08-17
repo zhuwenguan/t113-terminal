@@ -2,6 +2,7 @@
 #define T113_LAPPRO_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include <pthread.h>
@@ -35,11 +36,16 @@ typedef struct {
     uint64_t last_update_monotonic_us;
 } LapProState;
 
+typedef void (*LapProRawSink)(uint64_t timestamp_us, const uint8_t *data,
+                              size_t length, void *context);
+
 typedef struct {
     pthread_mutex_t mutex;
     pthread_t thread;
     LapProConfig config;
     LapProState state;
+    LapProRawSink raw_sink;
+    void *raw_sink_context;
     int active_fd;
     bool initialized;
     bool started;
@@ -53,6 +59,8 @@ int lappro_init(LapPro *lappro, const LapProConfig *config);
 int lappro_start(LapPro *lappro);
 
 void lappro_stop(LapPro *lappro);
+
+void lappro_set_raw_sink(LapPro *lappro, LapProRawSink sink, void *context);
 
 bool lappro_get_state(const LapPro *lappro, LapProState *state);
 

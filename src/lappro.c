@@ -763,6 +763,11 @@ static int lappro_receive_packet(LapPro *lappro, int socket_fd,
         return -1;
     }
 
+    if (lappro->raw_sink != NULL) {
+        lappro->raw_sink(lappro_monotonic_us(), packet, (size_t)received,
+                         lappro->raw_sink_context);
+    }
+
     return (int)received;
 }
 
@@ -1062,6 +1067,16 @@ void lappro_stop(LapPro *lappro)
 
     pthread_mutex_destroy(&lappro->mutex);
     lappro->initialized = false;
+}
+
+void lappro_set_raw_sink(LapPro *lappro, LapProRawSink sink, void *context)
+{
+    if (lappro == NULL || !lappro->initialized || lappro->started) {
+        return;
+    }
+
+    lappro->raw_sink = sink;
+    lappro->raw_sink_context = context;
 }
 
 bool lappro_get_state(const LapPro *lappro, LapProState *state)

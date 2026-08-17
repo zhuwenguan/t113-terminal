@@ -13,15 +13,15 @@
 - 当前程序同时监听 `awlink0` 和 `awlink1`。
 - 两路接口各使用一个非阻塞 SocketCAN RAW socket，由同一个 `epoll` 实例和线程统一监听。
 - `bus = 0` 对应 `awlink0`，`bus = 1` 对应 `awlink1`。
-- 每帧统一转换为包含 `timestamp_us`、`bus`、`can_id`、`dlc` 和 `data[8]` 的 `CanMessage`。
+- 每帧统一转换为包含 `timestamp_us`、`bus`、`id`、`flags`、`dlc` 和 `data[8]` 的 `CanMessage`。
 - 时间戳使用 `CLOCK_MONOTONIC`，单位为微秒。
-- 当前阶段只打印原始 CAN 帧，不加入日志、协议解析、蓝牙、数据库或 GUI。
+- CAN 原始帧、LapPro 原始 ATT 包和 Vehicle State 统一进入固定容量 `LogRecord` 队列；三类数据分别写入独立文件。
 - 第二阶段增加每路 `rx_frames`、错误帧、非法帧、读取错误、epoll 错误和 bus-off 统计。
 - SocketCAN 已启用 error frame 过滤；检测到 `CAN_ERR_BUSOFF` 时标记接口失败并停止接收，避免静默运行。
 - 程序退出时打印两路 CAN 的统计汇总。
-- 第三阶段增加一个 logger 线程和固定容量内存队列；接收线程只入队，不直接执行文件写入。
-- logger 每最多 32 帧或 1 秒批量写入一次 CSV，不对每帧执行 `fsync`。
-- 每次运行生成独立的 `/mnt/usb/sda/log/can_*.csv` 文件，并统计入队、写入、丢弃和写错误数量。
+- logger 使用一个线程和固定容量 `LogRecord` 队列；CAN/LapPro/Vehicle State producer 只入队，不直接执行文件写入。
+- logger 每最多 32 条记录或首条记录起 1 秒批量写入一次 CSV，不对每条记录执行 `fsync`。
+- 每次运行生成独立的 `/mnt/usb/sda/log/can_*.csv`、`lappro_*.csv` 和 `vehicle_state_*.csv` 文件，并统计入队、写入、丢弃和写错误数量。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
@@ -35,16 +35,16 @@
 - 认证成功后读取 `product`、`active`、`bleMac`、`mtu`，再开启 `gpsDataReport`。
 - TYPE 2 GPS/IMU 数据已按 27-byte GpsPacket 更新 `LapProState`。
 - 当前不实现首次绑定写入流程；实机已验证这只设备认证后可直接进入正常会话。
-- 程序无命令行参数，直接运行即可开始双 CAN 和 LapPro worker：
+- 程序支持 `-v`/`--verbose` 开启 DEBUG，直接运行即可开始双 CAN 和 LapPro worker：
 
 ```bash
-./build/t113_terminal
+./build/t113_terminal [-v|--verbose]
 ```
 
 - 当前代码结构保持精简：
   - `src/main.c`：APP 生命周期、CAN/LapPro/logger 汇合和退出清理。
   - `src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理。
-  - `src/logger.c`：固定队列、批量 CSV 写入。
+  - `src/logger.c`：统一 `LogRecord` 固定队列、批量写入三类 CSV。
   - `src/lappro.c`：LapPro worker、ATT、认证、JSON、GPS 状态更新。
   - `src/lappro_transport.c`：Transport 编解码、CRC 和分片自测。
   - `src/lappro_crypto.c`：SHA-256、HMAC-SHA256、AES-256-CTR 和固定向量自测。

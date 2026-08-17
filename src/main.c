@@ -45,10 +45,10 @@ int main(int argc, char *argv[])
     }
 
     if (logger_init(&logger) < 0) {
-        LOG_WARN("CAN logger unavailable; continuing without file logging");
+        LOG_WARN("Data logger unavailable; continuing without file logging");
     } else if (logger_start(&logger) < 0) {
         logger_stop(&logger);
-        LOG_WARN("CAN logger did not start; continuing without file logging");
+        LOG_WARN("Data logger did not start; continuing without file logging");
     } else {
         logger_ready = true;
     }
@@ -56,6 +56,9 @@ int main(int argc, char *argv[])
     lappro_config_default(&lappro_config);
     if (lappro_init(&lappro, &lappro_config) == 0) {
         lappro_ready = true;
+        if (logger_ready) {
+            lappro_set_raw_sink(&lappro, logger_lappro_sink, &logger);
+        }
         if (lappro_start(&lappro) < 0) {
             LOG_WARN("LapPro worker did not start");
         }
