@@ -665,6 +665,14 @@ static void lappro_handle_gps_frame(lappro_connection *connection,
     connection->lappro->state.acc_z = acc_z;
     connection->lappro->state.fix_type = fix_type;
     connection->lappro->state.num_sv = num_sv;
+    connection->lappro->state.gps_time_valid = true;
+    connection->lappro->state.gps_year = (uint16_t)year;
+    connection->lappro->state.gps_month = (uint8_t)month;
+    connection->lappro->state.gps_day = (uint8_t)day;
+    connection->lappro->state.gps_hour = (uint8_t)hour;
+    connection->lappro->state.gps_minute = (uint8_t)minute;
+    connection->lappro->state.gps_second = (uint8_t)second;
+    connection->lappro->state.gps_millisecond = (uint16_t)millisecond;
     connection->lappro->state.last_update_monotonic_us = timestamp_us;
     connection->lappro->state.streaming = true;
     sample = connection->lappro->state;

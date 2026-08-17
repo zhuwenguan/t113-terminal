@@ -33,6 +33,14 @@ typedef struct {
     double acc_z;
     uint8_t fix_type;
     uint8_t num_sv;
+    bool gps_time_valid;
+    uint16_t gps_year;
+    uint8_t gps_month;
+    uint8_t gps_day;
+    uint8_t gps_hour;
+    uint8_t gps_minute;
+    uint8_t gps_second;
+    uint16_t gps_millisecond;
     uint64_t last_update_monotonic_us;
 } LapProState;
 

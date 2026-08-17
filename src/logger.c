@@ -147,16 +147,17 @@ static int logger_write_header(Logger *logger, LogRecordType type)
     } else if (type == LOG_RECORD_TYPE_LAPPRO) {
         if (fprintf(logger->file[type],
                     "# t113 LapPro parsed log v1\n"
-                    "# timestamp_us,connected,authenticated,streaming,"
-                    "fix_type,num_sv,speed_kmh,heading_deg,hacc_m,altitude,"
-                    "longitude,latitude,acc_x,acc_y,acc_z\n") < 0) {
+                    "# timestamp_us,gps_time,connected,authenticated,"
+                    "streaming,fix_type,num_sv,speed_kmh,heading_deg,hacc_m,"
+                    "altitude,longitude,latitude,acc_x,acc_y,acc_z\n") < 0) {
             return -1;
         }
     } else if (type == LOG_RECORD_TYPE_VEHICLE_STATE) {
         if (fprintf(logger->file[type],
                     "# t113 Vehicle State log v1\n"
-                    "# timestamp_us,valid_mask,speed_kmh,heading_deg,hacc_m,"
-                    "altitude,longitude,latitude,acc_x,acc_y,acc_z,"
+                    "# timestamp_us,valid_mask,gps_fix_type,gps_num_sv,"
+                    "speed_kmh,heading_deg,hacc_m,altitude,longitude,latitude,"
+                    "acc_x,acc_y,acc_z,"
                     "motor_rpm,torque_nm,hv_voltage_v,hv_current_a,hv_power_w,"
                     "hv_soc_percent,lv_voltage_v\n") < 0) {
             return -1;
@@ -298,11 +299,27 @@ static int logger_write_can_record(FILE *file, const LogRecord *record)
 static int logger_write_lappro_record(FILE *file, const LogRecord *record)
 {
     const LapProState *state = &record->payload.lappro;
+    char gps_time[32];
+
+    if (state->gps_time_valid) {
+        snprintf(gps_time, sizeof(gps_time),
+                 "%04u-%02u-%02uT%02u:%02u:%02u.%03u",
+                 (unsigned int)state->gps_year,
+                 (unsigned int)state->gps_month,
+                 (unsigned int)state->gps_day,
+                 (unsigned int)state->gps_hour,
+                 (unsigned int)state->gps_minute,
+                 (unsigned int)state->gps_second,
+                 (unsigned int)state->gps_millisecond);
+    } else {
+        snprintf(gps_time, sizeof(gps_time), "n/a");
+    }
 
     return fprintf(file,
-                   "%llu,%u,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,"
+                   "%llu,%s,%u,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,"
                    "%.8f,%.8f,%.6f,%.6f,%.6f\n",
                    (unsigned long long)record->timestamp_us,
+                   gps_time,
                    state->connected ? 1U : 0U,
                    state->authenticated ? 1U : 0U,
                    state->streaming ? 1U : 0U, (unsigned int)state->fix_type,
@@ -320,12 +337,14 @@ static int logger_write_vehicle_state_record(FILE *file,
     const VehicleState *state = &record->payload.vehicle_state;
 
     return fprintf(file,
-                   "%llu,0x%08x,%.6f,%.6f,%.6f,%.6f,%.8f,%.8f,"
+                   "%llu,0x%08x,%u,%u,%.6f,%.6f,%.6f,%.6f,%.8f,%.8f,"
                    "%.6f,%.6f,%.6f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
                    (unsigned long long)record->timestamp_us,
-                   state->valid_mask, state->speed_kmh, state->heading_deg,
-                   state->hacc_m, state->altitude, state->longitude,
-                   state->latitude, state->acc_x, state->acc_y,
+                   state->valid_mask,
+                   (unsigned int)state->gps_fix_type,
+                   (unsigned int)state->gps_num_sv, state->speed_kmh,
+                   state->heading_deg, state->hacc_m, state->altitude,
+                   state->longitude, state->latitude, state->acc_x, state->acc_y,
                    state->acc_z, state->motor_rpm, state->torque_nm,
                    state->hv_voltage_v, state->hv_current_a, state->hv_power_w,
                    state->hv_soc_percent, state->lv_voltage_v) < 0

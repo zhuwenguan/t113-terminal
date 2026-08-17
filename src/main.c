@@ -9,9 +9,27 @@
 #include "logger.h"
 
 typedef struct {
+    pthread_mutex_t mutex;
     Logger *logger;
     VehicleState vehicle_state;
 } MainCanContext;
+
+static void main_log_vehicle_state_locked(MainCanContext *can_context,
+                                          uint64_t timestamp_us)
+{
+    const uint32_t required_mask = VEHICLE_STATE_CAN_REQUIRED_MASK |
+                                    VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
+
+    if (can_context->logger == NULL ||
+        (can_context->vehicle_state.valid_mask & required_mask) !=
+            required_mask) {
+        return;
+    }
+
+    can_context->vehicle_state.timestamp_us = timestamp_us;
+    logger_vehicle_state_sink(timestamp_us, &can_context->vehicle_state,
+                              can_context->logger);
+}
 
 static void main_can_message_sink(const CanMessage *message, void *context)
 {
@@ -26,12 +44,49 @@ static void main_can_message_sink(const CanMessage *message, void *context)
         logger_message_sink(message, can_context->logger);
     }
 
-    if (can_decoder_process(message, &can_context->vehicle_state) &&
-        can_context->logger != NULL) {
-        logger_vehicle_state_sink(can_context->vehicle_state.timestamp_us,
-                                  &can_context->vehicle_state,
-                                  can_context->logger);
+    pthread_mutex_lock(&can_context->mutex);
+    if (can_decoder_process(message, &can_context->vehicle_state)) {
+        main_log_vehicle_state_locked(can_context,
+                                      can_context->vehicle_state.timestamp_us);
     }
+    pthread_mutex_unlock(&can_context->mutex);
+}
+
+static void main_lappro_sample_sink(uint64_t timestamp_us,
+                                    const LapProState *sample,
+                                    void *context)
+{
+    MainCanContext *can_context = context;
+    const uint32_t lappro_valid_mask = VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
+
+    if (can_context == NULL || sample == NULL) {
+        return;
+    }
+
+    if (can_context->logger != NULL) {
+        logger_lappro_sink(timestamp_us, sample, can_context->logger);
+    }
+
+    pthread_mutex_lock(&can_context->mutex);
+    can_context->vehicle_state.timestamp_us = timestamp_us;
+    can_context->vehicle_state.gps_fix_type = sample->fix_type;
+    can_context->vehicle_state.gps_num_sv = sample->num_sv;
+    if (sample->fix_type >= 3U) {
+        can_context->vehicle_state.speed_kmh = sample->speed_kmh;
+        can_context->vehicle_state.heading_deg = sample->heading_deg;
+        can_context->vehicle_state.hacc_m = sample->hacc_m;
+        can_context->vehicle_state.altitude = sample->altitude;
+        can_context->vehicle_state.longitude = sample->longitude;
+        can_context->vehicle_state.latitude = sample->latitude;
+        can_context->vehicle_state.acc_x = sample->acc_x;
+        can_context->vehicle_state.acc_y = sample->acc_y;
+        can_context->vehicle_state.acc_z = sample->acc_z;
+        can_context->vehicle_state.valid_mask |= lappro_valid_mask;
+    } else {
+        can_context->vehicle_state.valid_mask &= ~lappro_valid_mask;
+    }
+    main_log_vehicle_state_locked(can_context, timestamp_us);
+    pthread_mutex_unlock(&can_context->mutex);
 }
 
 static int main_parse_arguments(int argc, char *argv[])
@@ -65,11 +120,19 @@ int main(int argc, char *argv[])
     MainCanContext can_context;
     bool lappro_ready = false;
     bool logger_ready = false;
+    int context_mutex_result;
     int result;
 
     memset(&can_context, 0, sizeof(can_context));
     console_log_init();
+    context_mutex_result = pthread_mutex_init(&can_context.mutex, NULL);
+    if (context_mutex_result != 0) {
+        LOG_ERROR("Cannot initialize VehicleState mutex: %s",
+                  strerror(context_mutex_result));
+        return EXIT_FAILURE;
+    }
     if (main_parse_arguments(argc, argv) < 0) {
+        pthread_mutex_destroy(&can_context.mutex);
         return EXIT_FAILURE;
     }
 
@@ -86,9 +149,8 @@ int main(int argc, char *argv[])
     lappro_config_default(&lappro_config);
     if (lappro_init(&lappro, &lappro_config) == 0) {
         lappro_ready = true;
-        if (logger_ready) {
-            lappro_set_sample_sink(&lappro, logger_lappro_sink, &logger);
-        }
+        lappro_set_sample_sink(&lappro, main_lappro_sample_sink,
+                               &can_context);
         if (lappro_start(&lappro) < 0) {
             LOG_WARN("LapPro worker did not start");
         }
@@ -103,6 +165,7 @@ int main(int argc, char *argv[])
         if (logger_ready) {
             logger_stop(&logger);
         }
+        pthread_mutex_destroy(&can_context.mutex);
         return EXIT_FAILURE;
     }
 
@@ -118,6 +181,7 @@ int main(int argc, char *argv[])
         logger_stop(&logger);
         logger_print_stats(&logger);
     }
+    pthread_mutex_destroy(&can_context.mutex);
 
     if (result < 0) {
         LOG_ERROR("CAN receiver stopped with an error");
