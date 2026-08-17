@@ -619,6 +619,9 @@ static void lappro_handle_gps_frame(lappro_connection *connection,
     double acc_y;
     double acc_z;
     uint64_t timestamp_us;
+    LapProState sample;
+    LapProSampleSink sample_sink;
+    void *sample_sink_context;
 
     if (payload_length != LAPPRO_AES_BLOCK_SIZE + sizeof(plaintext)) {
         LOG_WARN("LapPro: invalid GPS payload length=%zu", payload_length);
@@ -664,7 +667,14 @@ static void lappro_handle_gps_frame(lappro_connection *connection,
     connection->lappro->state.num_sv = num_sv;
     connection->lappro->state.last_update_monotonic_us = timestamp_us;
     connection->lappro->state.streaming = true;
+    sample = connection->lappro->state;
+    sample_sink = connection->lappro->sample_sink;
+    sample_sink_context = connection->lappro->sample_sink_context;
     pthread_mutex_unlock(&connection->lappro->mutex);
+
+    if (sample_sink != NULL) {
+        sample_sink(timestamp_us, &sample, sample_sink_context);
+    }
 
     lappro_log_debug(
         "GPS %04u-%02u-%02u %02u:%02u:%02u.%03u fix=%u sv=%u "
@@ -827,11 +837,6 @@ static int lappro_receive_packet(LapPro *lappro, int socket_fd,
     if (received == 0) {
         lappro_log("disconnected");
         return -1;
-    }
-
-    if (lappro->raw_sink != NULL) {
-        lappro->raw_sink(lappro_monotonic_us(), packet, (size_t)received,
-                         lappro->raw_sink_context);
     }
 
     return (int)received;
@@ -1138,14 +1143,15 @@ void lappro_stop(LapPro *lappro)
     lappro->initialized = false;
 }
 
-void lappro_set_raw_sink(LapPro *lappro, LapProRawSink sink, void *context)
+void lappro_set_sample_sink(LapPro *lappro, LapProSampleSink sink,
+                            void *context)
 {
     if (lappro == NULL || !lappro->initialized || lappro->started) {
         return;
     }
 
-    lappro->raw_sink = sink;
-    lappro->raw_sink_context = context;
+    lappro->sample_sink = sink;
+    lappro->sample_sink_context = context;
 }
 
 bool lappro_get_state(const LapPro *lappro, LapProState *state)

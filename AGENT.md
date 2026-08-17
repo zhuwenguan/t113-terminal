@@ -15,7 +15,7 @@
 - `bus = 0` 对应 `awlink0`，`bus = 1` 对应 `awlink1`。
 - 每帧统一转换为包含 `timestamp_us`、`bus`、`id`、`flags`、`dlc` 和 `data[8]` 的 `CanMessage`。
 - 时间戳使用 `CLOCK_MONOTONIC`，单位为微秒。
-- CAN 原始帧、LapPro 原始 ATT 包和 Vehicle State 统一进入固定容量 `LogRecord` 队列；三类数据分别写入独立文件。
+- CAN 原始帧、LapPro 解析样本和 Vehicle State 统一进入固定容量 `LogRecord` 队列；三类数据分别写入独立文件。
 - 第二阶段增加每路 `rx_frames`、错误帧、非法帧、读取错误、epoll 错误和 bus-off 统计。
 - SocketCAN 已启用 error frame 过滤；检测到 `CAN_ERR_BUSOFF` 时标记接口失败并停止接收，避免静默运行。
 - 程序退出时打印两路 CAN 的统计汇总。

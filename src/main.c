@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
     if (lappro_init(&lappro, &lappro_config) == 0) {
         lappro_ready = true;
         if (logger_ready) {
-            lappro_set_raw_sink(&lappro, logger_lappro_sink, &logger);
+            lappro_set_sample_sink(&lappro, logger_lappro_sink, &logger);
         }
         if (lappro_start(&lappro) < 0) {
             LOG_WARN("LapPro worker did not start");

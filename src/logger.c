@@ -146,8 +146,10 @@ static int logger_write_header(Logger *logger, LogRecordType type)
         }
     } else if (type == LOG_RECORD_TYPE_LAPPRO) {
         if (fprintf(logger->file[type],
-                    "# t113 LapPro raw log v1\n"
-                    "# timestamp_us,length,data\n") < 0) {
+                    "# t113 LapPro parsed log v1\n"
+                    "# timestamp_us,connected,authenticated,streaming,"
+                    "fix_type,num_sv,speed_kmh,heading_deg,hacc_m,altitude,"
+                    "longitude,latitude,acc_x,acc_y,acc_z\n") < 0) {
             return -1;
         }
     } else if (type == LOG_RECORD_TYPE_VEHICLE_STATE) {
@@ -281,7 +283,7 @@ static int logger_write_can_record(FILE *file, const LogRecord *record)
 {
     const CanMessage *message = &record->payload.can;
 
-    if (fprintf(file, "%llu,%u,0x%08x,0x%08x,%u,",
+    if (fprintf(file, "%llu,%u,0x%08x,%u,%u,",
                 (unsigned long long)record->timestamp_us,
                 (unsigned int)message->bus, message->id, message->flags,
                 (unsigned int)message->dlc) < 0 ||
@@ -295,17 +297,21 @@ static int logger_write_can_record(FILE *file, const LogRecord *record)
 
 static int logger_write_lappro_record(FILE *file, const LogRecord *record)
 {
-    const LapProRawSample *sample = &record->payload.lappro;
+    const LapProState *state = &record->payload.lappro;
 
-    if (fprintf(file, "%llu,%u,",
-                (unsigned long long)record->timestamp_us,
-                (unsigned int)sample->length) < 0 ||
-        logger_write_hex(file, sample->data, sample->length) < 0 ||
-        fputc('\n', file) == EOF) {
-        return -1;
-    }
-
-    return 0;
+    return fprintf(file,
+                   "%llu,%u,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,"
+                   "%.8f,%.8f,%.6f,%.6f,%.6f\n",
+                   (unsigned long long)record->timestamp_us,
+                   state->connected ? 1U : 0U,
+                   state->authenticated ? 1U : 0U,
+                   state->streaming ? 1U : 0U, (unsigned int)state->fix_type,
+                   (unsigned int)state->num_sv, state->speed_kmh,
+                   state->heading_deg, state->hacc_m, state->altitude,
+                   state->longitude, state->latitude, state->acc_x,
+                   state->acc_y, state->acc_z) < 0
+               ? -1
+               : 0;
 }
 
 static int logger_write_vehicle_state_record(FILE *file,
@@ -501,8 +507,6 @@ void logger_record_sink(const LogRecord *record, void *context)
     if ((int)record->type < 0 || record->type >= LOG_RECORD_TYPE_COUNT ||
         (record->type == LOG_RECORD_TYPE_CAN &&
          record->payload.can.dlc > sizeof(record->payload.can.data)) ||
-        (record->type == LOG_RECORD_TYPE_LAPPRO &&
-         record->payload.lappro.length > LOGGER_LAPPRO_RAW_DATA_MAX) ||
         logger->stop_requested || logger->queue_count >= LOGGER_QUEUE_CAPACITY) {
         logger->stats.dropped_records++;
         pthread_mutex_unlock(&logger->mutex);
@@ -536,20 +540,19 @@ void logger_message_sink(const CanMessage *message, void *context)
     logger_record_sink(&record, context);
 }
 
-void logger_lappro_sink(uint64_t timestamp_us, const uint8_t *data,
-                        size_t length, void *context)
+void logger_lappro_sink(uint64_t timestamp_us, const LapProState *state,
+                        void *context)
 {
     LogRecord record;
 
-    if (data == NULL || length > LOGGER_LAPPRO_RAW_DATA_MAX) {
+    if (state == NULL) {
         return;
     }
 
     memset(&record, 0, sizeof(record));
     record.timestamp_us = timestamp_us;
     record.type = LOG_RECORD_TYPE_LAPPRO;
-    record.payload.lappro.length = (uint16_t)length;
-    memcpy(record.payload.lappro.data, data, length);
+    record.payload.lappro = *state;
     logger_record_sink(&record, context);
 }
 

@@ -9,6 +9,7 @@
 #include <pthread.h>
 
 #include "can_receiver.h"
+#include "lappro.h"
 #include "vehicle_state.h"
 
 #define LOGGER_MOUNT_POINT "/mnt/usb/sda"
@@ -16,7 +17,6 @@
 #define LOGGER_QUEUE_CAPACITY 256U
 #define LOGGER_BATCH_SIZE 32U
 #define LOGGER_FLUSH_INTERVAL_MS 1000U
-#define LOGGER_LAPPRO_RAW_DATA_MAX 512U
 
 typedef enum {
     LOG_RECORD_TYPE_CAN = 0,
@@ -26,16 +26,11 @@ typedef enum {
 } LogRecordType;
 
 typedef struct {
-    uint16_t length;
-    uint8_t data[LOGGER_LAPPRO_RAW_DATA_MAX];
-} LapProRawSample;
-
-typedef struct {
     uint64_t timestamp_us;
     LogRecordType type;
     union {
         CanMessage can;
-        LapProRawSample lappro;
+        LapProState lappro;
         VehicleState vehicle_state;
     } payload;
 } LogRecord;
@@ -74,8 +69,8 @@ void logger_message_sink(const CanMessage *message, void *context);
 
 void logger_record_sink(const LogRecord *record, void *context);
 
-void logger_lappro_sink(uint64_t timestamp_us, const uint8_t *data,
-                        size_t length, void *context);
+void logger_lappro_sink(uint64_t timestamp_us, const LapProState *state,
+                        void *context);
 
 void logger_vehicle_state_sink(uint64_t timestamp_us,
                                const VehicleState *state, void *context);
