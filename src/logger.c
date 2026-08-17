@@ -94,36 +94,30 @@ static int logger_prepare_storage(void)
     return 0;
 }
 
-static uint64_t logger_monotonic_us(void)
-{
-    struct timespec timestamp;
-
-    if (clock_gettime(CLOCK_MONOTONIC, &timestamp) < 0) {
-        return 0;
-    }
-
-    return (uint64_t)timestamp.tv_sec * 1000000ULL +
-           (uint64_t)timestamp.tv_nsec / 1000ULL;
-}
-
 static int logger_make_paths(Logger *logger)
 {
     static const char *const names[LOG_RECORD_TYPE_COUNT] = {
         "can", "lappro", "vehicle_state"
     };
-    uint64_t timestamp_us = logger_monotonic_us();
+    time_t current_time;
+    struct tm local_time;
+    char timestamp[32];
     unsigned int type;
 
-    if (timestamp_us == 0U) {
-        errno = EIO;
+    current_time = time(NULL);
+    if (current_time == (time_t)-1 ||
+        localtime_r(&current_time, &local_time) == NULL ||
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S",
+                 &local_time) == 0U) {
+        errno = EINVAL;
         return -1;
     }
 
     for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
         if (snprintf(logger->log_path[type],
                      sizeof(logger->log_path[type]),
-                     "%s/%s_%llu.csv", LOGGER_LOG_DIRECTORY, names[type],
-                     (unsigned long long)timestamp_us) >=
+                     "%s/%s_%s.csv", LOGGER_LOG_DIRECTORY, names[type],
+                     timestamp) >=
             (int)sizeof(logger->log_path[type])) {
             errno = ENAMETOOLONG;
             return -1;

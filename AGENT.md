@@ -21,7 +21,7 @@
 - 程序退出时打印两路 CAN 的统计汇总。
 - logger 使用一个线程和固定容量 `LogRecord` 队列；CAN/LapPro/Vehicle State producer 只入队，不直接执行文件写入。
 - logger 每最多 32 条记录或首条记录起 1 秒批量写入一次 CSV，不对每条记录执行 `fsync`。
-- 每次运行生成独立的 `/mnt/usb/sda/log/can_*.csv`、`lappro_*.csv` 和 `vehicle_state_*.csv` 文件，并统计入队、写入、丢弃和写错误数量。
+- 每次运行按系统本地时间生成 `/mnt/usb/sda/log/can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv` 和 `vehicle_state_YYYYMMDD_HHMMSS.csv` 文件；文件内记录时间戳仍使用 `CLOCK_MONOTONIC`，并统计入队、写入、丢弃和写错误数量。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
