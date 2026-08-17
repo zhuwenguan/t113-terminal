@@ -3,11 +3,8 @@
 
 #include "console_log.h"
 
-#include <ctype.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <stdarg.h>
-#include <string.h>
 #include <time.h>
 #include <stdint.h>
 
@@ -18,50 +15,12 @@ static pthread_mutex_t console_log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static ConsoleLogLevel console_log_level = CONSOLE_LOG_INFO;
 static struct timespec console_log_start;
 
-static ConsoleLogLevel console_log_parse_level(const char *value)
-{
-    char level[16];
-    size_t index;
-
-    if (value == NULL) {
-        return CONSOLE_LOG_INFO;
-    }
-
-    for (index = 0; index + 1U < sizeof(level) && value[index] != '\0';
-         ++index) {
-        level[index] = (char)toupper((unsigned char)value[index]);
-    }
-    level[index] = '\0';
-
-    if (strcmp(level, "DEBUG") == 0) {
-        return CONSOLE_LOG_DEBUG;
-    }
-    if (strcmp(level, "WARN") == 0 || strcmp(level, "WARNING") == 0) {
-        return CONSOLE_LOG_WARN;
-    }
-    if (strcmp(level, "ERROR") == 0) {
-        return CONSOLE_LOG_ERROR;
-    }
-    if (strcmp(level, "FATAL") == 0) {
-        return CONSOLE_LOG_FATAL;
-    }
-    return CONSOLE_LOG_INFO;
-}
-
 static void console_log_initialize_once(void)
 {
-    const char *level;
-
     if (clock_gettime(CLOCK_MONOTONIC, &console_log_start) < 0) {
         console_log_start.tv_sec = 0;
         console_log_start.tv_nsec = 0;
     }
-
-    level = getenv("T113_LOG_LEVEL");
-    if (level == NULL) {
-        level = getenv("LOG_LEVEL");
-    }
-    console_log_level = console_log_parse_level(level);
 }
 
 void console_log_init(void)

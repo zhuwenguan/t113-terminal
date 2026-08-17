@@ -1,12 +1,31 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "can_receiver.h"
 #include "console_log.h"
 #include "lappro.h"
 #include "logger.h"
 
-int main(void)
+static int main_parse_arguments(int argc, char *argv[])
+{
+    int argument_index;
+
+    for (argument_index = 1; argument_index < argc; ++argument_index) {
+        if (strcmp(argv[argument_index], "-v") == 0 ||
+            strcmp(argv[argument_index], "--verbose") == 0) {
+            console_log_set_level(CONSOLE_LOG_DEBUG);
+            continue;
+        }
+
+        LOG_ERROR("Usage: %s [-v|--verbose]", argv[0]);
+        return -1;
+    }
+
+    return 0;
+}
+
+int main(int argc, char *argv[])
 {
     static const char *const interfaces[CAN_RECEIVER_BUS_COUNT] = {
         "awlink0",
@@ -21,6 +40,9 @@ int main(void)
     int result;
 
     console_log_init();
+    if (main_parse_arguments(argc, argv) < 0) {
+        return EXIT_FAILURE;
+    }
 
     if (logger_init(&logger) < 0) {
         LOG_WARN("CAN logger unavailable; continuing without file logging");
