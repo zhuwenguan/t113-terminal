@@ -25,6 +25,26 @@ enum {
     VEHICLE_STATE_VALID_GPS_NUM_SV = 1U << 17
 };
 
+typedef enum {
+    RACE_EVENT_UNKNOWN = 0,
+    RACE_EVENT_CIRCUIT_MODE,
+    RACE_EVENT_ACCEL_MODE,
+    RACE_EVENT_MODE_COUNT
+} RaceEventMode;
+
+static inline const char *vehicle_state_event_mode_name(RaceEventMode mode)
+{
+    switch (mode) {
+    case RACE_EVENT_CIRCUIT_MODE:
+        return "CIRCUIT_MODE";
+    case RACE_EVENT_ACCEL_MODE:
+        return "ACCEL_MODE";
+    case RACE_EVENT_UNKNOWN:
+    default:
+        return "UNKNOWN";
+    }
+}
+
 enum {
     VEHICLE_STATE_CAN_REQUIRED_MASK =
         VEHICLE_STATE_VALID_MOTOR_RPM |
@@ -49,6 +69,7 @@ enum {
 typedef struct {
     uint64_t timestamp_us;
     uint32_t valid_mask;
+    RaceEventMode event_mode;
     uint32_t lap_number;
     bool lap_valid;
     double lap_time_s;
@@ -56,6 +77,7 @@ typedef struct {
     double last_lap_time_s;
     double best_lap_time_s;
     double delta_time_s;
+    double estimated_lap_time_s;
     double track_distance_m;
     uint32_t sector_number;
     bool can_valid;
@@ -78,6 +100,9 @@ typedef struct {
     double hv_power_w;
     double hv_soc_percent;
     double lv_voltage_v;
+    double accel_distance_m;
+    double accel_time_s;
+    double max_acceleration;
     uint8_t reserved[32];
 } VehicleState;
 

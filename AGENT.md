@@ -24,9 +24,10 @@
 - logger 每最多 32 条记录或首条记录起 1 秒批量写入一次 CSV，不对每条记录执行 `fsync`。
 - 每次运行按系统本地时间生成 `/mnt/usb/sda/log/can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv` 和 `vehicle_state_YYYYMMDD_HHMMSS.csv` 文件；文件内记录时间戳仍使用 `CLOCK_MONOTONIC`，并统计入队、写入、丢弃和写错误数量。
 - Vehicle State 框架包含车速、姿态/GPS、加速度、圈速/赛道字段，以及 `motor_rpm`、`torque_nm`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent` 和 `lv_voltage_v`；当前 CAN Decoder 已接入 `0x121`、`0x201`、`0x123`，`hv_power_w` 由高压电压和电流计算，圈速字段及其他未提供字段保持预留状态。
-- Lap Logic 从 `track.json` 读取起点纬度、经度和行驶方向；仅对 `fix_type >= 3` 的 GPS 样本进行起终点检测、圈计时、最佳圈和 Delta 更新，启动延迟 5 秒、最小圈间隔 10 秒。
-- Lap Logic 使用固定容量轨迹缓存；可在 logger 可用时将每圈轨迹写入 `/mnt/usb/sda/log/lap_XXX.csv`，不新增线程，也不把无效 GPS 写入轨迹。
-- `track.json.example` 仅作为配置格式样例；实际使用时复制为 `track.json` 并填入赛道起点和方向，避免使用示例坐标。
+- `race_event` 在 `UNKNOWN` 状态同时维护闭环和直线加速检测器，自动锁定 `CIRCUIT_MODE` 或 `ACCEL_MODE`，不依赖人工模式参数。
+- `gps_track` 使用固定容量缓存将有效 GPS 转换为局部 XY，并保留时间、速度、航向和累计距离；缓存满后仅保留最近一半样本。
+- `lap_timer` 从重复 GPS 轨迹学习临时赛道，选择稳定直线区域作为虚拟起终点，输出当前圈、最佳圈、Delta 和圈轨迹。
+- `accel_test` 检测静止起步和持续直线运动，从 Launch Point 偏移 5m 后开始 75m 计时，并输出最大纵向加速度。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro worker 每约 1 秒输出一条 INFO 状态摘要；GPS 原始逐条数据仅在 DEBUG 模式输出。
@@ -53,7 +54,10 @@
   - `src/main.c`：APP 生命周期、CAN/LapPro/logger 汇合和退出清理。
   - `src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理，只生成并分发 `CanMessage`。
   - `src/can_decoder.c`：集中管理 CAN ID/signal 定义，解析并累计更新 `VehicleState`。
-  - `src/lap_logic.c`：读取赛道配置、检测起终点、计算圈时间/最佳圈/Delta和轨迹。
+  - `src/gps_track.c`：GPS 经纬度到局部 XY、固定容量轨迹缓存和虚拟起点候选搜索。
+  - `src/lap_timer.c`：从重复轨迹学习参考圈、虚拟起终点、圈时间和 Delta。
+  - `src/accel_test.c`：静止起步、直线轨迹确认和 75m 加速计时。
+  - `src/race_event.c`：双检测器、事件状态机和模式锁定。
   - `src/logger.c`：统一 `LogRecord` 固定队列、批量写入三类 CSV。
   - `src/replay.c`：Replay CSV 流式读取、按 `timestamp_us` 归并和速度控制。
   - `src/lappro.c`：LapPro worker、ATT、认证、JSON、GPS 状态更新。

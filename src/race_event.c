@@ -1,0 +1,286 @@
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
+#include "race_event.h"
+#include "console_log.h"
+
+#include <math.h>
+#include <string.h>
+
+#define RACE_EVENT_MIN_LOOP_TIME_US 15000000ULL
+#define RACE_EVENT_MAX_LOOP_TIME_US 900000000ULL
+#define RACE_EVENT_MIN_LOOP_DISTANCE_M 80.0
+#define RACE_EVENT_LOOP_MATCH_DISTANCE_M 15.0
+#define RACE_EVENT_LOOP_CONTINUITY_DISTANCE_M 20.0
+#define RACE_EVENT_LOOP_HEADING_ERROR_DEG 45.0
+#define RACE_EVENT_LOOP_CONTINUITY_HEADING_DEG 60.0
+#define RACE_EVENT_LOOP_MIN_MATCHES 5U
+#define RACE_EVENT_LOOP_SEARCH_RADIUS 2U
+
+static double race_event_heading_error(double first_deg, double second_deg)
+{
+    double error = fabs(first_deg - second_deg);
+
+    while (error > 360.0) {
+        error -= 360.0;
+    }
+    return error > 180.0 ? 360.0 - error : error;
+}
+
+static bool race_event_point_matches(const GpsTrackPoint *current,
+                                     const GpsTrackPoint *history,
+                                     double distance_limit_m,
+                                     double heading_limit_deg)
+{
+    return current != NULL && history != NULL &&
+           gps_track_distance(current, history) <= distance_limit_m &&
+           race_event_heading_error(current->heading_deg,
+                                    history->heading_deg) <=
+               heading_limit_deg;
+}
+
+static bool race_event_find_initial_match(const GpsTrack *track,
+                                          size_t current_index,
+                                          size_t *history_index)
+{
+    const GpsTrackPoint *current;
+    size_t index;
+    double best_distance = HUGE_VAL;
+    size_t best_index = 0U;
+
+    if (track == NULL || history_index == NULL || current_index >=
+                                                       track->point_count) {
+        return false;
+    }
+    current = gps_track_at(track, current_index);
+    if (current == NULL) {
+        return false;
+    }
+    for (index = 0U; index < current_index; ++index) {
+        const GpsTrackPoint *history = gps_track_at(track, index);
+        uint64_t time_gap;
+        double distance;
+
+        if (history == NULL || current->timestamp_us < history->timestamp_us) {
+            continue;
+        }
+        time_gap = current->timestamp_us - history->timestamp_us;
+        if (time_gap < RACE_EVENT_MIN_LOOP_TIME_US ||
+            time_gap > RACE_EVENT_MAX_LOOP_TIME_US ||
+            !race_event_point_matches(current, history,
+                                      RACE_EVENT_LOOP_MATCH_DISTANCE_M,
+                                      RACE_EVENT_LOOP_HEADING_ERROR_DEG)) {
+            continue;
+        }
+        distance = gps_track_distance(current, history);
+        if (distance < best_distance) {
+            best_distance = distance;
+            best_index = index;
+        }
+    }
+    if (best_distance == HUGE_VAL) {
+        return false;
+    }
+    *history_index = best_index;
+    return true;
+}
+
+static bool race_event_find_continuous_match(const GpsTrack *track,
+                                             size_t current_index,
+                                             size_t expected_index,
+                                             size_t *matched_index)
+{
+    size_t first;
+    size_t last;
+    size_t index;
+    const GpsTrackPoint *current;
+
+    if (track == NULL || matched_index == NULL || current_index >=
+                                                       track->point_count) {
+        return false;
+    }
+    current = gps_track_at(track, current_index);
+    if (current == NULL) {
+        return false;
+    }
+    first = expected_index > RACE_EVENT_LOOP_SEARCH_RADIUS
+                ? expected_index - RACE_EVENT_LOOP_SEARCH_RADIUS
+                : 0U;
+    last = expected_index + RACE_EVENT_LOOP_SEARCH_RADIUS;
+    if (last >= current_index) {
+        last = current_index - 1U;
+    }
+    for (index = first; index <= last; ++index) {
+        const GpsTrackPoint *history = gps_track_at(track, index);
+
+        if (race_event_point_matches(current, history,
+                                     RACE_EVENT_LOOP_CONTINUITY_DISTANCE_M,
+                                     RACE_EVENT_LOOP_CONTINUITY_HEADING_DEG)) {
+            *matched_index = index;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool race_event_update_loop_detector(RaceEvent *event,
+                                            size_t current_index,
+                                            size_t *loop_begin,
+                                            size_t *loop_end)
+{
+    const GpsTrackPoint *current;
+    const GpsTrackPoint *history;
+    size_t expected_index;
+    size_t matched_index;
+
+    if (event == NULL || loop_begin == NULL || loop_end == NULL ||
+        current_index >= event->gps_track.point_count) {
+        return false;
+    }
+    current = gps_track_at(&event->gps_track, current_index);
+    if (current == NULL) {
+        return false;
+    }
+    if (event->loop_match_count == 0U) {
+        if (!race_event_find_initial_match(&event->gps_track, current_index,
+                                           &event->loop_history_index)) {
+            return false;
+        }
+        event->loop_current_index = current_index;
+        event->loop_match_count = 1U;
+    } else {
+        expected_index = event->loop_history_index +
+                         (current_index - event->loop_current_index);
+        if (!race_event_find_continuous_match(&event->gps_track, current_index,
+                                              expected_index,
+                                              &matched_index)) {
+            event->loop_match_count = 0U;
+            return false;
+        }
+        if (matched_index != expected_index) {
+            /* Keep the original pair as the phase reference, but tolerate
+             * small GPS sampling gaps while matching the route. */
+            if (matched_index < event->loop_history_index ||
+                matched_index >= current_index) {
+                event->loop_match_count = 0U;
+                return false;
+            }
+        }
+        event->loop_match_count++;
+    }
+
+    history = gps_track_at(&event->gps_track, event->loop_history_index);
+    if (history == NULL || current->timestamp_us < history->timestamp_us ||
+        current->timestamp_us - history->timestamp_us <
+            RACE_EVENT_MIN_LOOP_TIME_US ||
+        current->timestamp_us - history->timestamp_us >
+            RACE_EVENT_MAX_LOOP_TIME_US ||
+        current->total_distance_m - history->total_distance_m <
+            RACE_EVENT_MIN_LOOP_DISTANCE_M) {
+        return false;
+    }
+    if (event->loop_match_count < RACE_EVENT_LOOP_MIN_MATCHES) {
+        return false;
+    }
+
+    *loop_begin = event->loop_history_index;
+    *loop_end = event->loop_current_index;
+    return *loop_begin < *loop_end && *loop_end < event->gps_track.point_count;
+}
+
+void race_event_init(RaceEvent *event, const char *trace_directory)
+{
+    if (event == NULL) {
+        return;
+    }
+    memset(event, 0, sizeof(*event));
+    event->mode = RACE_EVENT_UNKNOWN;
+    gps_track_init(&event->gps_track);
+    lap_timer_init(&event->lap_timer, trace_directory);
+    accel_test_init(&event->accel_test);
+}
+
+void race_event_update(RaceEvent *event, uint64_t timestamp_us,
+                       const LapProState *sample, VehicleState *state)
+{
+    GpsTrackPoint point;
+    size_t loop_begin;
+    size_t loop_end;
+    size_t virtual_start;
+    bool loop_detected;
+
+    if (event == NULL || sample == NULL || state == NULL ||
+        sample->fix_type < 3U || !isfinite(sample->latitude) ||
+        !isfinite(sample->longitude) || !isfinite(sample->speed_kmh) ||
+        !isfinite(sample->heading_deg)) {
+        if (event != NULL) {
+            state->event_mode = event->mode;
+        }
+        return;
+    }
+
+    if (event->gps_track.point_count >= GPS_TRACK_MAX_POINTS) {
+        /* The track buffer compacts in place; old detector indexes are no
+         * longer meaningful after that point. */
+        event->loop_match_count = 0U;
+    }
+    if (!gps_track_append(&event->gps_track, timestamp_us, sample->latitude,
+                          sample->longitude, sample->speed_kmh,
+                          sample->heading_deg, sample->hacc_m, &point)) {
+        return;
+    }
+
+    if (event->mode == RACE_EVENT_UNKNOWN) {
+        accel_test_update(&event->accel_test, timestamp_us, sample, &point,
+                          state);
+        loop_detected = race_event_update_loop_detector(
+            event, event->gps_track.point_count - 1U, &loop_begin, &loop_end);
+        if (loop_detected &&
+            gps_track_find_virtual_start(&event->gps_track, loop_begin,
+                                         loop_end, &virtual_start) &&
+            lap_timer_configure_from_loop(
+                &event->lap_timer, &event->gps_track, loop_begin, loop_end,
+                virtual_start, &point, state)) {
+            const GpsTrackPoint *loop_start =
+                gps_track_at(&event->gps_track, loop_begin);
+            const GpsTrackPoint *loop_finish =
+                gps_track_at(&event->gps_track, loop_end);
+            double loop_time_s =
+                loop_start != NULL && loop_finish != NULL
+                    ? (double)(loop_finish->timestamp_us -
+                               loop_start->timestamp_us) /
+                          1000000.0
+                    : 0.0;
+
+            event->mode = RACE_EVENT_CIRCUIT_MODE;
+            LOG_INFO("[RACE] event detected: CIRCUIT_MODE loop=%.2fs",
+                     loop_time_s);
+        } else if (accel_test_is_candidate(&event->accel_test)) {
+            event->mode = RACE_EVENT_ACCEL_MODE;
+            LOG_INFO("[RACE] event detected: ACCEL_MODE");
+        }
+    } else if (event->mode == RACE_EVENT_CIRCUIT_MODE) {
+        lap_timer_update(&event->lap_timer, &point, state);
+    } else if (event->mode == RACE_EVENT_ACCEL_MODE) {
+        accel_test_update(&event->accel_test, timestamp_us, sample, &point,
+                          state);
+    }
+
+    state->event_mode = event->mode;
+    if (event->last_report_timestamp_us == 0U ||
+        timestamp_us - event->last_report_timestamp_us >= 1000000ULL) {
+        LOG_INFO("[RACE] mode=%s gps_points=%zu",
+                 vehicle_state_event_mode_name(event->mode),
+                 event->gps_track.point_count);
+        event->last_report_timestamp_us = timestamp_us;
+    }
+}
+
+void race_event_close(RaceEvent *event)
+{
+    if (event == NULL) {
+        return;
+    }
+    lap_timer_close(&event->lap_timer);
+    accel_test_close(&event->accel_test);
+}

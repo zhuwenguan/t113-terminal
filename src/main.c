@@ -9,15 +9,15 @@
 #include "can_decoder.h"
 #include "can_receiver.h"
 #include "console_log.h"
-#include "lap_logic.h"
 #include "lappro.h"
 #include "logger.h"
+#include "race_event.h"
 #include "replay.h"
 
 typedef struct {
     pthread_mutex_t mutex;
     Logger *logger;
-    LapLogic lap_logic;
+    RaceEvent race_event;
     VehicleState vehicle_state;
 } MainCanContext;
 
@@ -103,8 +103,8 @@ static void main_lappro_sample_sink(uint64_t timestamp_us,
     } else {
         can_context->vehicle_state.valid_mask &= ~lappro_valid_mask;
     }
-    lap_logic_update(&can_context->lap_logic, timestamp_us, sample,
-                     &can_context->vehicle_state);
+    race_event_update(&can_context->race_event, timestamp_us, sample,
+                      &can_context->vehicle_state);
     main_log_vehicle_state_locked(can_context, timestamp_us);
     pthread_mutex_unlock(&can_context->mutex);
 }
@@ -182,22 +182,6 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
     return 0;
 }
 
-static void main_get_track_config_path(const MainOptions *options,
-                                       char *path, size_t path_length)
-{
-    int written;
-
-    if (options != NULL && options->replay) {
-        written = snprintf(path, path_length, "%s/track.json",
-                           options->replay_directory);
-        if (written >= 0 && (size_t)written < path_length &&
-            access(path, R_OK) == 0) {
-            return;
-        }
-    }
-    snprintf(path, path_length, "%s", "track.json");
-}
-
 int main(int argc, char *argv[])
 {
     static const char *const interfaces[CAN_RECEIVER_BUS_COUNT] = {
@@ -208,11 +192,10 @@ int main(int argc, char *argv[])
     Logger logger;
     LapProConfig lappro_config;
     LapPro lappro;
-    MainCanContext can_context;
+    static MainCanContext can_context;
     MainOptions options;
     bool lappro_ready = false;
     bool logger_ready = false;
-    char track_config_path[PATH_MAX];
     int context_mutex_result;
     int result;
 
@@ -236,12 +219,8 @@ int main(int argc, char *argv[])
         logger_ready = true;
     }
     can_context.logger = logger_ready ? &logger : NULL;
-    main_get_track_config_path(&options, track_config_path,
-                               sizeof(track_config_path));
-    if (lap_logic_init(&can_context.lap_logic, track_config_path,
-                       logger_ready ? LOGGER_LOG_DIRECTORY : NULL) < 0) {
-        LOG_WARN("Lap logic initialization failed; continuing without lap updates");
-    }
+    race_event_init(&can_context.race_event,
+                    logger_ready ? LOGGER_LOG_DIRECTORY : NULL);
 
     if (options.replay) {
         ReplayConfig replay_config;
@@ -254,7 +233,7 @@ int main(int argc, char *argv[])
         replay_config.sink_context = &can_context;
         replay_config.vehicle_state = &can_context.vehicle_state;
         result = replay_run(&replay_config);
-        lap_logic_close(&can_context.lap_logic);
+        race_event_close(&can_context.race_event);
         if (logger_ready) {
             logger_stop(&logger);
             logger_print_stats(&logger);
@@ -285,7 +264,7 @@ int main(int argc, char *argv[])
         if (lappro_ready) {
             lappro_stop(&lappro);
         }
-        lap_logic_close(&can_context.lap_logic);
+        race_event_close(&can_context.race_event);
         if (logger_ready) {
             logger_stop(&logger);
         }
@@ -301,7 +280,7 @@ int main(int argc, char *argv[])
     if (lappro_ready) {
         lappro_stop(&lappro);
     }
-    lap_logic_close(&can_context.lap_logic);
+    race_event_close(&can_context.race_event);
     if (logger_ready) {
         logger_stop(&logger);
         logger_print_stats(&logger);

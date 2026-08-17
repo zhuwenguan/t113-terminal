@@ -15,7 +15,10 @@ add_executable(t113_terminal
     src/main.c
     src/can_receiver.c
     src/can_decoder.c
-    src/lap_logic.c
+    src/gps_track.c
+    src/lap_timer.c
+    src/accel_test.c
+    src/race_event.c
     src/logger.c
     src/replay.c
     src/lappro.c

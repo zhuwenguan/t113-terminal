@@ -157,12 +157,14 @@ static int logger_write_header(Logger *logger, LogRecordType type)
                     "# t113 Vehicle State log v1\n"
                     "# timestamp_us,valid_mask,lap_number,lap_valid,"
                     "lap_time_s,current_lap_time_s,last_lap_time_s,"
-                    "best_lap_time_s,delta_time_s,track_distance_m,"
+                    "best_lap_time_s,delta_time_s,estimated_lap_time_s,"
+                    "track_distance_m,"
                     "sector_number,can_valid,gps_valid,gps_fix_type,gps_num_sv,"
                     "speed_kmh,heading_deg,hacc_m,altitude,longitude,latitude,"
                     "acc_x,acc_y,acc_z,"
                     "motor_rpm,torque_nm,hv_voltage_v,hv_current_a,hv_power_w,"
-                    "hv_soc_percent,lv_voltage_v\n") < 0) {
+                    "hv_soc_percent,lv_voltage_v,event_mode,accel_distance_m,"
+                    "accel_time_s,max_acceleration\n") < 0) {
             return -1;
         }
     } else {
@@ -340,16 +342,17 @@ static int logger_write_vehicle_state_record(FILE *file,
     const VehicleState *state = &record->payload.vehicle_state;
 
     return fprintf(file,
-                   "%llu,0x%08x,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u,%u,%u,%u,"
+                   "%llu,0x%08x,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u,%u,%u,%u,"
                    "%.6f,%.6f,%.6f,%.6f,%.8f,%.8f,%.6f,%.6f,%.6f,"
-                   "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                   "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%s,%.3f,%.3f,%.3f\n",
                    (unsigned long long)record->timestamp_us,
                    state->valid_mask,
                    (unsigned int)state->lap_number,
                    state->lap_valid ? 1U : 0U, state->lap_time_s,
                    state->current_lap_time_s, state->last_lap_time_s,
                    state->best_lap_time_s, state->delta_time_s,
-                   state->track_distance_m, (unsigned int)state->sector_number,
+                   state->estimated_lap_time_s, state->track_distance_m,
+                   (unsigned int)state->sector_number,
                    state->can_valid ? 1U : 0U, state->gps_valid ? 1U : 0U,
                    (unsigned int)state->gps_fix_type,
                    (unsigned int)state->gps_num_sv, state->speed_kmh,
@@ -357,7 +360,10 @@ static int logger_write_vehicle_state_record(FILE *file,
                    state->longitude, state->latitude, state->acc_x, state->acc_y,
                    state->acc_z, state->motor_rpm, state->torque_nm,
                    state->hv_voltage_v, state->hv_current_a, state->hv_power_w,
-                   state->hv_soc_percent, state->lv_voltage_v) < 0
+                   state->hv_soc_percent, state->lv_voltage_v,
+                   vehicle_state_event_mode_name(state->event_mode),
+                   state->accel_distance_m, state->accel_time_s,
+                   state->max_acceleration) < 0
                ? -1
                : 0;
 }
