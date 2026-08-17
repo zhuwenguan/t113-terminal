@@ -20,16 +20,21 @@ static void main_log_vehicle_state_locked(MainCanContext *can_context,
 {
     const uint32_t required_mask = VEHICLE_STATE_CAN_REQUIRED_MASK |
                                     VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
+    VehicleState *state = &can_context->vehicle_state;
+
+    state->can_valid = (state->valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) ==
+                       VEHICLE_STATE_CAN_REQUIRED_MASK;
+    state->gps_valid =
+        (state->valid_mask & VEHICLE_STATE_LAPPRO_REQUIRED_MASK) ==
+        VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
 
     if (can_context->logger == NULL ||
-        (can_context->vehicle_state.valid_mask & required_mask) !=
-            required_mask) {
+        (state->valid_mask & required_mask) != required_mask) {
         return;
     }
 
-    can_context->vehicle_state.timestamp_us = timestamp_us;
-    logger_vehicle_state_sink(timestamp_us, &can_context->vehicle_state,
-                              can_context->logger);
+    state->timestamp_us = timestamp_us;
+    logger_vehicle_state_sink(timestamp_us, state, can_context->logger);
 }
 
 static void main_can_message_sink(const CanMessage *message, void *context)

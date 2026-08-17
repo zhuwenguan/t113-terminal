@@ -1,6 +1,7 @@
 #ifndef T113_VEHICLE_STATE_H
 #define T113_VEHICLE_STATE_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 enum {
@@ -48,6 +49,15 @@ enum {
 typedef struct {
     uint64_t timestamp_us;
     uint32_t valid_mask;
+    uint32_t lap_number;
+    bool lap_valid;
+    double lap_time_s;
+    double best_lap_time_s;
+    double delta_time_s;
+    double track_distance_m;
+    uint32_t sector_number;
+    bool can_valid;
+    bool gps_valid;
     uint8_t gps_fix_type;
     uint8_t gps_num_sv;
     double speed_kmh;
