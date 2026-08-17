@@ -107,6 +107,21 @@ static void lappro_log(const char *format, ...)
     LOG_INFO("LapPro: %s", message);
 }
 
+static void lappro_log_debug(const char *format, ...)
+{
+    char message[1024];
+    va_list arguments;
+
+    if (!console_log_enabled(CONSOLE_LOG_DEBUG)) {
+        return;
+    }
+
+    va_start(arguments, format);
+    vsnprintf(message, sizeof(message), format, arguments);
+    va_end(arguments);
+    LOG_DEBUG("LapPro: %s", message);
+}
+
 static uint64_t lappro_monotonic_us(void)
 {
     struct timespec timestamp;
@@ -294,7 +309,7 @@ static int lappro_connect(LapPro *lappro)
 
     socket_fd = socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP);
     if (socket_fd < 0) {
-        lappro_log("socket L2CAP failed: %s", strerror(errno));
+        LOG_ERROR("LapPro: socket L2CAP failed: %s", strerror(errno));
         return -1;
     }
 
@@ -302,7 +317,8 @@ static int lappro_connect(LapPro *lappro)
     receive_timeout.tv_usec = LAPPRO_RECEIVE_TIMEOUT_MS * 1000U;
     if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout,
                    sizeof(receive_timeout)) < 0) {
-        lappro_log("cannot set L2CAP receive timeout: %s", strerror(errno));
+        LOG_ERROR("LapPro: cannot set L2CAP receive timeout: %s",
+                  strerror(errno));
         close(socket_fd);
         return -1;
     }
@@ -312,7 +328,7 @@ static int lappro_connect(LapPro *lappro)
     remote_address.l2_bdaddr_type = lappro->config.address_type;
     remote_address.l2_cid = lappro_to_le16(LAPPRO_ATT_CID);
     if (lappro_parse_mac(lappro->config.mac, &remote_address.l2_bdaddr) < 0) {
-        lappro_log("invalid LapPro MAC address: %s", lappro->config.mac);
+        LOG_ERROR("LapPro: invalid MAC address: %s", lappro->config.mac);
         close(socket_fd);
         return -1;
     }
@@ -323,7 +339,7 @@ static int lappro_connect(LapPro *lappro)
     local_address.l2_bdaddr_type = LAPPRO_BDADDR_BREDR;
     if (bind(socket_fd, (struct sockaddr *)&local_address,
              sizeof(local_address)) < 0) {
-        lappro_log("L2CAP local bind failed: %s", strerror(errno));
+        LOG_ERROR("LapPro: L2CAP local bind failed: %s", strerror(errno));
         close(socket_fd);
         return -1;
     }
@@ -339,8 +355,8 @@ static int lappro_connect(LapPro *lappro)
     socket_flags = fcntl(socket_fd, F_GETFL, 0);
     if (socket_flags < 0 ||
         fcntl(socket_fd, F_SETFL, socket_flags | O_NONBLOCK) < 0) {
-        lappro_log("cannot make L2CAP socket non-blocking: %s",
-                   strerror(errno));
+        LOG_ERROR("LapPro: cannot make L2CAP socket non-blocking: %s",
+                  strerror(errno));
         lappro_set_active_fd(lappro, -1);
         close(socket_fd);
         return -1;
@@ -352,7 +368,7 @@ static int lappro_connect(LapPro *lappro)
         (errno != EINPROGRESS ||
          lappro_wait_for_connect(lappro, socket_fd) < 0)) {
         if (!lappro_should_stop(lappro)) {
-            lappro_log("L2CAP connect failed: %s", strerror(errno));
+            LOG_WARN("LapPro: L2CAP connect failed: %s", strerror(errno));
         }
         lappro_set_active_fd(lappro, -1);
         close(socket_fd);
@@ -360,7 +376,8 @@ static int lappro_connect(LapPro *lappro)
     }
 
     if (fcntl(socket_fd, F_SETFL, socket_flags) < 0) {
-        lappro_log("cannot restore L2CAP socket mode: %s", strerror(errno));
+        LOG_ERROR("LapPro: cannot restore L2CAP socket mode: %s",
+                  strerror(errno));
         lappro_set_active_fd(lappro, -1);
         close(socket_fd);
         return -1;
@@ -441,7 +458,7 @@ static void lappro_auth_failed(lappro_connection *connection,
                                const char *reason)
 {
     connection->auth_failed = true;
-    lappro_log("authentication failed: %s", reason);
+    LOG_WARN("LapPro: authentication failed: %s", reason);
 }
 
 static int lappro_send_json_request(lappro_connection *connection,
@@ -503,7 +520,7 @@ static void lappro_handle_json_frame(lappro_connection *connection,
 
     if (payload_length < LAPPRO_AES_BLOCK_SIZE ||
         payload_length - LAPPRO_AES_BLOCK_SIZE >= sizeof(plaintext)) {
-        lappro_log("invalid JSON payload length=%zu", payload_length);
+        LOG_WARN("LapPro: invalid JSON payload length=%zu", payload_length);
         return;
     }
 
@@ -557,7 +574,7 @@ static void lappro_handle_gps_frame(lappro_connection *connection,
     uint64_t timestamp_us;
 
     if (payload_length != LAPPRO_AES_BLOCK_SIZE + sizeof(plaintext)) {
-        lappro_log("invalid GPS payload length=%zu", payload_length);
+        LOG_WARN("LapPro: invalid GPS payload length=%zu", payload_length);
         return;
     }
 
@@ -602,13 +619,14 @@ static void lappro_handle_gps_frame(lappro_connection *connection,
     connection->lappro->state.streaming = true;
     pthread_mutex_unlock(&connection->lappro->mutex);
 
-    lappro_log("GPS %04u-%02u-%02u %02u:%02u:%02u.%03u fix=%u sv=%u "
-               "speed=%.2f heading=%.2f hAcc=%.1f altitude=%.0f "
-               "lat=%.7f lon=%.7f acc=(%.4f,%.4f,%.4f)",
-               year, month, day, hour, minute, second, millisecond,
-               (unsigned int)fix_type, (unsigned int)num_sv, speed_kmh,
-               heading_deg, hacc_m, altitude, latitude, longitude, acc_x,
-               acc_y, acc_z);
+    lappro_log_debug(
+        "GPS %04u-%02u-%02u %02u:%02u:%02u.%03u fix=%u sv=%u "
+        "speed=%.2f heading=%.2f hAcc=%.1f altitude=%.0f "
+        "lat=%.7f lon=%.7f acc=(%.4f,%.4f,%.4f)",
+        year, month, day, hour, minute, second, millisecond,
+        (unsigned int)fix_type, (unsigned int)num_sv, speed_kmh,
+        heading_deg, hacc_m, altitude, latitude, longitude, acc_x, acc_y,
+        acc_z);
 }
 
 static void lappro_handle_transport_frame(uint8_t type, const uint8_t *payload,
@@ -679,7 +697,7 @@ static void lappro_handle_transport_frame(uint8_t type, const uint8_t *payload,
             lappro_set_authenticated(connection->lappro);
             lappro_log("authenticated");
         } else {
-            lappro_log("unexpected Auth frame after authentication");
+            LOG_WARN("LapPro: unexpected Auth frame after authentication");
         }
         return;
     }
@@ -704,7 +722,7 @@ static void lappro_handle_notification(lappro_connection *connection,
     uint16_t handle;
 
     if (length < 3U) {
-        lappro_log("malformed notification length=%zu", length);
+        LOG_WARN("LapPro: malformed notification length=%zu", length);
         return;
     }
     if (packet[0] != LAPPRO_ATT_OP_HANDLE_VALUE_NOTIFICATION) {
@@ -713,14 +731,15 @@ static void lappro_handle_notification(lappro_connection *connection,
 
     handle = (uint16_t)packet[1] | (uint16_t)packet[2] << 8U;
     if (handle != LAPPRO_HANDLE_NOTIFY_VALUE) {
-        lappro_log("notification from unexpected handle=0x%04X", handle);
+        LOG_WARN("LapPro: notification from unexpected handle=0x%04X",
+                 handle);
         return;
     }
 
     if (lappro_transport_feed(connection->transport, packet + 3U,
                                length - 3U, lappro_handle_transport_frame,
                                connection) < 0) {
-        lappro_log("transport feed failed");
+        LOG_WARN("LapPro: transport feed failed");
     }
 }
 
@@ -737,7 +756,7 @@ static int lappro_maybe_send_properties_request(lappro_connection *connection)
         return 0;
     }
     if (lappro_send_properties_request(connection) < 0) {
-        lappro_log("cannot send product query");
+        LOG_WARN("LapPro: cannot send product query");
         return -1;
     }
     return 0;
@@ -754,7 +773,7 @@ static int lappro_receive_packet(LapPro *lappro, int socket_fd,
             return 0;
         }
         if (!lappro_should_stop(lappro)) {
-            lappro_log("L2CAP receive failed: %s", strerror(errno));
+            LOG_ERROR("LapPro: L2CAP receive failed: %s", strerror(errno));
         }
         return -1;
     }
@@ -811,10 +830,10 @@ static int lappro_wait_for_response(lappro_connection *connection,
         }
         if (packet[0] == LAPPRO_ATT_OP_ERROR_RESPONSE) {
             if (received >= 5) {
-                lappro_log("ATT error request=0x%02X code=0x%02X",
-                           packet[1], packet[4]);
+                LOG_WARN("LapPro: ATT error request=0x%02X code=0x%02X",
+                         packet[1], packet[4]);
             } else {
-                lappro_log("malformed ATT error response");
+                LOG_WARN("LapPro: malformed ATT error response");
             }
             return -1;
         }
@@ -828,8 +847,8 @@ static int lappro_wait_for_response(lappro_connection *connection,
             }
             return 0;
         }
-        lappro_log("unexpected ATT opcode=0x%02X expected=0x%02X",
-                   packet[0], expected_opcode);
+        LOG_WARN("LapPro: unexpected ATT opcode=0x%02X expected=0x%02X",
+                 packet[0], expected_opcode);
     }
 }
 
@@ -849,8 +868,8 @@ static int lappro_exchange_mtu(lappro_connection *connection)
         lappro_wait_for_response(connection,
                                  LAPPRO_ATT_OP_EXCHANGE_MTU_RESPONSE, response,
                                  sizeof(response), &response_length) < 0) {
-        lappro_log("ATT MTU exchange failed; using default MTU %u",
-                   LAPPRO_ATT_DEFAULT_MTU);
+        LOG_WARN("LapPro: ATT MTU exchange failed; using default MTU %u",
+                 LAPPRO_ATT_DEFAULT_MTU);
         return 0;
     }
 
@@ -883,7 +902,7 @@ static int lappro_write_cccd(lappro_connection *connection)
             0 ||
         lappro_wait_for_response(connection, LAPPRO_ATT_OP_WRITE_RESPONSE,
                                  NULL, 0U, NULL) < 0) {
-        lappro_log("FF01 notify subscription failed");
+        LOG_WARN("LapPro: FF01 notify subscription failed");
         return -1;
     }
 
@@ -1036,7 +1055,7 @@ int lappro_start(LapPro *lappro)
     result = pthread_create(&lappro->thread, NULL, lappro_worker, lappro);
     if (result != 0) {
         errno = result;
-        lappro_log("worker start failed: %s", strerror(result));
+        LOG_ERROR("LapPro: worker start failed: %s", strerror(result));
         return -1;
     }
     lappro->started = true;
