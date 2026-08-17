@@ -5,6 +5,7 @@
 #include "lappro.h"
 #include "lappro_crypto.h"
 #include "lappro_transport.h"
+#include "console_log.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -92,14 +93,17 @@ typedef struct {
 
 static void lappro_log(const char *format, ...)
 {
+    char message[1024];
     va_list arguments;
 
+    if (!console_log_enabled(CONSOLE_LOG_INFO)) {
+        return;
+    }
+
     va_start(arguments, format);
-    fputs("[LapPro] ", stdout);
-    vprintf(format, arguments);
-    fputc('\n', stdout);
-    fflush(stdout);
+    vsnprintf(message, sizeof(message), format, arguments);
     va_end(arguments);
+    LOG_INFO("LapPro: %s", message);
 }
 
 static uint64_t lappro_monotonic_us(void)

@@ -11,6 +11,7 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_executable(t113_terminal
+    src/console_log.c
     src/main.c
     src/can_receiver.c
     src/logger.c

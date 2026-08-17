@@ -2,6 +2,7 @@
 #include <stdlib.h>
 
 #include "can_receiver.h"
+#include "console_log.h"
 #include "lappro.h"
 #include "logger.h"
 
@@ -19,13 +20,13 @@ int main(void)
     bool logger_ready = false;
     int result;
 
+    console_log_init();
+
     if (logger_init(&logger) < 0) {
-        fprintf(stderr,
-                "warning: CAN logger unavailable; continuing without file logging\n");
+        LOG_WARN("CAN logger unavailable; continuing without file logging");
     } else if (logger_start(&logger) < 0) {
         logger_stop(&logger);
-        fprintf(stderr,
-                "warning: CAN logger did not start; continuing without file logging\n");
+        LOG_WARN("CAN logger did not start; continuing without file logging");
     } else {
         logger_ready = true;
     }
@@ -34,10 +35,10 @@ int main(void)
     if (lappro_init(&lappro, &lappro_config) == 0) {
         lappro_ready = true;
         if (lappro_start(&lappro) < 0) {
-            fprintf(stderr, "warning: LapPro worker did not start\n");
+            LOG_WARN("LapPro worker did not start");
         }
     } else {
-        fprintf(stderr, "warning: LapPro initialization failed; continuing CAN\n");
+        LOG_WARN("LapPro initialization failed; continuing CAN");
     }
 
     if (can_receiver_init(&receiver, interfaces) < 0) {
@@ -65,10 +66,10 @@ int main(void)
     }
 
     if (result < 0) {
-        fprintf(stderr, "CAN receiver stopped with an error\n");
+        LOG_ERROR("CAN receiver stopped with an error");
         return EXIT_FAILURE;
     }
 
-    printf("CAN receiver stopped cleanly\n");
+    LOG_INFO("CAN receiver stopped cleanly");
     return EXIT_SUCCESS;
 }
