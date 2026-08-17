@@ -2,10 +2,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "can_decoder.h"
 #include "can_receiver.h"
 #include "console_log.h"
 #include "lappro.h"
 #include "logger.h"
+
+typedef struct {
+    Logger *logger;
+    VehicleState vehicle_state;
+} MainCanContext;
+
+static void main_can_message_sink(const CanMessage *message, void *context)
+{
+    MainCanContext *can_context = context;
+
+    if (can_context == NULL || message == NULL) {
+        return;
+    }
+
+    /* Keep the raw path independent from decoder mappings and failures. */
+    if (can_context->logger != NULL) {
+        logger_message_sink(message, can_context->logger);
+    }
+
+    if (can_decoder_process(message, &can_context->vehicle_state) &&
+        can_context->logger != NULL) {
+        logger_vehicle_state_sink(can_context->vehicle_state.timestamp_us,
+                                  &can_context->vehicle_state,
+                                  can_context->logger);
+    }
+}
 
 static int main_parse_arguments(int argc, char *argv[])
 {
@@ -35,10 +62,12 @@ int main(int argc, char *argv[])
     Logger logger;
     LapProConfig lappro_config;
     LapPro lappro;
+    MainCanContext can_context;
     bool lappro_ready = false;
     bool logger_ready = false;
     int result;
 
+    memset(&can_context, 0, sizeof(can_context));
     console_log_init();
     if (main_parse_arguments(argc, argv) < 0) {
         return EXIT_FAILURE;
@@ -52,6 +81,7 @@ int main(int argc, char *argv[])
     } else {
         logger_ready = true;
     }
+    can_context.logger = logger_ready ? &logger : NULL;
 
     lappro_config_default(&lappro_config);
     if (lappro_init(&lappro, &lappro_config) == 0) {
@@ -76,9 +106,8 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (logger_ready) {
-        can_receiver_set_message_sink(&receiver, logger_message_sink, &logger);
-    }
+    can_receiver_set_message_sink(&receiver, main_can_message_sink,
+                                  &can_context);
     result = can_receiver_run(&receiver);
     can_receiver_print_stats(&receiver);
     can_receiver_close(&receiver);

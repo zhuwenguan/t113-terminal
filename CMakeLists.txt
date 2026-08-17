@@ -14,6 +14,7 @@ add_executable(t113_terminal
     src/console_log.c
     src/main.c
     src/can_receiver.c
+    src/can_decoder.c
     src/logger.c
     src/lappro.c
     src/lappro_transport.c

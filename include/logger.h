@@ -9,6 +9,7 @@
 #include <pthread.h>
 
 #include "can_receiver.h"
+#include "vehicle_state.h"
 
 #define LOGGER_MOUNT_POINT "/mnt/usb/sda"
 #define LOGGER_LOG_DIRECTORY "/mnt/usb/sda/log"
@@ -28,27 +29,6 @@ typedef struct {
     uint16_t length;
     uint8_t data[LOGGER_LAPPRO_RAW_DATA_MAX];
 } LapProRawSample;
-
-typedef struct {
-    uint32_t valid_mask;
-    double speed_kmh;
-    double heading_deg;
-    double hacc_m;
-    double altitude;
-    double longitude;
-    double latitude;
-    double acc_x;
-    double acc_y;
-    double acc_z;
-    double motor_rpm;
-    double torque_nm;
-    double hv_voltage_v;
-    double hv_current_a;
-    double hv_power_w;
-    double hv_soc_percent;
-    double lv_voltage_v;
-    uint8_t reserved[32];
-} VehicleState;
 
 typedef struct {
     uint64_t timestamp_us;

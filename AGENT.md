@@ -44,7 +44,8 @@
 
 - 当前代码结构保持精简：
   - `src/main.c`：APP 生命周期、CAN/LapPro/logger 汇合和退出清理。
-  - `src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理。
+  - `src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理，只生成并分发 `CanMessage`。
+  - `src/can_decoder.c`：集中管理 CAN ID/signal 定义，解析并累计更新 `VehicleState`。
   - `src/logger.c`：统一 `LogRecord` 固定队列、批量写入三类 CSV。
   - `src/lappro.c`：LapPro worker、ATT、认证、JSON、GPS 状态更新。
   - `src/lappro_transport.c`：Transport 编解码、CRC 和分片自测。

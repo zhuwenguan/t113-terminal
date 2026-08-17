@@ -566,6 +566,7 @@ void logger_vehicle_state_sink(uint64_t timestamp_us,
     record.timestamp_us = timestamp_us;
     record.type = LOG_RECORD_TYPE_VEHICLE_STATE;
     record.payload.vehicle_state = *state;
+    record.payload.vehicle_state.timestamp_us = timestamp_us;
     logger_record_sink(&record, context);
 }
 
