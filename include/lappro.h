@@ -72,6 +72,10 @@ void lappro_stop(LapPro *lappro);
 void lappro_set_sample_sink(LapPro *lappro, LapProSampleSink sink,
                             void *context);
 
+/* Applies an already decoded sample and invokes the normal sample sink. */
+void lappro_update_state(LapPro *lappro, uint64_t timestamp_us,
+                         const LapProState *sample);
+
 bool lappro_get_state(const LapPro *lappro, LapProState *state);
 
 #endif

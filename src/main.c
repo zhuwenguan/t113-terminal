@@ -1,3 +1,6 @@
+#include <errno.h>
+#include <limits.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -8,12 +11,19 @@
 #include "console_log.h"
 #include "lappro.h"
 #include "logger.h"
+#include "replay.h"
 
 typedef struct {
     pthread_mutex_t mutex;
     Logger *logger;
     VehicleState vehicle_state;
 } MainCanContext;
+
+typedef struct {
+    bool replay;
+    char replay_directory[PATH_MAX];
+    double replay_speed;
+} MainOptions;
 
 static void main_log_vehicle_state_locked(MainCanContext *can_context,
                                           uint64_t timestamp_us)
@@ -95,18 +105,73 @@ static void main_lappro_sample_sink(uint64_t timestamp_us,
     pthread_mutex_unlock(&can_context->mutex);
 }
 
-static int main_parse_arguments(int argc, char *argv[])
+static bool main_parse_speed(const char *text, double *speed)
+{
+    char *end;
+    double parsed;
+
+    if (text == NULL || speed == NULL || *text == '\0') {
+        return false;
+    }
+    errno = 0;
+    parsed = strtod(text, &end);
+    if (errno != 0 || end == text || *end != '\0' ||
+        !isfinite(parsed) || parsed < 0.0) {
+        return false;
+    }
+    *speed = parsed;
+    return true;
+}
+
+static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
 {
     int argument_index;
 
+    if (options == NULL) {
+        return -1;
+    }
+    memset(options, 0, sizeof(*options));
+    options->replay_speed = 1.0;
     for (argument_index = 1; argument_index < argc; ++argument_index) {
         if (strcmp(argv[argument_index], "-v") == 0 ||
             strcmp(argv[argument_index], "--verbose") == 0) {
             console_log_set_level(CONSOLE_LOG_DEBUG);
             continue;
         }
+        if (strcmp(argv[argument_index], "--replay") == 0) {
+            if (argument_index + 1 >= argc ||
+                argv[argument_index + 1][0] == '\0' ||
+                snprintf(options->replay_directory,
+                         sizeof(options->replay_directory), "%s",
+                         argv[++argument_index]) >=
+                    (int)sizeof(options->replay_directory)) {
+                LOG_ERROR("Invalid --replay directory");
+                return -1;
+            }
+            options->replay = true;
+            continue;
+        }
+        if (strcmp(argv[argument_index], "--replay-speed") == 0) {
+            if (argument_index + 1 >= argc ||
+                !main_parse_speed(argv[++argument_index],
+                                  &options->replay_speed)) {
+                LOG_ERROR("Invalid --replay-speed; use 0 or a positive number");
+                return -1;
+            }
+            continue;
+        }
+        if (strncmp(argv[argument_index], "--replay-speed=", 15U) == 0) {
+            if (!main_parse_speed(argv[argument_index] + 15U,
+                                  &options->replay_speed)) {
+                LOG_ERROR("Invalid --replay-speed; use 0 or a positive number");
+                return -1;
+            }
+            continue;
+        }
 
-        LOG_ERROR("Usage: %s [-v|--verbose]", argv[0]);
+        LOG_ERROR("Usage: %s [-v|--verbose] [--replay <directory>] "
+                  "[--replay-speed <number>]",
+                  argv[0]);
         return -1;
     }
 
@@ -124,6 +189,7 @@ int main(int argc, char *argv[])
     LapProConfig lappro_config;
     LapPro lappro;
     MainCanContext can_context;
+    MainOptions options;
     bool lappro_ready = false;
     bool logger_ready = false;
     int context_mutex_result;
@@ -131,17 +197,15 @@ int main(int argc, char *argv[])
 
     memset(&can_context, 0, sizeof(can_context));
     console_log_init();
+    if (main_parse_arguments(argc, argv, &options) < 0) {
+        return EXIT_FAILURE;
+    }
     context_mutex_result = pthread_mutex_init(&can_context.mutex, NULL);
     if (context_mutex_result != 0) {
         LOG_ERROR("Cannot initialize VehicleState mutex: %s",
                   strerror(context_mutex_result));
         return EXIT_FAILURE;
     }
-    if (main_parse_arguments(argc, argv) < 0) {
-        pthread_mutex_destroy(&can_context.mutex);
-        return EXIT_FAILURE;
-    }
-
     if (logger_init(&logger) < 0) {
         LOG_WARN("Data logger unavailable; continuing without file logging");
     } else if (logger_start(&logger) < 0) {
@@ -151,6 +215,31 @@ int main(int argc, char *argv[])
         logger_ready = true;
     }
     can_context.logger = logger_ready ? &logger : NULL;
+
+    if (options.replay) {
+        ReplayConfig replay_config;
+
+        memset(&replay_config, 0, sizeof(replay_config));
+        replay_config.directory = options.replay_directory;
+        replay_config.speed = options.replay_speed;
+        replay_config.can_sink = main_can_message_sink;
+        replay_config.lappro_sink = main_lappro_sample_sink;
+        replay_config.sink_context = &can_context;
+        replay_config.vehicle_state = &can_context.vehicle_state;
+        result = replay_run(&replay_config);
+        if (logger_ready) {
+            logger_stop(&logger);
+            logger_print_stats(&logger);
+        }
+        sync();
+        pthread_mutex_destroy(&can_context.mutex);
+        if (result < 0) {
+            LOG_ERROR("Replay stopped with an error");
+            return EXIT_FAILURE;
+        }
+        LOG_INFO("Replay stopped cleanly");
+        return EXIT_SUCCESS;
+    }
 
     lappro_config_default(&lappro_config);
     if (lappro_init(&lappro, &lappro_config) == 0) {

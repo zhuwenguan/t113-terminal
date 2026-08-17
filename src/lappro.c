@@ -620,8 +620,6 @@ static void lappro_handle_gps_frame(lappro_connection *connection,
     double acc_z;
     uint64_t timestamp_us;
     LapProState sample;
-    LapProSampleSink sample_sink;
-    void *sample_sink_context;
 
     if (payload_length != LAPPRO_AES_BLOCK_SIZE + sizeof(plaintext)) {
         LOG_WARN("LapPro: invalid GPS payload length=%zu", payload_length);
@@ -654,35 +652,29 @@ static void lappro_handle_gps_frame(lappro_connection *connection,
     timestamp_us = lappro_monotonic_us();
 
     pthread_mutex_lock(&connection->lappro->mutex);
-    connection->lappro->state.speed_kmh = speed_kmh;
-    connection->lappro->state.heading_deg = heading_deg;
-    connection->lappro->state.hacc_m = hacc_m;
-    connection->lappro->state.altitude = altitude;
-    connection->lappro->state.longitude = longitude;
-    connection->lappro->state.latitude = latitude;
-    connection->lappro->state.acc_x = acc_x;
-    connection->lappro->state.acc_y = acc_y;
-    connection->lappro->state.acc_z = acc_z;
-    connection->lappro->state.fix_type = fix_type;
-    connection->lappro->state.num_sv = num_sv;
-    connection->lappro->state.gps_time_valid = true;
-    connection->lappro->state.gps_year = (uint16_t)year;
-    connection->lappro->state.gps_month = (uint8_t)month;
-    connection->lappro->state.gps_day = (uint8_t)day;
-    connection->lappro->state.gps_hour = (uint8_t)hour;
-    connection->lappro->state.gps_minute = (uint8_t)minute;
-    connection->lappro->state.gps_second = (uint8_t)second;
-    connection->lappro->state.gps_millisecond = (uint16_t)millisecond;
-    connection->lappro->state.last_update_monotonic_us = timestamp_us;
-    connection->lappro->state.streaming = true;
     sample = connection->lappro->state;
-    sample_sink = connection->lappro->sample_sink;
-    sample_sink_context = connection->lappro->sample_sink_context;
     pthread_mutex_unlock(&connection->lappro->mutex);
-
-    if (sample_sink != NULL) {
-        sample_sink(timestamp_us, &sample, sample_sink_context);
-    }
+    sample.speed_kmh = speed_kmh;
+    sample.heading_deg = heading_deg;
+    sample.hacc_m = hacc_m;
+    sample.altitude = altitude;
+    sample.longitude = longitude;
+    sample.latitude = latitude;
+    sample.acc_x = acc_x;
+    sample.acc_y = acc_y;
+    sample.acc_z = acc_z;
+    sample.fix_type = fix_type;
+    sample.num_sv = num_sv;
+    sample.gps_time_valid = true;
+    sample.gps_year = (uint16_t)year;
+    sample.gps_month = (uint8_t)month;
+    sample.gps_day = (uint8_t)day;
+    sample.gps_hour = (uint8_t)hour;
+    sample.gps_minute = (uint8_t)minute;
+    sample.gps_second = (uint8_t)second;
+    sample.gps_millisecond = (uint16_t)millisecond;
+    sample.streaming = true;
+    lappro_update_state(connection->lappro, timestamp_us, &sample);
 
     lappro_log_debug(
         "GPS %04u-%02u-%02u %02u:%02u:%02u.%03u fix=%u sv=%u "
@@ -1160,6 +1152,30 @@ void lappro_set_sample_sink(LapPro *lappro, LapProSampleSink sink,
 
     lappro->sample_sink = sink;
     lappro->sample_sink_context = context;
+}
+
+void lappro_update_state(LapPro *lappro, uint64_t timestamp_us,
+                         const LapProState *sample)
+{
+    LapProSampleSink sample_sink;
+    void *sample_sink_context;
+    LapProState updated_sample;
+
+    if (lappro == NULL || sample == NULL || !lappro->initialized) {
+        return;
+    }
+
+    pthread_mutex_lock(&lappro->mutex);
+    lappro->state = *sample;
+    lappro->state.last_update_monotonic_us = timestamp_us;
+    updated_sample = lappro->state;
+    sample_sink = lappro->sample_sink;
+    sample_sink_context = lappro->sample_sink_context;
+    pthread_mutex_unlock(&lappro->mutex);
+
+    if (sample_sink != NULL) {
+        sample_sink(timestamp_us, &updated_sample, sample_sink_context);
+    }
 }
 
 bool lappro_get_state(const LapPro *lappro, LapProState *state)

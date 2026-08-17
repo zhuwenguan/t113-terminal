@@ -27,6 +27,8 @@
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro worker 每约 1 秒输出一条 INFO 状态摘要；GPS 原始逐条数据仅在 DEBUG 模式输出。
+- 支持 `--replay <directory>` 和 `--replay-speed <number>`；Replay 不启动 CAN/LapPro 硬件输入，流式归并 `can0.csv`、`can1.csv`、`lappro.csv` 后复用现有 CAN 解码和 LapPro/VehicleState 汇合回调。
+- Replay 同时兼容当前 logger 生成的 `can_*.csv`、`lappro_*.csv` 及完整字段格式；不读取 `vehicle_state.csv`，非法行跳过并告警。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
 - 当前默认目标地址为 `B0:A6:04:20:DF:3A`，位于 `LapProConfig` 中，可替换；默认地址类型为 LE public。
 - 当前已知 ATT 参数集中定义在 `src/lappro.c`：
@@ -49,6 +51,7 @@
   - `src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理，只生成并分发 `CanMessage`。
   - `src/can_decoder.c`：集中管理 CAN ID/signal 定义，解析并累计更新 `VehicleState`。
   - `src/logger.c`：统一 `LogRecord` 固定队列、批量写入三类 CSV。
+  - `src/replay.c`：Replay CSV 流式读取、按 `timestamp_us` 归并和速度控制。
   - `src/lappro.c`：LapPro worker、ATT、认证、JSON、GPS 状态更新。
   - `src/lappro_transport.c`：Transport 编解码、CRC 和分片自测。
   - `src/lappro_crypto.c`：SHA-256、HMAC-SHA256、AES-256-CTR 和固定向量自测。
