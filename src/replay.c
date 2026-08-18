@@ -13,11 +13,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #define REPLAY_MAX_LINE_LENGTH 768U
 #define REPLAY_MAX_FIELDS 20U
 #define REPLAY_STREAM_COUNT 3U
+
+#ifndef NAME_MAX
+#define NAME_MAX 255
+#endif
+
+typedef enum {
+    REPLAY_LOGGER_CAN_ANY = 0,
+    REPLAY_LOGGER_CAN0_ONLY,
+    REPLAY_LOGGER_CAN1_ONLY,
+    REPLAY_LOGGER_CAN_NONE
+} ReplayLoggerCanMode;
 
 typedef struct {
     ReplaySource source;
@@ -30,6 +42,37 @@ typedef struct {
     bool has_event;
     ReplayEvent event;
 } ReplayStream;
+
+typedef struct {
+    char session[NAME_MAX + 1U];
+    bool has_can;
+    char can_name[NAME_MAX + 1U];
+    bool has_can0;
+    char can0_name[NAME_MAX + 1U];
+    bool has_can1;
+    char can1_name[NAME_MAX + 1U];
+    bool has_lappro;
+    char lappro_name[NAME_MAX + 1U];
+} ReplaySessionCandidate;
+
+typedef struct {
+    ReplaySessionCandidate *sessions;
+    size_t session_count;
+    size_t session_capacity;
+    bool exact_can0;
+    bool exact_can1;
+    bool exact_can;
+    bool exact_lappro;
+} ReplayDiscovery;
+
+typedef struct {
+    bool can0;
+    char can0_name[NAME_MAX + 1U];
+    bool can1;
+    char can1_name[NAME_MAX + 1U];
+    bool lappro;
+    char lappro_name[NAME_MAX + 1U];
+} ReplaySelection;
 
 static volatile sig_atomic_t replay_running;
 
@@ -428,16 +471,451 @@ static bool replay_make_path(const char *directory, const char *name,
     return written >= 0 && (size_t)written < path_length;
 }
 
+static bool replay_path_is_regular(const char *directory, const char *name)
+{
+    char path[PATH_MAX];
+    struct stat status;
+
+    if (!replay_make_path(directory, name, path, sizeof(path)) ||
+        stat(path, &status) < 0) {
+        return false;
+    }
+    return S_ISREG(status.st_mode);
+}
+
+static bool replay_copy_filename(char *destination, size_t destination_size,
+                                 const char *name)
+{
+    int written;
+
+    if (destination == NULL || destination_size == 0U || name == NULL) {
+        return false;
+    }
+    written = snprintf(destination, destination_size, "%s", name);
+    return written >= 0 && (size_t)written < destination_size;
+}
+
+static bool replay_parse_session_filename(const char *name, const char *prefix,
+                                          char *session,
+                                          size_t session_size)
+{
+    size_t name_length;
+    size_t prefix_length;
+    size_t session_length;
+
+    if (name == NULL || prefix == NULL || session == NULL ||
+        session_size == 0U) {
+        return false;
+    }
+    name_length = strlen(name);
+    prefix_length = strlen(prefix);
+    if (name_length <= prefix_length + 4U ||
+        strncmp(name, prefix, prefix_length) != 0 ||
+        strcmp(name + name_length - 4U, ".csv") != 0) {
+        return false;
+    }
+    session_length = name_length - prefix_length - 4U;
+    if (session_length == 0U || session_length >= session_size) {
+        return false;
+    }
+    memcpy(session, name + prefix_length, session_length);
+    session[session_length] = '\0';
+    return true;
+}
+
+static ReplaySessionCandidate *replay_find_session(ReplayDiscovery *discovery,
+                                                   const char *session)
+{
+    size_t index;
+
+    if (discovery == NULL || session == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < discovery->session_count; ++index) {
+        if (strcmp(discovery->sessions[index].session, session) == 0) {
+            return &discovery->sessions[index];
+        }
+    }
+    return NULL;
+}
+
+static ReplaySessionCandidate *replay_add_session(ReplayDiscovery *discovery,
+                                                  const char *session)
+{
+    ReplaySessionCandidate *candidate;
+    size_t new_capacity;
+
+    candidate = replay_find_session(discovery, session);
+    if (candidate != NULL) {
+        return candidate;
+    }
+    if (discovery->session_count == discovery->session_capacity) {
+        new_capacity = discovery->session_capacity == 0U
+                           ? 8U
+                           : discovery->session_capacity * 2U;
+        candidate = realloc(discovery->sessions,
+                            new_capacity * sizeof(*discovery->sessions));
+        if (candidate == NULL) {
+            return NULL;
+        }
+        discovery->sessions = candidate;
+        discovery->session_capacity = new_capacity;
+    }
+    candidate = &discovery->sessions[discovery->session_count++];
+    memset(candidate, 0, sizeof(*candidate));
+    if (!replay_copy_filename(candidate->session,
+                              sizeof(candidate->session), session)) {
+        discovery->session_count--;
+        return NULL;
+    }
+    return candidate;
+}
+
+static bool replay_record_session_file(ReplayDiscovery *discovery,
+                                        const char *directory,
+                                        const char *name, const char *prefix,
+                                        int file_kind)
+{
+    char session[NAME_MAX + 1U];
+    ReplaySessionCandidate *candidate;
+
+    if (!replay_parse_session_filename(name, prefix, session,
+                                       sizeof(session))) {
+        return false;
+    }
+    if (!replay_path_is_regular(directory, name)) {
+        return true;
+    }
+    candidate = replay_add_session(discovery, session);
+    if (candidate == NULL) {
+        LOG_ERROR("[Replay] cannot remember logger session '%s'", session);
+        return false;
+    }
+    switch (file_kind) {
+    case 0:
+        candidate->has_can = true;
+        return replay_copy_filename(candidate->can_name,
+                                    sizeof(candidate->can_name), name);
+    case 1:
+        candidate->has_can0 = true;
+        return replay_copy_filename(candidate->can0_name,
+                                    sizeof(candidate->can0_name), name);
+    case 2:
+        candidate->has_can1 = true;
+        return replay_copy_filename(candidate->can1_name,
+                                    sizeof(candidate->can1_name), name);
+    case 3:
+        candidate->has_lappro = true;
+        return replay_copy_filename(candidate->lappro_name,
+                                    sizeof(candidate->lappro_name), name);
+    default:
+        return false;
+    }
+}
+
+static void replay_discovery_destroy(ReplayDiscovery *discovery)
+{
+    if (discovery == NULL) {
+        return;
+    }
+    free(discovery->sessions);
+    memset(discovery, 0, sizeof(*discovery));
+}
+
+static int replay_discover_inputs(const char *directory,
+                                  ReplayDiscovery *discovery)
+{
+    DIR *directory_handle;
+    struct dirent *entry;
+
+    if (directory == NULL || discovery == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(discovery, 0, sizeof(*discovery));
+    directory_handle = opendir(directory);
+    if (directory_handle == NULL) {
+        LOG_ERROR("[Replay] cannot open input directory %s: %s", directory,
+                  strerror(errno));
+        return -1;
+    }
+    while ((entry = readdir(directory_handle)) != NULL) {
+        const char *name = entry->d_name;
+
+        if (strcmp(name, "can0.csv") == 0) {
+            discovery->exact_can0 =
+                replay_path_is_regular(directory, name);
+            continue;
+        }
+        if (strcmp(name, "can1.csv") == 0) {
+            discovery->exact_can1 =
+                replay_path_is_regular(directory, name);
+            continue;
+        }
+        if (strcmp(name, "can.csv") == 0) {
+            discovery->exact_can = replay_path_is_regular(directory, name);
+            continue;
+        }
+        if (strcmp(name, "lappro.csv") == 0) {
+            discovery->exact_lappro =
+                replay_path_is_regular(directory, name);
+            continue;
+        }
+        if (replay_record_session_file(discovery, directory, name, "can_",
+                                       0) ||
+            replay_record_session_file(discovery, directory, name, "can0_",
+                                       1) ||
+            replay_record_session_file(discovery, directory, name, "can1_",
+                                       2) ||
+            replay_record_session_file(discovery, directory, name, "lappro_",
+                                       3)) {
+            continue;
+        }
+    }
+    closedir(directory_handle);
+    return 0;
+}
+
+static bool replay_session_has_can(const ReplaySessionCandidate *candidate,
+                                   ReplayLoggerCanMode mode)
+{
+    if (candidate == NULL) {
+        return false;
+    }
+    switch (mode) {
+    case REPLAY_LOGGER_CAN_ANY:
+        return candidate->has_can || candidate->has_can0 ||
+               candidate->has_can1;
+    case REPLAY_LOGGER_CAN0_ONLY:
+        return candidate->has_can0;
+    case REPLAY_LOGGER_CAN1_ONLY:
+        return candidate->has_can1;
+    case REPLAY_LOGGER_CAN_NONE:
+    default:
+        return false;
+    }
+}
+
+static bool replay_has_logger_input(const ReplayDiscovery *discovery,
+                                    bool want_can, bool want_lappro,
+                                    ReplayLoggerCanMode can_mode)
+{
+    size_t index;
+
+    if (discovery == NULL) {
+        return false;
+    }
+    for (index = 0U; index < discovery->session_count; ++index) {
+        const ReplaySessionCandidate *candidate = &discovery->sessions[index];
+
+        if ((!want_can || replay_session_has_can(candidate, can_mode)) &&
+            (!want_lappro || candidate->has_lappro)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static const ReplaySessionCandidate *replay_latest_session(
+    const ReplayDiscovery *discovery, bool want_can, bool want_lappro,
+    ReplayLoggerCanMode can_mode)
+{
+    const ReplaySessionCandidate *selected = NULL;
+    size_t index;
+
+    if (discovery == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < discovery->session_count; ++index) {
+        const ReplaySessionCandidate *candidate = &discovery->sessions[index];
+
+        if ((want_can && !replay_session_has_can(candidate, can_mode)) ||
+            (want_lappro && !candidate->has_lappro)) {
+            continue;
+        }
+        if (selected == NULL ||
+            strcmp(candidate->session, selected->session) > 0) {
+            selected = candidate;
+        }
+    }
+    return selected;
+}
+
+static bool replay_selection_set_name(bool *present, char *destination,
+                                      size_t destination_size,
+                                      const char *name)
+{
+    if (present == NULL || destination == NULL || name == NULL ||
+        !replay_copy_filename(destination, destination_size, name)) {
+        return false;
+    }
+    *present = true;
+    return true;
+}
+
+/*
+ * Canonical names are explicit inputs and take precedence for their stream.
+ * Every logger fallback stream is selected from one session candidate. When
+ * both logger families are needed, only a shared session is accepted; the
+ * lexicographically greatest shared suffix is the deterministic choice.
+ */
+static bool replay_build_selection(const ReplayDiscovery *discovery,
+                                   ReplaySelection *selection)
+{
+    bool need_can0;
+    bool need_can1;
+    bool need_lappro;
+    bool logger_can_available;
+    bool logger_lappro_available;
+    ReplayLoggerCanMode can_mode;
+    const ReplaySessionCandidate *logger_session = NULL;
+
+    if (discovery == NULL || selection == NULL) {
+        return false;
+    }
+    memset(selection, 0, sizeof(*selection));
+
+    if (discovery->exact_can0) {
+        if (!replay_selection_set_name(&selection->can0,
+                                       selection->can0_name,
+                                       sizeof(selection->can0_name),
+                                       "can0.csv")) {
+            return false;
+        }
+    } else if (discovery->exact_can) {
+        /* Keep the historical single-file can.csv input as an explicit file. */
+        if (!replay_selection_set_name(&selection->can0,
+                                       selection->can0_name,
+                                       sizeof(selection->can0_name),
+                                       "can.csv")) {
+            return false;
+        }
+    }
+    if (discovery->exact_can1 &&
+        !replay_selection_set_name(&selection->can1, selection->can1_name,
+                                   sizeof(selection->can1_name), "can1.csv")) {
+        return false;
+    }
+    if (discovery->exact_lappro &&
+        !replay_selection_set_name(&selection->lappro,
+                                   selection->lappro_name,
+                                   sizeof(selection->lappro_name),
+                                   "lappro.csv")) {
+        return false;
+    }
+
+    need_can0 = !selection->can0;
+    need_can1 = !selection->can1;
+    need_lappro = !selection->lappro;
+    if (need_can0 && need_can1) {
+        can_mode = REPLAY_LOGGER_CAN_ANY;
+    } else if (need_can0) {
+        can_mode = REPLAY_LOGGER_CAN0_ONLY;
+    } else if (need_can1) {
+        can_mode = REPLAY_LOGGER_CAN1_ONLY;
+    } else {
+        can_mode = REPLAY_LOGGER_CAN_NONE;
+    }
+
+    logger_can_available =
+        (need_can0 || need_can1) &&
+        replay_has_logger_input(discovery, true, false, can_mode);
+    logger_lappro_available =
+        need_lappro && replay_has_logger_input(discovery, false, true,
+                                               REPLAY_LOGGER_CAN_NONE);
+
+    if (logger_can_available && logger_lappro_available) {
+        logger_session = replay_latest_session(discovery, true, true,
+                                               can_mode);
+        if (logger_session == NULL) {
+            LOG_ERROR("[Replay] logger CAN/LapPro files have no common "
+                      "session; refusing to mix them");
+            return false;
+        }
+        LOG_INFO("[Replay] selected logger session: %s",
+                 logger_session->session);
+    } else if (logger_can_available) {
+        logger_session = replay_latest_session(discovery, true, false,
+                                               can_mode);
+        if (logger_session != NULL) {
+            LOG_INFO("[Replay] selected logger CAN session: %s",
+                     logger_session->session);
+        }
+    } else if (logger_lappro_available) {
+        logger_session = replay_latest_session(discovery, false, true,
+                                               REPLAY_LOGGER_CAN_NONE);
+        if (logger_session != NULL) {
+            LOG_INFO("[Replay] selected logger LapPro session: %s",
+                     logger_session->session);
+        }
+    }
+
+    if (logger_session != NULL && (need_can0 || need_can1)) {
+        if (can_mode == REPLAY_LOGGER_CAN_ANY) {
+            if (logger_session->has_can) {
+                if (!replay_selection_set_name(
+                        &selection->can0, selection->can0_name,
+                        sizeof(selection->can0_name),
+                        logger_session->can_name)) {
+                    return false;
+                }
+            } else {
+                if (need_can0 && logger_session->has_can0 &&
+                    !replay_selection_set_name(
+                        &selection->can0, selection->can0_name,
+                        sizeof(selection->can0_name),
+                        logger_session->can0_name)) {
+                    return false;
+                }
+                if (need_can1 && logger_session->has_can1 &&
+                    !replay_selection_set_name(
+                        &selection->can1, selection->can1_name,
+                        sizeof(selection->can1_name),
+                        logger_session->can1_name)) {
+                    return false;
+                }
+            }
+        } else if (can_mode == REPLAY_LOGGER_CAN0_ONLY &&
+                   logger_session->has_can0 &&
+                   !replay_selection_set_name(
+                       &selection->can0, selection->can0_name,
+                       sizeof(selection->can0_name),
+                       logger_session->can0_name)) {
+            return false;
+        } else if (can_mode == REPLAY_LOGGER_CAN1_ONLY &&
+                   logger_session->has_can1 &&
+                   !replay_selection_set_name(
+                       &selection->can1, selection->can1_name,
+                       sizeof(selection->can1_name),
+                       logger_session->can1_name)) {
+            return false;
+        }
+    }
+    if (logger_session != NULL && need_lappro &&
+        logger_session->has_lappro &&
+        !replay_selection_set_name(&selection->lappro,
+                                   selection->lappro_name,
+                                   sizeof(selection->lappro_name),
+                                   logger_session->lappro_name)) {
+        return false;
+    }
+
+    return selection->can0 || selection->can1 || selection->lappro;
+}
+
 static bool replay_open_path(ReplayStream *stream, const char *directory,
                              const char *name)
 {
     char path[PATH_MAX];
 
-    if (!replay_make_path(directory, name, path, sizeof(path))) {
+    if (stream == NULL || directory == NULL || name == NULL ||
+        !replay_make_path(directory, name, path, sizeof(path))) {
         return false;
     }
     stream->file = fopen(path, "r");
     if (stream->file == NULL) {
+        LOG_ERROR("[Replay] cannot open selected input %s: %s", path,
+                  strerror(errno));
         return false;
     }
     snprintf(stream->path, sizeof(stream->path), "%s", path);
@@ -445,44 +923,16 @@ static bool replay_open_path(ReplayStream *stream, const char *directory,
     return true;
 }
 
-static bool replay_open_prefix(ReplayStream *stream, const char *directory,
-                               const char *prefix)
-{
-    DIR *directory_handle;
-    struct dirent *entry;
-    bool opened = false;
-
-    directory_handle = opendir(directory);
-    if (directory_handle == NULL) {
-        return false;
-    }
-    while ((entry = readdir(directory_handle)) != NULL) {
-        size_t prefix_length = strlen(prefix);
-        size_t name_length = strlen(entry->d_name);
-
-        if (strncmp(entry->d_name, prefix, prefix_length) != 0 ||
-            name_length <= prefix_length + 4U ||
-            strcmp(entry->d_name + name_length - 4U, ".csv") != 0) {
-            continue;
-        }
-        if (replay_open_path(stream, directory, entry->d_name)) {
-            opened = true;
-            break;
-        }
-    }
-    closedir(directory_handle);
-    return opened;
-}
-
-static bool replay_open_stream(ReplayStream *stream, const char *directory,
-                               ReplaySource source, unsigned int default_bus,
-                               const char *exact_name, const char *prefix)
+static bool replay_open_selected_stream(ReplayStream *stream,
+                                         const char *directory,
+                                         ReplaySource source,
+                                         unsigned int default_bus,
+                                         const char *name)
 {
     memset(stream, 0, sizeof(*stream));
     stream->source = source;
     stream->default_bus = default_bus;
-    return replay_open_path(stream, directory, exact_name) ||
-           replay_open_prefix(stream, directory, prefix);
+    return replay_open_path(stream, directory, name);
 }
 
 static void replay_close_stream(ReplayStream *stream)
@@ -536,6 +986,8 @@ static bool replay_wait_until(const struct timespec *deadline)
 
 int replay_run(const ReplayConfig *config)
 {
+    ReplayDiscovery discovery;
+    ReplaySelection selection;
     ReplayStream streams[REPLAY_STREAM_COUNT];
     LapPro lappro;
     LapProConfig lappro_config;
@@ -558,29 +1010,48 @@ int replay_run(const ReplayConfig *config)
         return -1;
     }
 
+    memset(&discovery, 0, sizeof(discovery));
+    memset(&selection, 0, sizeof(selection));
     memset(streams, 0, sizeof(streams));
     LOG_INFO("[Replay] mode enabled");
 
-    if (replay_open_stream(&streams[0], config->directory, REPLAY_CAN0, 0U,
-                           "can0.csv", "can0_")) {
+    if (replay_discover_inputs(config->directory, &discovery) < 0 ||
+        !replay_build_selection(&discovery, &selection)) {
+        LOG_ERROR("[Replay] no supported input CSV in %s", config->directory);
+        result = -1;
+        goto cleanup;
+    }
+    if (selection.can0) {
+        if (!replay_open_selected_stream(
+                &streams[0], config->directory, REPLAY_CAN0, 0U,
+                selection.can0_name)) {
+            result = -1;
+            goto cleanup;
+        }
         input_open = true;
     }
-    if (replay_open_stream(&streams[1], config->directory, REPLAY_CAN1, 1U,
-                           "can1.csv", "can1_")) {
+    if (selection.can1) {
+        if (!replay_open_selected_stream(
+                &streams[1], config->directory, REPLAY_CAN1, 1U,
+                selection.can1_name)) {
+            result = -1;
+            goto cleanup;
+        }
         input_open = true;
     }
-    if (!input_open &&
-        replay_open_stream(&streams[0], config->directory, REPLAY_CAN0, 0U,
-                           "can.csv", "can_")) {
-        input_open = true;
-    }
-    if (replay_open_stream(&streams[2], config->directory, REPLAY_LAPPRO, 0U,
-                           "lappro.csv", "lappro_")) {
+    if (selection.lappro) {
+        if (!replay_open_selected_stream(
+                &streams[2], config->directory, REPLAY_LAPPRO, 0U,
+                selection.lappro_name)) {
+            result = -1;
+            goto cleanup;
+        }
         input_open = true;
     }
     if (!input_open) {
         LOG_ERROR("[Replay] no supported input CSV in %s", config->directory);
-        return -1;
+        result = -1;
+        goto cleanup;
     }
 
     memset(&signal_action, 0, sizeof(signal_action));
@@ -713,5 +1184,6 @@ cleanup:
          ++stream_index) {
         replay_close_stream(&streams[stream_index]);
     }
+    replay_discovery_destroy(&discovery);
     return result;
 }
