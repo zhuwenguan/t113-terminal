@@ -5,14 +5,17 @@
 #include "console_log.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <math.h>
 #include <string.h>
+#include <unistd.h>
 
 #define LAP_TIMER_MAX_PROJECTION_DISTANCE_M 30.0
 #define LAP_TIMER_MIN_LAP_TIME_S 3.0
 #define LAP_TIMER_PREVIOUS_CROSSING_FRACTION 0.65
 #define LAP_TIMER_CURRENT_CROSSING_FRACTION 0.10
 #define LAP_TIMER_INITIAL_CROSSING_FRACTION 0.25
+#define LAP_TIMER_TRACE_MAX_ATTEMPTS 10000U
 
 static void lap_timer_close_trace(LapTimer *timer)
 {
@@ -23,24 +26,61 @@ static void lap_timer_close_trace(LapTimer *timer)
     }
 }
 
+static FILE *lap_timer_open_trace_file(const LapTimer *timer, char *path,
+                                       size_t path_size)
+{
+    unsigned int suffix;
+
+    for (suffix = 0U; suffix < LAP_TIMER_TRACE_MAX_ATTEMPTS; ++suffix) {
+        int written;
+        int descriptor;
+        FILE *file;
+
+        written = suffix == 0U
+                      ? snprintf(path, path_size, "%s/lap_%03u.csv",
+                                 timer->trace_directory, timer->lap_number)
+                      : snprintf(path, path_size, "%s/lap_%03u_%03u.csv",
+                                 timer->trace_directory, timer->lap_number,
+                                 suffix);
+        if (written < 0 || (size_t)written >= path_size) {
+            errno = ENAMETOOLONG;
+            return NULL;
+        }
+        descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+        if (descriptor < 0) {
+            if (errno == EEXIST) {
+                continue;
+            }
+            return NULL;
+        }
+        file = fdopen(descriptor, "w");
+        if (file == NULL) {
+            int saved_errno = errno;
+
+            close(descriptor);
+            errno = saved_errno;
+            return NULL;
+        }
+        return file;
+    }
+
+    errno = EEXIST;
+    return NULL;
+}
+
 static void lap_timer_open_trace(LapTimer *timer)
 {
-    char path[256];
-    int written;
+    char path[256] = {0};
 
     lap_timer_close_trace(timer);
     if (timer->trace_directory[0] == '\0') {
         return;
     }
-    written = snprintf(path, sizeof(path), "%s/lap_%03u.csv",
-                       timer->trace_directory, timer->lap_number);
-    if (written < 0 || (size_t)written >= sizeof(path)) {
-        LOG_WARN("[LAP] trace path is too long");
-        return;
-    }
-    timer->trace_file = fopen(path, "w");
+    timer->trace_file = lap_timer_open_trace_file(timer, path, sizeof(path));
     if (timer->trace_file == NULL) {
-        LOG_WARN("[LAP] cannot open trace %s: %s", path, strerror(errno));
+        LOG_WARN("[LAP] cannot open trace %s: %s",
+                 path[0] != '\0' ? path : timer->trace_directory,
+                 strerror(errno));
         return;
     }
     setvbuf(timer->trace_file, NULL, _IOFBF, 4096U);

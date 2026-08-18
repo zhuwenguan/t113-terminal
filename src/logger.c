@@ -5,12 +5,15 @@
 #include "console_log.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
+
+#define LOGGER_SESSION_MAX_ATTEMPTS 10000U
 
 static bool logger_mount_is_writable(const char *mount_point)
 {
@@ -94,6 +97,55 @@ static int logger_prepare_storage(void)
     return 0;
 }
 
+static int logger_make_session_directory(Logger *logger)
+{
+    time_t current_time;
+    struct tm local_time;
+    char timestamp[32];
+    unsigned int suffix;
+
+    current_time = time(NULL);
+    if (current_time == (time_t)-1 ||
+        localtime_r(&current_time, &local_time) == NULL ||
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S",
+                 &local_time) == 0U) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    for (suffix = 0U; suffix < LOGGER_SESSION_MAX_ATTEMPTS; ++suffix) {
+        int written;
+
+        written = suffix == 0U
+                      ? snprintf(logger->session_directory,
+                                 sizeof(logger->session_directory),
+                                 "%s/session_%s", LOGGER_LOG_DIRECTORY,
+                                 timestamp)
+                      : snprintf(logger->session_directory,
+                                 sizeof(logger->session_directory),
+                                 "%s/session_%s_%03u", LOGGER_LOG_DIRECTORY,
+                                 timestamp, suffix);
+        if (written < 0 || (size_t)written >=
+                               sizeof(logger->session_directory)) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        if (mkdir(logger->session_directory, 0755) == 0) {
+            return 0;
+        }
+        if (errno != EEXIST) {
+            LOG_ERROR("Cannot create logger session directory %s: %s",
+                      logger->session_directory, strerror(errno));
+            return -1;
+        }
+    }
+
+    errno = EEXIST;
+    LOG_ERROR("Cannot find a free logger session directory under %s",
+              LOGGER_LOG_DIRECTORY);
+    return -1;
+}
+
 static int logger_make_paths(Logger *logger)
 {
     static const char *const names[LOG_RECORD_TYPE_COUNT] = {
@@ -116,7 +168,7 @@ static int logger_make_paths(Logger *logger)
     for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
         if (snprintf(logger->log_path[type],
                      sizeof(logger->log_path[type]),
-                     "%s/%s_%s.csv", LOGGER_LOG_DIRECTORY, names[type],
+                     "%s/%s_%s.csv", logger->session_directory, names[type],
                      timestamp) >=
             (int)sizeof(logger->log_path[type])) {
             errno = ENAMETOOLONG;
@@ -125,6 +177,25 @@ static int logger_make_paths(Logger *logger)
     }
 
     return 0;
+}
+
+static FILE *logger_open_exclusive(const char *path)
+{
+    FILE *file;
+    int descriptor;
+
+    descriptor = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (descriptor < 0) {
+        return NULL;
+    }
+    file = fdopen(descriptor, "w");
+    if (file == NULL) {
+        int saved_errno = errno;
+
+        close(descriptor);
+        errno = saved_errno;
+    }
+    return file;
 }
 
 static int logger_write_header(Logger *logger, LogRecordType type)
@@ -205,12 +276,14 @@ int logger_init(Logger *logger)
     }
 
     memset(logger, 0, sizeof(*logger));
-    if (logger_prepare_storage() < 0 || logger_make_paths(logger) < 0) {
+    if (logger_prepare_storage() < 0 ||
+        logger_make_session_directory(logger) < 0 ||
+        logger_make_paths(logger) < 0) {
         return -1;
     }
 
     for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
-        logger->file[type] = fopen(logger->log_path[type], "a");
+        logger->file[type] = logger_open_exclusive(logger->log_path[type]);
         if (logger->file[type] == NULL) {
             logger->stats.file_failed[type] = true;
             LOG_ERROR("Cannot open logger file %s: %s",
@@ -658,6 +731,14 @@ const char *logger_get_path_for_type(const Logger *logger, LogRecordType type)
         return NULL;
     }
     return logger->log_path[type];
+}
+
+const char *logger_get_session_directory(const Logger *logger)
+{
+    if (logger == NULL || logger->session_directory[0] == '\0') {
+        return NULL;
+    }
+    return logger->session_directory;
 }
 
 void logger_print_stats(const Logger *logger)

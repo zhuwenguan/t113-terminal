@@ -220,7 +220,8 @@ int main(int argc, char *argv[])
     }
     can_context.logger = logger_ready ? &logger : NULL;
     race_event_init(&can_context.race_event,
-                    logger_ready ? LOGGER_LOG_DIRECTORY : NULL);
+                    logger_ready ? logger_get_session_directory(&logger)
+                                 : NULL);
 
     if (options.replay) {
         ReplayConfig replay_config;

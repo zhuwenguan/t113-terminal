@@ -50,6 +50,7 @@ typedef struct {
     pthread_cond_t condition;
     pthread_t thread;
     FILE *file[LOG_RECORD_TYPE_COUNT];
+    char session_directory[256];
     char log_path[LOG_RECORD_TYPE_COUNT][256];
     LogRecord queue[LOGGER_QUEUE_CAPACITY];
     size_t queue_head;
@@ -81,6 +82,8 @@ const char *logger_get_path(const Logger *logger);
 
 const char *logger_get_path_for_type(const Logger *logger,
                                      LogRecordType type);
+
+const char *logger_get_session_directory(const Logger *logger);
 
 void logger_print_stats(const Logger *logger);
 
