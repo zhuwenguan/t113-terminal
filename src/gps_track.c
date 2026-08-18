@@ -11,7 +11,7 @@
 #define GPS_TRACK_HEADING_STABILITY_DEG 18.0
 #define GPS_TRACK_MAX_HACC_M 5.0
 #define GPS_TRACK_STRAIGHT_WINDOW 5U
-#define GPS_TRACK_VIRTUAL_START_FRACTION 0.25
+#define GPS_TRACK_VIRTUAL_START_FRACTION 0.15
 
 static double gps_track_radians(double degrees)
 {
@@ -160,7 +160,7 @@ bool gps_track_find_virtual_start(const GpsTrack *track, size_t begin_index,
         loop_distance_m * GPS_TRACK_VIRTUAL_START_FRACTION;
 
     /* The closed-loop point is the pit-lane merge reference. Search only
-     * ahead of it, in the first quarter of the lap. */
+     * ahead of it, in the first 15% of the lap. */
     for (index = begin_index + 1U; index < end_index; ++index) {
         const GpsTrackPoint *point = gps_track_at(track, index);
         double distance_from_loop_begin_m;
