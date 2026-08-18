@@ -16,23 +16,23 @@
 - 每帧统一转换为包含 `timestamp_us`、`bus`、`id`、`flags`、`dlc` 和 `data[8]` 的 `CanMessage`。
 - 时间戳使用 `CLOCK_MONOTONIC`，单位为微秒。
 - CAN 原始帧、LapPro 解析样本和 Vehicle State 统一进入固定容量 `LogRecord` 队列；三类数据分别写入独立文件。
-- LapPro 日志同时保存设备/GPS 真实时间和 `CLOCK_MONOTONIC` 的 `timestamp_us`；Vehicle State 只有 CAN 必需信号齐全且 LapPro `fix_type >= 3` 时才记录融合快照。
+- LapPro 日志同时保存设备/GPS 真实时间和 `CLOCK_MONOTONIC` 的 `timestamp_us`；Vehicle State 只有 CAN 必需信号在最近 1 秒内齐全且 LapPro `fix_type >= 3` 时才记录融合快照，电压或电流过期时派生功率同步失效。
 - 第二阶段增加每路 `rx_frames`、错误帧、非法帧、读取错误、epoll 错误和 bus-off 统计。
 - SocketCAN 已启用 error frame 过滤；检测到 `CAN_ERR_BUSOFF` 时标记接口失败并停止接收，避免静默运行。
 - 程序退出时打印两路 CAN 的统计汇总。
-- logger 使用一个线程和固定容量 `LogRecord` 队列；CAN/LapPro/Vehicle State producer 只入队，不直接执行文件写入。
+- logger 使用一个线程和固定容量 `LogRecord` 队列；CAN/LapPro/Vehicle State producer 只入队，不直接执行文件写入；队列为低频 LapPro/Vehicle State 保留 32 个槽位，并按记录类型统计入队、写入、丢弃和写错误。
 - logger 每最多 32 条记录或首条记录起 1 秒批量写入一次 CSV，不对每条记录执行 `fsync`。
-- 每次运行按系统本地时间生成 `/mnt/usb/sda/log/can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv` 和 `vehicle_state_YYYYMMDD_HHMMSS.csv` 文件；文件内记录时间戳仍使用 `CLOCK_MONOTONIC`，并统计入队、写入、丢弃和写错误数量。
+- 每次运行原子创建 `/mnt/usb/sda/log/session_YYYYMMDD_HHMMSS[_NNN]/` 会话目录，并在其中生成 `can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv`、`vehicle_state_YYYYMMDD_HHMMSS.csv` 和 `lap_XXX[_NNN].csv`；所有文件以不覆盖方式创建，文件内记录时间戳仍使用 `CLOCK_MONOTONIC`。
 - Vehicle State 框架包含车速、姿态/GPS、加速度、圈速/赛道字段，以及 `motor_rpm`、`torque_nm`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent` 和 `lv_voltage_v`；当前 CAN Decoder 已接入 `0x121`、`0x201`、`0x123`，`hv_power_w` 由高压电压和电流计算，圈速字段及其他未提供字段保持预留状态。
 - `race_event` 在 `UNKNOWN` 状态同时维护闭环和直线加速检测器，自动锁定 `CIRCUIT_MODE` 或 `ACCEL_MODE`，不依赖人工模式参数；初始闭环匹配使用 8m 紧阈值排除近距离赛道交叉点，多个候选同时匹配时按历史时间更早者作为维修区汇入赛道点。
 - `gps_track` 使用固定容量 4096 点缓存将有效 GPS 转换为局部 XY，并保留时间、速度、航向和累计距离；缓存满后仅保留最近一半样本，闭环连续匹配不允许回退到初始历史锚点之前。
-- `lap_timer` 从重复 GPS 轨迹学习临时赛道，只在闭环点沿赛道前进方向的前 15% 范围内选择最直区域作为虚拟起终点；当前圈从车辆首次有效运动开始计时，首次识别后等待真实虚拟起点通过，再输出当前圈、最佳圈、Delta 和圈轨迹。
+- `lap_timer` 从重复 GPS 轨迹学习临时赛道，只在闭环点沿赛道前进方向的前 15% 范围内选择最直区域作为虚拟起终点；当前圈从车辆首次有效运动开始计时，首次识别后等待真实虚拟起点通过，再输出当前圈、最佳圈、Delta 和圈轨迹。圈轨迹通过固定容量队列和独立 writer 线程异步写入，赛事状态锁内不执行文件 I/O。
 - `accel_test` 检测静止起步和持续直线运动，从 Launch Point 偏移 1m 后开始 75m 计时，并输出最大纵向加速度。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro worker 每约 1 秒输出一条 INFO 状态摘要；GPS 原始逐条数据仅在 DEBUG 模式输出。
 - 支持 `--replay <directory>` 和 `--replay-speed <number>`；Replay 不启动 CAN/LapPro 硬件输入，流式归并 `can0.csv`、`can1.csv`、`lappro.csv` 后复用现有 CAN 解码和 LapPro/VehicleState 汇合回调。
-- Replay 同时兼容当前 logger 生成的 `can_*.csv`、`lappro_*.csv` 及完整字段格式；不读取 `vehicle_state.csv`，非法行跳过并告警。
+- Replay 同时兼容当前 logger 生成的 `can_*.csv`、`lappro_*.csv` 及完整字段格式；多组 logger 文件按共同会话后缀确定性配对并选择字典序最新的一组，没有共同会话时拒绝混配；不读取 `vehicle_state.csv`，非法行跳过并告警。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
 - 当前默认目标地址为 `B0:A6:04:20:DF:3A`，位于 `LapProConfig` 中，可替换；默认地址类型为 LE public。
 - 当前已知 ATT 参数集中定义在 `src/lappro.c`：

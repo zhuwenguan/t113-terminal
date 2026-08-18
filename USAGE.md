@@ -76,7 +76,9 @@ Replay 不启动 CAN 和 LapPro 硬件输入，从指定目录读取 CSV。目�
 - `can1.csv`
 - `lappro.csv`
 
-也可以直接使用 Logger 生成的 `can_*.csv`、`lappro_*.csv` 文件。
+也可以把 `--replay` 指向某个 Logger 会话目录，直接使用其中的
+`can_*.csv`、`lappro_*.csv` 文件。目录中存在多组文件时，Replay 只会
+选择具有相同会话后缀的一组；没有共同后缀时会拒绝混合回放。
 
 运行回放：
 
@@ -94,10 +96,11 @@ Replay 不启动 CAN 和 LapPro 硬件输入，从指定目录读取 CSV。目�
 
 ## 日志位置
 
-程序只使用已挂载且可写的 `/mnt/usb/sda`，日志目录为：
+程序只使用已挂载且可写的 `/mnt/usb/sda`，每次启动会创建独立会话目录：
 
 ```text
-/mnt/usb/sda/log/
+/mnt/usb/sda/log/session_YYYYMMDD_HHMMSS/
+# 同一秒内重复启动时可能为 session_YYYYMMDD_HHMMSS_NNN/
 ```
 
 主要文件：
@@ -106,16 +109,18 @@ Replay 不启动 CAN 和 LapPro 硬件输入，从指定目录读取 CSV。目�
 can_YYYYMMDD_HHMMSS.csv
 lappro_YYYYMMDD_HHMMSS.csv
 vehicle_state_YYYYMMDD_HHMMSS.csv
-lap_XXX.csv
+lap_XXX.csv（同名冲突时为 lap_XXX_NNN.csv）
 ```
 
-文件名使用系统时间；文件内容中的 `timestamp_us` 使用 `CLOCK_MONOTONIC`。如果 U 盘未挂载或只读，程序会告警并继续运行，但不会写入日志。
+会话目录和文件使用不覆盖方式创建；文件内容中的 `timestamp_us` 使用
+`CLOCK_MONOTONIC`。圈轨迹由独立线程异步写入。如果 U 盘未挂载或只读，
+程序会告警并继续运行，但不会写入日志。
 
 查看日志：
 
 ```bash
 ls -lh /mnt/usb/sda/log
-tail -f /mnt/usb/sda/log/vehicle_state_*.csv
+tail -f /mnt/usb/sda/log/session_*/vehicle_state_*.csv
 ```
 
 ## 赛事模式
@@ -125,7 +130,9 @@ tail -f /mnt/usb/sda/log/vehicle_state_*.csv
 - `CIRCUIT_MODE`：检测到重复闭环 GPS 轨迹后自动进入，输出圈时间、最佳圈、Delta 和预计圈速。
 - `ACCEL_MODE`：检测到静止起步和持续直线运动后自动进入，Launch Point 后 1m 开始 75m 计时。
 
-Vehicle State 只有 CAN 必要数据和 GPS `fix_type >= 3` 同时有效时才写入 `vehicle_state.csv`。
+Vehicle State 只有 CAN 必要数据在最近 1 秒内齐全且 GPS `fix_type >= 3`
+时才写入 `vehicle_state.csv`；高频 CAN 流量会优先让出日志队列容量给
+LapPro 和 Vehicle State。
 
 ## 快速检查
 
