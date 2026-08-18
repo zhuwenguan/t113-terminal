@@ -27,7 +27,7 @@
 - `race_event` 在 `UNKNOWN` 状态同时维护闭环和直线加速检测器，自动锁定 `CIRCUIT_MODE` 或 `ACCEL_MODE`，不依赖人工模式参数。
 - `gps_track` 使用固定容量缓存将有效 GPS 转换为局部 XY，并保留时间、速度、航向和累计距离；缓存满后仅保留最近一半样本。
 - `lap_timer` 从重复 GPS 轨迹学习临时赛道，选择稳定直线区域作为虚拟起终点，输出当前圈、最佳圈、Delta 和圈轨迹。
-- `accel_test` 检测静止起步和持续直线运动，从 Launch Point 偏移 5m 后开始 75m 计时，并输出最大纵向加速度。
+- `accel_test` 检测静止起步和持续直线运动，从 Launch Point 偏移 1m 后开始 75m 计时，并输出最大纵向加速度。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro worker 每约 1 秒输出一条 INFO 状态摘要；GPS 原始逐条数据仅在 DEBUG 模式输出。
