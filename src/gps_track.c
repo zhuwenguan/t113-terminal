@@ -11,6 +11,7 @@
 #define GPS_TRACK_HEADING_STABILITY_DEG 18.0
 #define GPS_TRACK_MAX_HACC_M 5.0
 #define GPS_TRACK_STRAIGHT_WINDOW 5U
+#define GPS_TRACK_VIRTUAL_START_FRACTION 0.25
 
 static double gps_track_radians(double degrees)
 {
@@ -132,23 +133,84 @@ static bool gps_track_is_straight_window(const GpsTrack *track, size_t index,
 bool gps_track_find_virtual_start(const GpsTrack *track, size_t begin_index,
                                   size_t end_index, size_t *start_index)
 {
+    const GpsTrackPoint *loop_begin_point;
+    const GpsTrackPoint *loop_end_point;
+    double loop_distance_m;
+    double selection_distance_m;
     size_t index;
+    size_t fallback_index = 0U;
     size_t best_index = 0U;
+    double fallback_error_m = HUGE_VAL;
     double best_score = -1.0;
 
     if (track == NULL || start_index == NULL || begin_index >= end_index ||
-        end_index > track->point_count ||
+        end_index >= track->point_count ||
         end_index - begin_index < GPS_TRACK_STRAIGHT_WINDOW + 2U) {
         return false;
     }
-    for (index = begin_index + 1U;
-         index + GPS_TRACK_STRAIGHT_WINDOW < end_index - 1U; ++index) {
-        if (gps_track_is_straight_window(track, index, end_index)) {
+    loop_begin_point = gps_track_at(track, begin_index);
+    loop_end_point = gps_track_at(track, end_index);
+    if (loop_begin_point == NULL || loop_end_point == NULL ||
+        loop_end_point->total_distance_m <= loop_begin_point->total_distance_m) {
+        return false;
+    }
+    loop_distance_m = loop_end_point->total_distance_m -
+                      loop_begin_point->total_distance_m;
+    selection_distance_m =
+        loop_distance_m * GPS_TRACK_VIRTUAL_START_FRACTION;
+
+    /* The closed-loop point is the pit-lane merge reference. Search only
+     * ahead of it, in the first quarter of the lap. */
+    for (index = begin_index + 1U; index < end_index; ++index) {
+        const GpsTrackPoint *point = gps_track_at(track, index);
+        double distance_from_loop_begin_m;
+        double fallback_error;
+
+        if (point == NULL) {
+            continue;
+        }
+        distance_from_loop_begin_m = point->total_distance_m -
+                                     loop_begin_point->total_distance_m;
+        fallback_error = fabs(distance_from_loop_begin_m -
+                              selection_distance_m);
+        if (fallback_error < fallback_error_m) {
+            fallback_error_m = fallback_error;
+            fallback_index = index;
+        }
+        if (distance_from_loop_begin_m > selection_distance_m) {
+            break;
+        }
+        if (index + GPS_TRACK_STRAIGHT_WINDOW > end_index) {
+            continue;
+        }
+        {
+            const GpsTrackPoint *window_last = gps_track_at(
+                track, index + GPS_TRACK_STRAIGHT_WINDOW - 1U);
+
+            if (window_last == NULL ||
+                window_last->total_distance_m -
+                        loop_begin_point->total_distance_m >
+                    selection_distance_m ||
+                !gps_track_is_straight_window(track, index, end_index)) {
+                continue;
+            }
+        }
+
+        {
             size_t last = index + GPS_TRACK_STRAIGHT_WINDOW - 1U;
             const GpsTrackPoint *first_point = gps_track_at(track, index);
             const GpsTrackPoint *last_point = gps_track_at(track, last);
-            double score = first_point != NULL && last_point != NULL
-                               ? gps_track_distance(first_point, last_point)
+            double path_distance_m = last_point != NULL && first_point != NULL
+                                         ? last_point->total_distance_m -
+                                           first_point->total_distance_m
+                                         : 0.0;
+            double straight_distance_m = first_point != NULL &&
+                                                 last_point != NULL
+                                             ? gps_track_distance(first_point,
+                                                                  last_point)
+                                             : 0.0;
+            double score = path_distance_m > 0.1
+                               ? straight_distance_m / path_distance_m
                                : 0.0;
 
             if (score > best_score) {
@@ -158,7 +220,7 @@ bool gps_track_find_virtual_start(const GpsTrack *track, size_t begin_index,
         }
     }
     if (best_score < 0.0) {
-        best_index = begin_index + (end_index - begin_index) / 4U;
+        best_index = fallback_index != 0U ? fallback_index : begin_index + 1U;
     }
     *start_index = best_index;
     return true;

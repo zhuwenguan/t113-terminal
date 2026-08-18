@@ -22,16 +22,20 @@ typedef struct {
 typedef struct {
     bool configured;
     bool have_projection;
+    bool waiting_for_initial_crossing;
+    bool previous_projection_valid;
     char trace_directory[256];
     FILE *trace_file;
     LapReferencePoint reference[GPS_TRACK_MAX_POINTS];
     size_t reference_count;
     size_t previous_projection_index;
     double reference_lap_time_s;
+    double reference_loop_distance_s_m;
     double current_distance_s_m;
     double current_time_s;
     double delta_time_s;
     double estimated_lap_time_s;
+    uint64_t previous_projection_timestamp_us;
     uint64_t lap_start_timestamp_us;
     uint64_t last_report_timestamp_us;
     uint32_t lap_number;
