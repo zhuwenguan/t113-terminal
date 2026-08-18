@@ -83,10 +83,10 @@ static bool race_event_find_initial_match(const GpsTrack *track,
 static bool race_event_find_continuous_match(const GpsTrack *track,
                                              size_t current_index,
                                              size_t expected_index,
+                                             size_t minimum_history_index,
                                              size_t *matched_index)
 {
-    size_t first;
-    size_t last;
+    size_t offset;
     size_t index;
     const GpsTrackPoint *current;
 
@@ -98,20 +98,27 @@ static bool race_event_find_continuous_match(const GpsTrack *track,
     if (current == NULL) {
         return false;
     }
-    first = expected_index > RACE_EVENT_LOOP_SEARCH_RADIUS
-                ? expected_index - RACE_EVENT_LOOP_SEARCH_RADIUS
-                : 0U;
-    last = expected_index + RACE_EVENT_LOOP_SEARCH_RADIUS;
-    if (last >= current_index) {
-        last = current_index - 1U;
-    }
-    for (index = first; index <= last; ++index) {
-        const GpsTrackPoint *history = gps_track_at(track, index);
-
-        if (race_event_point_matches(current, history,
-                                     RACE_EVENT_LOOP_CONTINUITY_DISTANCE_M,
-                                     RACE_EVENT_LOOP_CONTINUITY_HEADING_DEG)) {
-            *matched_index = index;
+    /* Prefer the expected phase, then tolerate a small sample offset.  The
+     * old forward scan preferred expected-2 and could select a point before
+     * the original loop anchor, causing a valid candidate to be discarded. */
+    for (offset = 0U; offset <= RACE_EVENT_LOOP_SEARCH_RADIUS; ++offset) {
+        if (expected_index >= offset) {
+            index = expected_index - offset;
+            if (index >= minimum_history_index && index < current_index &&
+                race_event_point_matches(
+                    current, gps_track_at(track, index),
+                    RACE_EVENT_LOOP_CONTINUITY_DISTANCE_M,
+                    RACE_EVENT_LOOP_CONTINUITY_HEADING_DEG)) {
+                *matched_index = index;
+                return true;
+            }
+        }
+        if (offset > 0U && expected_index + offset < current_index &&
+            race_event_point_matches(
+                current, gps_track_at(track, expected_index + offset),
+                RACE_EVENT_LOOP_CONTINUITY_DISTANCE_M,
+                RACE_EVENT_LOOP_CONTINUITY_HEADING_DEG)) {
+            *matched_index = expected_index + offset;
             return true;
         }
     }
@@ -148,6 +155,7 @@ static bool race_event_update_loop_detector(RaceEvent *event,
                          (current_index - event->loop_current_index);
         if (!race_event_find_continuous_match(&event->gps_track, current_index,
                                               expected_index,
+                                              event->loop_history_index,
                                               &matched_index)) {
             event->loop_match_count = 0U;
             return false;

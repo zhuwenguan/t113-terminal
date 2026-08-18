@@ -5,7 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define GPS_TRACK_MAX_POINTS 2048U
+/* Keep enough fixed history for event learning before any compaction. */
+#define GPS_TRACK_MAX_POINTS 4096U
 
 typedef struct {
     uint64_t timestamp_us;
