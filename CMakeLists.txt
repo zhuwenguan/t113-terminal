@@ -6,6 +6,7 @@ project(t113_terminal
 )
 
 find_package(Threads REQUIRED)
+include(CTest)
 
 # The build host may provide a newer shared libm than the T113 image.
 # Link libm statically so the binary does not require a newer GLIBC symbol
@@ -57,4 +58,20 @@ if (EXISTS "${T113_LIBM_STATIC}")
     target_link_libraries(t113_terminal PRIVATE "${T113_LIBM_STATIC}")
 else()
     target_link_libraries(t113_terminal PRIVATE m)
+endif()
+
+if (BUILD_TESTING)
+    add_executable(test_can_decoder
+        tests/test_can_decoder.c
+        src/can_decoder.c
+        src/console_log.c
+    )
+    target_include_directories(test_can_decoder PRIVATE include)
+    target_compile_options(test_can_decoder PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_can_decoder PRIVATE Threads::Threads)
+    add_test(NAME can_decoder_freshness COMMAND test_can_decoder)
 endif()

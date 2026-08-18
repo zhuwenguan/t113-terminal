@@ -5,6 +5,7 @@
 #include "console_log.h"
 
 #include <stddef.h>
+#include <string.h>
 
 typedef struct {
     uint32_t id;
@@ -35,6 +36,13 @@ static const SingleSignalDefinition total_voltage_definition = {
 static const SingleSignalDefinition dc_current_definition = {
     CAN_DECODER_ID_DC_CURRENT,
     { 16U, 16U, 1.0, -1000.0, false } /* hv_current_a */
+};
+
+static const uint32_t can_decoder_source_masks[CAN_DECODER_SOURCE_COUNT] = {
+    [CAN_DECODER_SOURCE_MOTOR_STATUS] =
+        VEHICLE_STATE_VALID_MOTOR_RPM | VEHICLE_STATE_VALID_TORQUE_NM,
+    [CAN_DECODER_SOURCE_TOTAL_VOLTAGE] = VEHICLE_STATE_VALID_HV_VOLTAGE_V,
+    [CAN_DECODER_SOURCE_DC_CURRENT] = VEHICLE_STATE_VALID_HV_CURRENT_A
 };
 
 /* No CAN mapping has been supplied yet for HV SOC or LV voltage. */
@@ -107,16 +115,78 @@ static bool can_decoder_apply_signal(const CanMessage *message,
     return true;
 }
 
-bool can_decoder_process(const CanMessage *message, VehicleState *state)
+void can_decoder_init(CanDecoder *decoder)
+{
+    if (decoder != NULL) {
+        memset(decoder, 0, sizeof(*decoder));
+    }
+}
+
+static bool can_decoder_source_is_fresh(const CanDecoder *decoder,
+                                        CanDecoderSource source,
+                                        uint64_t timestamp_us)
+{
+    uint64_t source_timestamp_us;
+
+    if (decoder == NULL || source >= CAN_DECODER_SOURCE_COUNT ||
+        !decoder->source_seen[source]) {
+        return false;
+    }
+    source_timestamp_us = decoder->source_timestamp_us[source];
+    /* Concurrent producers timestamp samples before taking the shared state
+     * lock. A slightly older LapPro sample can therefore be processed after a
+     * newer CAN frame; that must not invalidate the newer CAN value. */
+    return timestamp_us < source_timestamp_us ||
+           timestamp_us - source_timestamp_us <=
+               CAN_DECODER_FRESHNESS_TIMEOUT_US;
+}
+
+void can_decoder_expire_stale(CanDecoder *decoder, uint64_t timestamp_us,
+                              VehicleState *state)
+{
+    unsigned int source;
+    bool voltage_fresh;
+    bool current_fresh;
+
+    if (decoder == NULL || state == NULL) {
+        return;
+    }
+    for (source = 0U; source < CAN_DECODER_SOURCE_COUNT; ++source) {
+        if (!can_decoder_source_is_fresh(decoder, (CanDecoderSource)source,
+                                         timestamp_us)) {
+            state->valid_mask &= ~can_decoder_source_masks[source];
+        }
+    }
+    voltage_fresh = can_decoder_source_is_fresh(
+        decoder, CAN_DECODER_SOURCE_TOTAL_VOLTAGE, timestamp_us);
+    current_fresh = can_decoder_source_is_fresh(
+        decoder, CAN_DECODER_SOURCE_DC_CURRENT, timestamp_us);
+    if (!voltage_fresh || !current_fresh) {
+        state->valid_mask &= ~VEHICLE_STATE_VALID_HV_POWER_W;
+    }
+}
+
+static void can_decoder_mark_source(CanDecoder *decoder,
+                                    CanDecoderSource source,
+                                    uint64_t timestamp_us)
+{
+    decoder->source_timestamp_us[source] = timestamp_us;
+    decoder->source_seen[source] = true;
+}
+
+bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
+                         VehicleState *state)
 {
     bool updated = false;
 
-    if (message == NULL || state == NULL ||
+    if (decoder == NULL || message == NULL || state == NULL ||
         message->dlc > sizeof(message->data) ||
         (message->flags & (CAN_MESSAGE_FLAG_ERROR | CAN_MESSAGE_FLAG_REMOTE)) !=
             0U) {
         return false;
     }
+
+    can_decoder_expire_stale(decoder, message->timestamp_us, state);
 
     if (message->id == motor_status_definition.id &&
         message->id != CAN_DECODER_ID_UNASSIGNED) {
@@ -128,6 +198,10 @@ bool can_decoder_process(const CanMessage *message, VehicleState *state)
             VEHICLE_STATE_VALID_TORQUE_NM, &state->torque_nm, state);
 
         updated = rpm_updated || torque_updated;
+        if (updated) {
+            can_decoder_mark_source(decoder, CAN_DECODER_SOURCE_MOTOR_STATUS,
+                                    message->timestamp_us);
+        }
         if (rpm_updated) {
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> motor_rpm=%.3f",
                       message->id, state->motor_rpm);
@@ -150,6 +224,10 @@ bool can_decoder_process(const CanMessage *message, VehicleState *state)
         }
         updated = voltage_updated;
         if (voltage_updated) {
+            can_decoder_mark_source(decoder, CAN_DECODER_SOURCE_TOTAL_VOLTAGE,
+                                    message->timestamp_us);
+        }
+        if (voltage_updated) {
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_voltage=%.3fV",
                       message->id, state->hv_voltage_v);
         }
@@ -171,6 +249,10 @@ bool can_decoder_process(const CanMessage *message, VehicleState *state)
         }
         updated = current_updated;
         if (current_updated) {
+            can_decoder_mark_source(decoder, CAN_DECODER_SOURCE_DC_CURRENT,
+                                    message->timestamp_us);
+        }
+        if (current_updated) {
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_current=%.3fA",
                       message->id, state->hv_current_a);
         }
@@ -181,6 +263,14 @@ bool can_decoder_process(const CanMessage *message, VehicleState *state)
     }
 
     if (updated) {
+        can_decoder_expire_stale(decoder, message->timestamp_us, state);
+        if ((state->valid_mask & (VEHICLE_STATE_VALID_HV_VOLTAGE_V |
+                                  VEHICLE_STATE_VALID_HV_CURRENT_A)) ==
+            (VEHICLE_STATE_VALID_HV_VOLTAGE_V |
+             VEHICLE_STATE_VALID_HV_CURRENT_A)) {
+            state->hv_power_w = state->hv_voltage_v * state->hv_current_a;
+            state->valid_mask |= VEHICLE_STATE_VALID_HV_POWER_W;
+        }
         state->timestamp_us = message->timestamp_us;
     }
 

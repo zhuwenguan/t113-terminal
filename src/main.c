@@ -17,6 +17,7 @@
 typedef struct {
     pthread_mutex_t mutex;
     Logger *logger;
+    CanDecoder decoder;
     RaceEvent race_event;
     VehicleState vehicle_state;
 } MainCanContext;
@@ -63,7 +64,8 @@ static void main_can_message_sink(const CanMessage *message, void *context)
     }
 
     pthread_mutex_lock(&can_context->mutex);
-    if (can_decoder_process(message, &can_context->vehicle_state)) {
+    if (can_decoder_process(&can_context->decoder, message,
+                            &can_context->vehicle_state)) {
         main_log_vehicle_state_locked(can_context,
                                       can_context->vehicle_state.timestamp_us);
     }
@@ -86,6 +88,8 @@ static void main_lappro_sample_sink(uint64_t timestamp_us,
     }
 
     pthread_mutex_lock(&can_context->mutex);
+    can_decoder_expire_stale(&can_context->decoder, timestamp_us,
+                             &can_context->vehicle_state);
     can_context->vehicle_state.timestamp_us = timestamp_us;
     can_context->vehicle_state.gps_fix_type = sample->fix_type;
     can_context->vehicle_state.gps_num_sv = sample->num_sv;
@@ -200,6 +204,7 @@ int main(int argc, char *argv[])
     int result;
 
     memset(&can_context, 0, sizeof(can_context));
+    can_decoder_init(&can_context.decoder);
     console_log_init();
     if (main_parse_arguments(argc, argv, &options) < 0) {
         return EXIT_FAILURE;
