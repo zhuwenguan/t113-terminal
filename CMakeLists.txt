@@ -74,4 +74,22 @@ if (BUILD_TESTING)
     )
     target_link_libraries(test_can_decoder PRIVATE Threads::Threads)
     add_test(NAME can_decoder_freshness COMMAND test_can_decoder)
+
+    add_executable(test_lap_timer_trace
+        tests/test_lap_timer_trace.c
+        src/lap_timer.c
+        src/gps_track.c
+        src/console_log.c
+    )
+    target_include_directories(test_lap_timer_trace PRIVATE include)
+    target_compile_options(test_lap_timer_trace PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_lap_timer_trace PRIVATE
+        Threads::Threads
+        m
+    )
+    add_test(NAME lap_timer_trace_async COMMAND test_lap_timer_trace)
 endif()

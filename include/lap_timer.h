@@ -6,8 +6,12 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <pthread.h>
+
 #include "gps_track.h"
 #include "vehicle_state.h"
+
+#define LAP_TIMER_TRACE_QUEUE_CAPACITY 256U
 
 typedef struct {
     uint64_t timestamp_us;
@@ -20,12 +24,38 @@ typedef struct {
 } LapReferencePoint;
 
 typedef struct {
+    bool open_only;
+    uint32_t lap_number;
+    uint64_t timestamp_us;
+    double x_m;
+    double y_m;
+    double distance_s_m;
+    double time_s;
+    double speed_kmh;
+    double heading_deg;
+} LapTraceRecord;
+
+typedef struct {
     bool configured;
     bool have_projection;
     bool waiting_for_initial_crossing;
     bool previous_projection_valid;
     char trace_directory[256];
     FILE *trace_file;
+    uint32_t trace_file_lap_number;
+    bool trace_file_failed;
+    pthread_mutex_t trace_mutex;
+    pthread_cond_t trace_condition;
+    pthread_t trace_thread;
+    LapTraceRecord trace_queue[LAP_TIMER_TRACE_QUEUE_CAPACITY];
+    size_t trace_queue_head;
+    size_t trace_queue_tail;
+    size_t trace_queue_count;
+    uint64_t trace_dropped_records;
+    uint64_t trace_write_errors;
+    bool trace_queue_initialized;
+    bool trace_thread_started;
+    bool trace_stop_requested;
     LapReferencePoint reference[GPS_TRACK_MAX_POINTS];
     size_t reference_count;
     size_t previous_projection_index;

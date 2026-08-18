@@ -17,16 +17,8 @@
 #define LAP_TIMER_INITIAL_CROSSING_FRACTION 0.25
 #define LAP_TIMER_TRACE_MAX_ATTEMPTS 10000U
 
-static void lap_timer_close_trace(LapTimer *timer)
-{
-    if (timer->trace_file != NULL) {
-        fflush(timer->trace_file);
-        fclose(timer->trace_file);
-        timer->trace_file = NULL;
-    }
-}
-
-static FILE *lap_timer_open_trace_file(const LapTimer *timer, char *path,
+static FILE *lap_timer_open_trace_file(const LapTimer *timer,
+                                       uint32_t lap_number, char *path,
                                        size_t path_size)
 {
     unsigned int suffix;
@@ -38,10 +30,9 @@ static FILE *lap_timer_open_trace_file(const LapTimer *timer, char *path,
 
         written = suffix == 0U
                       ? snprintf(path, path_size, "%s/lap_%03u.csv",
-                                 timer->trace_directory, timer->lap_number)
+                                 timer->trace_directory, lap_number)
                       : snprintf(path, path_size, "%s/lap_%03u_%03u.csv",
-                                 timer->trace_directory, timer->lap_number,
-                                 suffix);
+                                 timer->trace_directory, lap_number, suffix);
         if (written < 0 || (size_t)written >= path_size) {
             errno = ENAMETOOLONG;
             return NULL;
@@ -68,44 +59,239 @@ static FILE *lap_timer_open_trace_file(const LapTimer *timer, char *path,
     return NULL;
 }
 
-static void lap_timer_open_trace(LapTimer *timer)
+static void lap_timer_trace_close_file(LapTimer *timer)
+{
+    if (timer->trace_file == NULL) {
+        return;
+    }
+    if (fflush(timer->trace_file) < 0) {
+        timer->trace_write_errors++;
+        LOG_WARN("[LAP] trace flush failed");
+    }
+    if (fclose(timer->trace_file) != 0) {
+        timer->trace_write_errors++;
+        LOG_WARN("[LAP] trace close failed");
+    }
+    timer->trace_file = NULL;
+}
+
+static bool lap_timer_trace_open_file(LapTimer *timer, uint32_t lap_number)
 {
     char path[256] = {0};
 
-    lap_timer_close_trace(timer);
-    if (timer->trace_directory[0] == '\0') {
-        return;
+    if (timer->trace_file != NULL &&
+        timer->trace_file_lap_number == lap_number) {
+        return true;
     }
-    timer->trace_file = lap_timer_open_trace_file(timer, path, sizeof(path));
+    lap_timer_trace_close_file(timer);
+    if (timer->trace_file_failed &&
+        timer->trace_file_lap_number == lap_number) {
+        return false;
+    }
+    timer->trace_file_lap_number = lap_number;
+    timer->trace_file_failed = false;
+    timer->trace_file = lap_timer_open_trace_file(timer, lap_number, path,
+                                                  sizeof(path));
     if (timer->trace_file == NULL) {
+        timer->trace_file_failed = true;
+        timer->trace_write_errors++;
         LOG_WARN("[LAP] cannot open trace %s: %s",
                  path[0] != '\0' ? path : timer->trace_directory,
                  strerror(errno));
-        return;
+        return false;
     }
     setvbuf(timer->trace_file, NULL, _IOFBF, 4096U);
     if (fprintf(timer->trace_file,
                 "timestamp_us,distance_s_m,time_s,x_m,y_m,speed_kmh,"
                 "heading_deg\n") < 0) {
-        lap_timer_close_trace(timer);
+        timer->trace_write_errors++;
+        timer->trace_file_failed = true;
+        LOG_WARN("[LAP] trace header write failed");
+        lap_timer_trace_close_file(timer);
+        return false;
+    }
+    return true;
+}
+
+static void lap_timer_trace_write_record(LapTimer *timer,
+                                         const LapTraceRecord *record)
+{
+    if (!lap_timer_trace_open_file(timer, record->lap_number)) {
+        return;
+    }
+    if (record->open_only) {
+        return;
+    }
+    if (fprintf(timer->trace_file,
+                "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
+                (unsigned long long)record->timestamp_us,
+                record->distance_s_m, record->time_s, record->x_m,
+                record->y_m, record->speed_kmh, record->heading_deg) < 0) {
+        timer->trace_write_errors++;
+        timer->trace_file_failed = true;
+        LOG_WARN("[LAP] trace write failed");
+        lap_timer_trace_close_file(timer);
     }
 }
 
-static void lap_timer_write_trace(LapTimer *timer,
-                                  const GpsTrackPoint *point)
+static void *lap_timer_trace_writer_main(void *context)
 {
-    if (timer->trace_file == NULL ||
-        fprintf(timer->trace_file,
-                "%llu,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n",
-                (unsigned long long)point->timestamp_us,
-                timer->current_distance_s_m, timer->current_time_s,
-                point->x_m, point->y_m, point->speed_kmh,
-                point->heading_deg) < 0) {
-        if (timer->trace_file != NULL) {
-            LOG_WARN("[LAP] trace write failed");
-            lap_timer_close_trace(timer);
+    LapTimer *timer = context;
+
+    for (;;) {
+        LapTraceRecord record;
+        int wait_result;
+
+        if (pthread_mutex_lock(&timer->trace_mutex) != 0) {
+            LOG_ERROR("[LAP] cannot lock trace queue");
+            break;
         }
+        while (timer->trace_queue_count == 0U &&
+               !timer->trace_stop_requested) {
+            wait_result = pthread_cond_wait(&timer->trace_condition,
+                                            &timer->trace_mutex);
+            if (wait_result != 0) {
+                LOG_ERROR("[LAP] trace queue wait failed: %s",
+                          strerror(wait_result));
+                timer->trace_stop_requested = true;
+                break;
+            }
+        }
+        if (timer->trace_queue_count == 0U &&
+            timer->trace_stop_requested) {
+            pthread_mutex_unlock(&timer->trace_mutex);
+            break;
+        }
+        record = timer->trace_queue[timer->trace_queue_head];
+        timer->trace_queue_head =
+            (timer->trace_queue_head + 1U) % LAP_TIMER_TRACE_QUEUE_CAPACITY;
+        timer->trace_queue_count--;
+        pthread_mutex_unlock(&timer->trace_mutex);
+
+        lap_timer_trace_write_record(timer, &record);
     }
+
+    lap_timer_trace_close_file(timer);
+    return NULL;
+}
+
+static void lap_timer_trace_queue_record(LapTimer *timer,
+                                         const LapTraceRecord *record)
+{
+    if (!timer->trace_queue_initialized || !timer->trace_thread_started) {
+        return;
+    }
+    if (pthread_mutex_lock(&timer->trace_mutex) != 0) {
+        return;
+    }
+    if (timer->trace_stop_requested ||
+        timer->trace_queue_count >= LAP_TIMER_TRACE_QUEUE_CAPACITY) {
+        timer->trace_dropped_records++;
+        pthread_mutex_unlock(&timer->trace_mutex);
+        return;
+    }
+    timer->trace_queue[timer->trace_queue_tail] = *record;
+    timer->trace_queue_tail =
+        (timer->trace_queue_tail + 1U) % LAP_TIMER_TRACE_QUEUE_CAPACITY;
+    timer->trace_queue_count++;
+    pthread_cond_signal(&timer->trace_condition);
+    pthread_mutex_unlock(&timer->trace_mutex);
+}
+
+static void lap_timer_trace_queue_open(LapTimer *timer)
+{
+    LapTraceRecord record;
+
+    memset(&record, 0, sizeof(record));
+    record.open_only = true;
+    record.lap_number = timer->lap_number;
+    lap_timer_trace_queue_record(timer, &record);
+}
+
+static void lap_timer_trace_queue_sample(LapTimer *timer,
+                                         const GpsTrackPoint *point)
+{
+    LapTraceRecord record;
+
+    memset(&record, 0, sizeof(record));
+    record.lap_number = timer->lap_number;
+    record.timestamp_us = point->timestamp_us;
+    record.x_m = point->x_m;
+    record.y_m = point->y_m;
+    record.distance_s_m = timer->current_distance_s_m;
+    record.time_s = timer->current_time_s;
+    record.speed_kmh = point->speed_kmh;
+    record.heading_deg = point->heading_deg;
+    lap_timer_trace_queue_record(timer, &record);
+}
+
+static int lap_timer_trace_start(LapTimer *timer)
+{
+    int result;
+
+    result = pthread_mutex_init(&timer->trace_mutex, NULL);
+    if (result != 0) {
+        LOG_WARN("[LAP] cannot initialize trace queue mutex: %s",
+                 strerror(result));
+        return -1;
+    }
+    result = pthread_cond_init(&timer->trace_condition, NULL);
+    if (result != 0) {
+        LOG_WARN("[LAP] cannot initialize trace queue condition: %s",
+                 strerror(result));
+        pthread_mutex_destroy(&timer->trace_mutex);
+        return -1;
+    }
+    timer->trace_queue_initialized = true;
+    result = pthread_create(&timer->trace_thread, NULL,
+                            lap_timer_trace_writer_main, timer);
+    if (result != 0) {
+        LOG_WARN("[LAP] trace writer did not start: %s", strerror(result));
+        pthread_cond_destroy(&timer->trace_condition);
+        pthread_mutex_destroy(&timer->trace_mutex);
+        timer->trace_queue_initialized = false;
+        return -1;
+    }
+    timer->trace_thread_started = true;
+    return 0;
+}
+
+static bool lap_timer_trace_stop(LapTimer *timer)
+{
+    int result;
+
+    if (!timer->trace_queue_initialized) {
+        return true;
+    }
+    if (timer->trace_thread_started) {
+        result = pthread_mutex_lock(&timer->trace_mutex);
+        if (result == 0) {
+            timer->trace_stop_requested = true;
+            pthread_cond_signal(&timer->trace_condition);
+            pthread_mutex_unlock(&timer->trace_mutex);
+        } else {
+            LOG_WARN("[LAP] cannot stop trace writer: %s", strerror(result));
+            return false;
+        }
+        result = pthread_join(timer->trace_thread, NULL);
+        if (result != 0) {
+            LOG_WARN("[LAP] cannot join trace writer: %s", strerror(result));
+            return false;
+        }
+        timer->trace_thread_started = false;
+    }
+    pthread_cond_destroy(&timer->trace_condition);
+    pthread_mutex_destroy(&timer->trace_mutex);
+    timer->trace_queue_initialized = false;
+    if (timer->trace_dropped_records > 0U) {
+        LOG_WARN("[LAP] trace queue dropped=%llu records",
+                 (unsigned long long)timer->trace_dropped_records);
+    }
+    if (timer->trace_write_errors > 0U) {
+        LOG_WARN("[LAP] trace write errors=%llu",
+                 (unsigned long long)timer->trace_write_errors);
+    }
+    return true;
 }
 
 static size_t lap_timer_find_projection(const LapTimer *timer,
@@ -224,6 +410,10 @@ void lap_timer_init(LapTimer *timer, const char *trace_directory)
     if (trace_directory != NULL) {
         snprintf(timer->trace_directory, sizeof(timer->trace_directory), "%s",
                  trace_directory);
+        if (timer->trace_directory[0] != '\0' &&
+            lap_timer_trace_start(timer) < 0) {
+            LOG_WARN("[LAP] trace writer unavailable; traces disabled");
+        }
     }
 }
 
@@ -331,7 +521,7 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
             timer->previous_projection_valid = true;
         }
     }
-    lap_timer_open_trace(timer);
+    lap_timer_trace_queue_open(timer);
     if (current_point->timestamp_us >= timer->lap_start_timestamp_us) {
         timer->current_time_s =
             (double)(current_point->timestamp_us -
@@ -429,8 +619,8 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
         timer->estimated_lap_time_s = timer->reference_lap_time_s;
         timer->previous_projection_index = projection_index;
         timer->previous_projection_timestamp_us = point->timestamp_us;
-        lap_timer_open_trace(timer);
-        lap_timer_write_trace(timer, point);
+        lap_timer_trace_queue_open(timer);
+        lap_timer_trace_queue_sample(timer, point);
         lap_timer_set_state(timer, state);
         return;
     }
@@ -456,7 +646,7 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
                  timer->best_lap_time_s, timer->delta_time_s);
         timer->lap_number++;
         timer->lap_start_timestamp_us = crossing_timestamp_us;
-        lap_timer_open_trace(timer);
+        lap_timer_trace_queue_open(timer);
     }
     timer->have_projection = true;
     timer->previous_projection_index = projection_index;
@@ -475,7 +665,7 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
     } else {
         timer->estimated_lap_time_s = timer->reference_lap_time_s;
     }
-    lap_timer_write_trace(timer, point);
+    lap_timer_trace_queue_sample(timer, point);
     if (timer->last_report_timestamp_us == 0U ||
         point->timestamp_us - timer->last_report_timestamp_us >= 1000000ULL) {
         LOG_INFO("[LAP] lap=%u distance=%.1fm delta=%+.2fs",
@@ -491,6 +681,10 @@ void lap_timer_close(LapTimer *timer)
     if (timer == NULL) {
         return;
     }
-    lap_timer_close_trace(timer);
-    timer->configured = false;
+    if (lap_timer_trace_stop(timer)) {
+        timer->configured = false;
+    } else {
+        LOG_WARN("[LAP] trace writer remains active; keeping synchronization "
+                 "objects alive");
+    }
 }
