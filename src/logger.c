@@ -15,6 +15,14 @@
 
 #define LOGGER_SESSION_MAX_ATTEMPTS 10000U
 
+_Static_assert(LOGGER_CRITICAL_QUEUE_RESERVE < LOGGER_QUEUE_CAPACITY,
+               "logger critical reserve must fit in the queue");
+
+static bool logger_record_type_valid(LogRecordType type)
+{
+    return (int)type >= 0 && type < LOG_RECORD_TYPE_COUNT;
+}
+
 static bool logger_mount_is_writable(const char *mount_point)
 {
     FILE *mounts;
@@ -465,42 +473,99 @@ static int logger_write_record(Logger *logger, const LogRecord *record)
     return -1;
 }
 
+typedef struct {
+    uint64_t written_records;
+    uint64_t dropped_records;
+    uint64_t write_errors;
+    uint64_t flushes;
+    LoggerTypeStats by_type[LOG_RECORD_TYPE_COUNT];
+    bool file_failed[LOG_RECORD_TYPE_COUNT];
+} LoggerBatchStats;
+
+static void logger_commit_batch_stats(Logger *logger,
+                                      const LoggerBatchStats *batch_stats)
+{
+    unsigned int type;
+
+    if (pthread_mutex_lock(&logger->mutex) != 0) {
+        LOG_ERROR("Cannot lock logger statistics mutex");
+        return;
+    }
+
+    logger->stats.written_records += batch_stats->written_records;
+    logger->stats.dropped_records += batch_stats->dropped_records;
+    logger->stats.write_errors += batch_stats->write_errors;
+    logger->stats.flushes += batch_stats->flushes;
+    for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        logger->stats.by_type[type].written +=
+            batch_stats->by_type[type].written;
+        logger->stats.by_type[type].dropped +=
+            batch_stats->by_type[type].dropped;
+        logger->stats.by_type[type].write_errors +=
+            batch_stats->by_type[type].write_errors;
+        logger->stats.file_failed[type] = batch_stats->file_failed[type];
+    }
+
+    pthread_mutex_unlock(&logger->mutex);
+}
+
 static void logger_write_batch(Logger *logger, const LogRecord *batch,
                                size_t count)
 {
+    LoggerBatchStats batch_stats = {0};
+    bool file_failed[LOG_RECORD_TYPE_COUNT];
     bool touched[LOG_RECORD_TYPE_COUNT] = {false};
     size_t index;
+    unsigned int type;
+
+    if (pthread_mutex_lock(&logger->mutex) != 0) {
+        LOG_ERROR("Cannot lock logger statistics mutex");
+        return;
+    }
+    memcpy(file_failed, logger->stats.file_failed, sizeof(file_failed));
+    pthread_mutex_unlock(&logger->mutex);
 
     for (index = 0; index < count; ++index) {
         const LogRecord *record = &batch[index];
 
-        if ((int)record->type < 0 || record->type >= LOG_RECORD_TYPE_COUNT ||
-            logger->file[record->type] == NULL ||
-            logger->stats.file_failed[record->type]) {
-            logger->stats.dropped_records++;
+        if (!logger_record_type_valid(record->type)) {
+            batch_stats.dropped_records++;
+            continue;
+        }
+        type = (unsigned int)record->type;
+        if (logger->file[type] == NULL || file_failed[type]) {
+            batch_stats.dropped_records++;
+            batch_stats.by_type[type].dropped++;
             continue;
         }
         if (logger_write_record(logger, record) < 0) {
-            logger->stats.write_errors++;
-            logger->stats.file_failed[record->type] = true;
-            logger->stats.dropped_records++;
+            batch_stats.write_errors++;
+            batch_stats.by_type[type].write_errors++;
+            batch_stats.dropped_records++;
+            batch_stats.by_type[type].dropped++;
+            file_failed[type] = true;
             continue;
         }
-        logger->stats.written_records++;
-        touched[record->type] = true;
+        batch_stats.written_records++;
+        batch_stats.by_type[type].written++;
+        touched[type] = true;
     }
 
-    for (index = 0; index < LOG_RECORD_TYPE_COUNT; ++index) {
-        if (!touched[index] || logger->stats.file_failed[index]) {
+    for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        if (!touched[type] || file_failed[type]) {
             continue;
         }
-        if (fflush(logger->file[index]) < 0) {
-            logger->stats.write_errors++;
-            logger->stats.file_failed[index] = true;
+        if (fflush(logger->file[type]) < 0) {
+            batch_stats.write_errors++;
+            batch_stats.by_type[type].write_errors++;
+            file_failed[type] = true;
         } else {
-            logger->stats.flushes++;
+            batch_stats.flushes++;
         }
     }
+
+    memcpy(batch_stats.file_failed, file_failed, sizeof(file_failed));
+    logger_commit_batch_stats(logger, &batch_stats);
 }
 
 static void logger_make_deadline(uint64_t first_timestamp_us,
@@ -602,9 +667,10 @@ int logger_start(Logger *logger)
 void logger_record_sink(const LogRecord *record, void *context)
 {
     Logger *logger = context;
+    bool type_valid;
+    bool reserve_can;
 
-    if (logger == NULL || record == NULL || !logger->initialized ||
-        !logger->started) {
+    if (logger == NULL || record == NULL || !logger->initialized) {
         return;
     }
 
@@ -612,11 +678,28 @@ void logger_record_sink(const LogRecord *record, void *context)
         return;
     }
 
-    if ((int)record->type < 0 || record->type >= LOG_RECORD_TYPE_COUNT ||
+    if (!logger->started) {
+        pthread_mutex_unlock(&logger->mutex);
+        return;
+    }
+
+    type_valid = logger_record_type_valid(record->type);
+    reserve_can = type_valid && record->type == LOG_RECORD_TYPE_CAN &&
+                  !logger->stop_requested &&
+                  logger->queue_count >=
+                      LOGGER_QUEUE_CAPACITY - LOGGER_CRITICAL_QUEUE_RESERVE;
+    if (!type_valid ||
         (record->type == LOG_RECORD_TYPE_CAN &&
          record->payload.can.dlc > sizeof(record->payload.can.data)) ||
-        logger->stop_requested || logger->queue_count >= LOGGER_QUEUE_CAPACITY) {
+        logger->stop_requested || logger->queue_count >= LOGGER_QUEUE_CAPACITY ||
+        reserve_can) {
         logger->stats.dropped_records++;
+        if (type_valid) {
+            logger->stats.by_type[record->type].dropped++;
+        }
+        if (reserve_can) {
+            logger->stats.can_reserve_drops++;
+        }
         pthread_mutex_unlock(&logger->mutex);
         return;
     }
@@ -626,6 +709,7 @@ void logger_record_sink(const LogRecord *record, void *context)
         (logger->queue_tail + 1U) % LOGGER_QUEUE_CAPACITY;
     logger->queue_count++;
     logger->stats.enqueued_records++;
+    logger->stats.by_type[record->type].enqueued++;
     if (logger->queue_count > logger->stats.queue_high_watermark) {
         logger->stats.queue_high_watermark = logger->queue_count;
     }
@@ -693,20 +777,35 @@ void logger_stop(Logger *logger)
         pthread_cond_signal(&logger->condition);
         pthread_mutex_unlock(&logger->mutex);
         pthread_join(logger->thread, NULL);
-        logger->started = false;
+        if (pthread_mutex_lock(&logger->mutex) == 0) {
+            logger->started = false;
+            pthread_mutex_unlock(&logger->mutex);
+        }
     }
 
     {
         unsigned int type;
 
         for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
+            bool file_failed;
+
             if (logger->file[type] == NULL) {
                 continue;
             }
-            if (!logger->stats.file_failed[type] &&
-                fflush(logger->file[type]) < 0) {
-                logger->stats.write_errors++;
-                logger->stats.file_failed[type] = true;
+            if (pthread_mutex_lock(&logger->mutex) != 0) {
+                LOG_ERROR("Cannot lock logger statistics mutex");
+                file_failed = true;
+            } else {
+                file_failed = logger->stats.file_failed[type];
+                pthread_mutex_unlock(&logger->mutex);
+            }
+            if (!file_failed && fflush(logger->file[type]) < 0) {
+                if (pthread_mutex_lock(&logger->mutex) == 0) {
+                    logger->stats.write_errors++;
+                    logger->stats.by_type[type].write_errors++;
+                    logger->stats.file_failed[type] = true;
+                    pthread_mutex_unlock(&logger->mutex);
+                }
                 LOG_ERROR("Cannot flush logger file %s: %s",
                           logger->log_path[type], strerror(errno));
             }
@@ -743,26 +842,60 @@ const char *logger_get_session_directory(const Logger *logger)
 
 void logger_print_stats(const Logger *logger)
 {
+    LoggerStats stats;
+
     if (logger == NULL) {
         return;
+    }
+
+    if (logger->initialized &&
+        pthread_mutex_lock((pthread_mutex_t *)&logger->mutex) == 0) {
+        stats = logger->stats;
+        pthread_mutex_unlock((pthread_mutex_t *)&logger->mutex);
+    } else {
+        stats = logger->stats;
     }
 
     LOG_INFO("Logger statistics: can=%s lappro=%s vehicle_state=%s "
              "enqueued_records=%llu written_records=%llu "
              "dropped_records=%llu write_errors=%llu flushes=%llu "
-             "queue_high_watermark=%zu file_failed=%s/%s/%s",
+             "can_reserve_drops=%llu queue_high_watermark=%zu "
+             "can{enqueued=%llu,written=%llu,dropped=%llu,write_errors=%llu} "
+             "lappro{enqueued=%llu,written=%llu,dropped=%llu,write_errors=%llu} "
+             "vehicle_state{enqueued=%llu,written=%llu,dropped=%llu,write_errors=%llu} "
+             "file_failed=%s/%s/%s",
              logger->log_path[LOG_RECORD_TYPE_CAN],
              logger->log_path[LOG_RECORD_TYPE_LAPPRO],
              logger->log_path[LOG_RECORD_TYPE_VEHICLE_STATE],
-             (unsigned long long)logger->stats.enqueued_records,
-             (unsigned long long)logger->stats.written_records,
-             (unsigned long long)logger->stats.dropped_records,
-             (unsigned long long)logger->stats.write_errors,
-             (unsigned long long)logger->stats.flushes,
-             logger->stats.queue_high_watermark,
-             logger->stats.file_failed[LOG_RECORD_TYPE_CAN] ? "yes" : "no",
-             logger->stats.file_failed[LOG_RECORD_TYPE_LAPPRO] ? "yes" : "no",
-             logger->stats.file_failed[LOG_RECORD_TYPE_VEHICLE_STATE]
-                 ? "yes"
-                 : "no");
+             (unsigned long long)stats.enqueued_records,
+             (unsigned long long)stats.written_records,
+             (unsigned long long)stats.dropped_records,
+             (unsigned long long)stats.write_errors,
+             (unsigned long long)stats.flushes,
+             (unsigned long long)stats.can_reserve_drops,
+             stats.queue_high_watermark,
+             (unsigned long long)stats.by_type[LOG_RECORD_TYPE_CAN].enqueued,
+             (unsigned long long)stats.by_type[LOG_RECORD_TYPE_CAN].written,
+             (unsigned long long)stats.by_type[LOG_RECORD_TYPE_CAN].dropped,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_CAN].write_errors,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_LAPPRO].enqueued,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_LAPPRO].written,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_LAPPRO].dropped,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_LAPPRO].write_errors,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_VEHICLE_STATE].enqueued,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_VEHICLE_STATE].written,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_VEHICLE_STATE].dropped,
+             (unsigned long long)
+                 stats.by_type[LOG_RECORD_TYPE_VEHICLE_STATE].write_errors,
+             stats.file_failed[LOG_RECORD_TYPE_CAN] ? "yes" : "no",
+             stats.file_failed[LOG_RECORD_TYPE_LAPPRO] ? "yes" : "no",
+             stats.file_failed[LOG_RECORD_TYPE_VEHICLE_STATE] ? "yes" : "no");
 }

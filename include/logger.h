@@ -17,6 +17,8 @@
 #define LOGGER_QUEUE_CAPACITY 256U
 #define LOGGER_BATCH_SIZE 32U
 #define LOGGER_FLUSH_INTERVAL_MS 1000U
+/* Keep room for the lower-rate records while raw CAN traffic is busy. */
+#define LOGGER_CRITICAL_QUEUE_RESERVE LOGGER_BATCH_SIZE
 
 typedef enum {
     LOG_RECORD_TYPE_CAN = 0,
@@ -36,12 +38,21 @@ typedef struct {
 } LogRecord;
 
 typedef struct {
+    uint64_t enqueued;
+    uint64_t written;
+    uint64_t dropped;
+    uint64_t write_errors;
+} LoggerTypeStats;
+
+typedef struct {
     uint64_t enqueued_records;
     uint64_t written_records;
     uint64_t dropped_records;
     uint64_t write_errors;
     uint64_t flushes;
+    uint64_t can_reserve_drops;
     size_t queue_high_watermark;
+    LoggerTypeStats by_type[LOG_RECORD_TYPE_COUNT];
     bool file_failed[LOG_RECORD_TYPE_COUNT];
 } LoggerStats;
 
