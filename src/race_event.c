@@ -10,7 +10,8 @@
 #define RACE_EVENT_MIN_LOOP_TIME_US 15000000ULL
 #define RACE_EVENT_MAX_LOOP_TIME_US 900000000ULL
 #define RACE_EVENT_MIN_LOOP_DISTANCE_M 80.0
-#define RACE_EVENT_LOOP_MATCH_DISTANCE_M 15.0
+/* The initial closure must be tighter than a nearby track crossing. */
+#define RACE_EVENT_LOOP_MATCH_DISTANCE_M 8.0
 #define RACE_EVENT_LOOP_CONTINUITY_DISTANCE_M 20.0
 #define RACE_EVENT_LOOP_HEADING_ERROR_DEG 45.0
 #define RACE_EVENT_LOOP_CONTINUITY_HEADING_DEG 60.0
@@ -258,8 +259,16 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
                                loop_start->timestamp_us) /
                           1000000.0
                     : 0.0;
+            double loop_distance_m =
+                loop_start != NULL && loop_finish != NULL
+                    ? loop_finish->total_distance_m -
+                          loop_start->total_distance_m
+                    : 0.0;
 
             event->mode = RACE_EVENT_CIRCUIT_MODE;
+            LOG_DEBUG("[RACE] loop candidate history=%zu current=%zu "
+                      "distance=%.1fm",
+                      loop_begin, loop_end, loop_distance_m);
             LOG_INFO("[RACE] event detected: CIRCUIT_MODE loop=%.2fs",
                      loop_time_s);
         } else if (accel_test_is_candidate(&event->accel_test)) {

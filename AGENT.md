@@ -24,7 +24,7 @@
 - logger 每最多 32 条记录或首条记录起 1 秒批量写入一次 CSV，不对每条记录执行 `fsync`。
 - 每次运行按系统本地时间生成 `/mnt/usb/sda/log/can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv` 和 `vehicle_state_YYYYMMDD_HHMMSS.csv` 文件；文件内记录时间戳仍使用 `CLOCK_MONOTONIC`，并统计入队、写入、丢弃和写错误数量。
 - Vehicle State 框架包含车速、姿态/GPS、加速度、圈速/赛道字段，以及 `motor_rpm`、`torque_nm`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent` 和 `lv_voltage_v`；当前 CAN Decoder 已接入 `0x121`、`0x201`、`0x123`，`hv_power_w` 由高压电压和电流计算，圈速字段及其他未提供字段保持预留状态。
-- `race_event` 在 `UNKNOWN` 状态同时维护闭环和直线加速检测器，自动锁定 `CIRCUIT_MODE` 或 `ACCEL_MODE`，不依赖人工模式参数；多个闭环候选点同时匹配时，按历史时间更早者作为维修区汇入赛道点。
+- `race_event` 在 `UNKNOWN` 状态同时维护闭环和直线加速检测器，自动锁定 `CIRCUIT_MODE` 或 `ACCEL_MODE`，不依赖人工模式参数；初始闭环匹配使用 8m 紧阈值排除近距离赛道交叉点，多个候选同时匹配时按历史时间更早者作为维修区汇入赛道点。
 - `gps_track` 使用固定容量缓存将有效 GPS 转换为局部 XY，并保留时间、速度、航向和累计距离；缓存满后仅保留最近一半样本。
 - `lap_timer` 从重复 GPS 轨迹学习临时赛道，只在闭环点沿赛道前进方向的前 25% 范围内选择最直区域作为虚拟起终点；当前圈从车辆首次有效运动开始计时，首次识别后等待真实虚拟起点通过，再输出当前圈、最佳圈、Delta 和圈轨迹。
 - `accel_test` 检测静止起步和持续直线运动，从 Launch Point 偏移 1m 后开始 75m 计时，并输出最大纵向加速度。
