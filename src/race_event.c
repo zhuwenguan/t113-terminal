@@ -46,8 +46,6 @@ static bool race_event_find_initial_match(const GpsTrack *track,
 {
     const GpsTrackPoint *current;
     size_t index;
-    double best_distance = HUGE_VAL;
-    size_t best_index = 0U;
 
     if (track == NULL || history_index == NULL || current_index >=
                                                        track->point_count) {
@@ -60,7 +58,6 @@ static bool race_event_find_initial_match(const GpsTrack *track,
     for (index = 0U; index < current_index; ++index) {
         const GpsTrackPoint *history = gps_track_at(track, index);
         uint64_t time_gap;
-        double distance;
 
         if (history == NULL || current->timestamp_us < history->timestamp_us) {
             continue;
@@ -73,17 +70,13 @@ static bool race_event_find_initial_match(const GpsTrack *track,
                                       RACE_EVENT_LOOP_HEADING_ERROR_DEG)) {
             continue;
         }
-        distance = gps_track_distance(current, history);
-        if (distance < best_distance) {
-            best_distance = distance;
-            best_index = index;
-        }
+        /* When more than one crossing is geometrically possible, the first
+         * historical match is the earlier crossing and is treated as the
+         * pit-lane merge reference. */
+        *history_index = index;
+        return true;
     }
-    if (best_distance == HUGE_VAL) {
-        return false;
-    }
-    *history_index = best_index;
-    return true;
+    return false;
 }
 
 static bool race_event_find_continuous_match(const GpsTrack *track,
