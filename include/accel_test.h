@@ -16,26 +16,26 @@ typedef enum {
 
 typedef struct {
     AccelTestState state;
-    bool have_previous_point;
     bool timing_started;
     bool intermediate_finished;
+    bool result_valid;
     uint64_t stationary_since_us;
     uint64_t previous_timestamp_us;
     uint64_t launch_timestamp_us;
     uint64_t timing_start_timestamp_us;
     uint64_t intermediate_timestamp_us;
     uint64_t finish_timestamp_us;
+    uint64_t result_hold_until_us;
     uint64_t last_report_timestamp_us;
     double launch_x_m;
     double launch_y_m;
     double launch_heading_deg;
     double previous_along_m;
-    double previous_speed_kmh;
+    double furthest_along_m;
     double accel_distance_m;
     double accel_50m_time_s;
     double accel_time_s;
     double max_acceleration;
-    uint32_t straight_samples;
 } AccelTest;
 
 void accel_test_init(AccelTest *test);

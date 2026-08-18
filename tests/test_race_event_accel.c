@@ -56,11 +56,15 @@ static void finish_run(RaceEvent *event, VehicleState *state,
 
     for (index = 1U; index <= 7U; ++index) {
         update(event, state, start_us + 120000ULL + index * 40000ULL,
-               40.0, 0.2, 90.0,
+               40.0, 0.2, index >= 6U ? 55.0 : 90.0,
                longitude + index * 0.000130, latitude);
     }
 
     assert(event->accel_test.state == ACCEL_TEST_IDLE);
+    assert(event->accel_test.result_valid);
+    assert(event->accel_test.finish_timestamp_us < start_us + 400000ULL);
+    assert(event->accel_test.result_hold_until_us ==
+           start_us + 5400000ULL);
     assert(state->accel_distance_m == 75.0);
     assert(state->accel_50m_time_s > 0.0);
     assert(state->accel_time_s > state->accel_50m_time_s);
@@ -92,7 +96,17 @@ int main(void)
                      start_longitude + 0.001200, start_latitude);
     assert(state.accel_50m_time_s == first_50m_time_s);
     assert(state.accel_time_s == first_75m_time_s);
-    finish_run(&event, &state, 7000000ULL,
+
+    /* A new launch cannot overwrite the result during its five-second hold. */
+    update(&event, &state, 8399999ULL, 4.0, 2.0, 90.0,
+           start_longitude + 0.001200, start_latitude);
+    assert(event.accel_test.state == ACCEL_TEST_ARMED);
+    assert(event.accel_test.result_valid);
+    assert(state.accel_distance_m == 75.0);
+    assert(state.accel_50m_time_s == first_50m_time_s);
+    assert(state.accel_time_s == first_75m_time_s);
+
+    finish_run(&event, &state, 9000000ULL,
                start_longitude + 0.001200, start_latitude);
     assert(event.mode == RACE_EVENT_UNKNOWN);
 
@@ -109,9 +123,28 @@ int main(void)
            start_longitude + 0.000120, start_latitude);
     assert(event.accel_test.timing_started);
     update(&event, &state, 13000000ULL, 30.0, 0.2, 0.0,
-           start_longitude + 0.000130, start_latitude + 0.000010);
+           start_longitude + 0.000130, start_latitude + 0.000100);
     assert(event.accel_test.state == ACCEL_TEST_IDLE);
+    assert(!event.accel_test.result_valid);
     assert(event.mode == RACE_EVENT_UNKNOWN);
+    race_event_close(&event);
+
+    /* Backtrack tolerance is relative to the furthest forward position. */
+    memset(&state, 0, sizeof(state));
+    race_event_init(&event, NULL);
+    wait_until_armed(&event, &state, 30000000ULL, start_longitude,
+                     start_latitude);
+    update(&event, &state, 32000000ULL, 4.0, 0.2, 90.0,
+           start_longitude, start_latitude);
+    update(&event, &state, 32500000ULL, 20.0, 0.2, 90.0,
+           start_longitude + 0.000120, start_latitude);
+    update(&event, &state, 33000000ULL, 20.0, 0.2, 90.0,
+           start_longitude + 0.000110, start_latitude);
+    assert(event.accel_test.state == ACCEL_TEST_RUNNING);
+    update(&event, &state, 33500000ULL, 20.0, 0.2, 90.0,
+           start_longitude + 0.000095, start_latitude);
+    assert(event.accel_test.state == ACCEL_TEST_IDLE);
+    assert(!event.accel_test.result_valid);
     race_event_close(&event);
 
     /* A 75 m run is still measured while circuit timing owns the mode. */
