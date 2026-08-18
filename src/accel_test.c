@@ -18,6 +18,8 @@
 #define ACCEL_TEST_TIMING_OFFSET_M 1.0
 #define ACCEL_TEST_DISTANCE_M 75.0
 #define ACCEL_TEST_MIN_STRAIGHT_SAMPLES 3U
+#define ACCEL_TEST_DECELERATION_DROP_KMH 5.0
+#define ACCEL_TEST_DECELERATION_TIME_US 5000000ULL
 
 static double accel_test_heading_error(double first_deg, double second_deg)
 {
@@ -133,11 +135,30 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
         test->previous_along_m = 0.0;
         test->previous_timestamp_us = timestamp_us;
         test->previous_speed_kmh = sample->speed_kmh;
+        test->peak_speed_kmh = sample->speed_kmh;
         test->straight_samples = 0U;
         test->accel_distance_m = 0.0;
         test->accel_time_s = 0.0;
         test->max_acceleration = 0.0;
         LOG_INFO("[ACCEL] launch detected");
+    }
+
+    if (test->state == ACCEL_TEST_FINISHED) {
+        if (sample->speed_kmh > test->peak_speed_kmh) {
+            test->peak_speed_kmh = sample->speed_kmh;
+            test->deceleration_since_us = 0U;
+        } else if (test->peak_speed_kmh - sample->speed_kmh >=
+                   ACCEL_TEST_DECELERATION_DROP_KMH) {
+            if (test->deceleration_since_us == 0U) {
+                test->deceleration_since_us = timestamp_us;
+            } else if (timestamp_us >= test->deceleration_since_us &&
+                       timestamp_us - test->deceleration_since_us >=
+                           ACCEL_TEST_DECELERATION_TIME_US) {
+                test->deceleration_detected = true;
+            }
+        } else {
+            test->deceleration_since_us = 0U;
+        }
     }
 
     if (test->state != ACCEL_TEST_RUNNING) {
@@ -152,6 +173,9 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
     lateral_distance_m = fabs(accel_test_lateral_distance(test, point));
     heading_error_deg = accel_test_heading_error(sample->heading_deg,
                                                  test->launch_heading_deg);
+    if (sample->speed_kmh > test->peak_speed_kmh) {
+        test->peak_speed_kmh = sample->speed_kmh;
+    }
     straight = along_distance_m + ACCEL_TEST_MAX_BACKTRACK_M >=
                    test->previous_along_m &&
                heading_error_deg <= ACCEL_TEST_MAX_HEADING_ERROR_DEG &&
@@ -235,6 +259,12 @@ bool accel_test_is_candidate(const AccelTest *test)
     return test != NULL && test->state == ACCEL_TEST_FINISHED &&
            test->timing_started &&
            test->straight_samples >= ACCEL_TEST_MIN_STRAIGHT_SAMPLES;
+}
+
+bool accel_test_has_decelerated(const AccelTest *test)
+{
+    return test != NULL && test->state == ACCEL_TEST_FINISHED &&
+           test->deceleration_detected;
 }
 
 void accel_test_close(AccelTest *test)

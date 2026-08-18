@@ -68,6 +68,55 @@ int main(void)
     assert(event.mode == RACE_EVENT_ACCEL_MODE);
     assert(state.event_mode == RACE_EVENT_ACCEL_MODE);
 
+    /* Small speed variation must not release the mode. */
+    update(&event, &state, 3600000ULL, 36.0, 90.0,
+           start_longitude + 0.001000, start_latitude);
+    assert(event.mode == RACE_EVENT_ACCEL_MODE);
+
+    /* A 5 km/h drop must persist for 5 s before releasing the mode. */
+    update(&event, &state, 4000000ULL, 34.0, 90.0,
+           start_longitude + 0.001100, start_latitude);
+    assert(event.mode == RACE_EVENT_ACCEL_MODE);
+    update(&event, &state, 8999999ULL, 34.0, 90.0,
+           start_longitude + 0.001190, start_latitude);
+    assert(event.mode == RACE_EVENT_ACCEL_MODE);
+    update(&event, &state, 9000000ULL, 34.0, 90.0,
+           start_longitude + 0.001200, start_latitude);
+    assert(event.mode == RACE_EVENT_UNKNOWN);
+    assert(state.event_mode == RACE_EVENT_UNKNOWN);
+    assert(event.accel_test.state == ACCEL_TEST_IDLE);
+    assert(event.awaiting_stationary_after_accel);
+    assert(event.gps_track.point_count == 0U);
+    assert(state.accel_distance_m == 0.0);
+    assert(state.accel_time_s == 0.0);
+    assert(state.max_acceleration == 0.0);
+
+    /* A second stationary launch can claim ACCEL again. */
+    update(&event, &state, 10000000ULL, 2.5, 90.0,
+           start_longitude + 0.001200, start_latitude);
+    update(&event, &state, 10500000ULL, 2.6, 90.0,
+           start_longitude + 0.001200, start_latitude);
+    update(&event, &state, 11000000ULL, 2.4, 90.0,
+           start_longitude + 0.001200, start_latitude);
+    update(&event, &state, 11500000ULL, 2.7, 90.0,
+           start_longitude + 0.001200, start_latitude);
+    assert(event.accel_test.state == ACCEL_TEST_ARMED);
+    assert(!event.awaiting_stationary_after_accel);
+    assert(event.gps_track.point_count == 0U);
+    update(&event, &state, 12000000ULL, 3.5, 90.0,
+           start_longitude + 0.001200, start_latitude);
+    update(&event, &state, 12040000ULL, 5.0, 90.0,
+           start_longitude + 0.001206, start_latitude);
+    update(&event, &state, 12080000ULL, 7.0, 90.0,
+           start_longitude + 0.001214, start_latitude);
+    for (index = 1U; index <= 7U; ++index) {
+        update(&event, &state, 12080000ULL + index * 40000ULL, 40.0, 90.0,
+               start_longitude + 0.001200 + index * 0.000130,
+               start_latitude);
+    }
+    assert(event.mode == RACE_EVENT_ACCEL_MODE);
+    assert(state.event_mode == RACE_EVENT_ACCEL_MODE);
+
     race_event_close(&event);
 
     /* A circuit-style launch that turns before 75 m must not claim ACCEL. */

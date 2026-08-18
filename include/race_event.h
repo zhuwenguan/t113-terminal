@@ -19,6 +19,7 @@ typedef struct {
     size_t loop_current_index;
     uint32_t loop_match_count;
     bool movement_started;
+    bool awaiting_stationary_after_accel;
     uint64_t movement_start_timestamp_us;
     uint64_t last_report_timestamp_us;
 } RaceEvent;

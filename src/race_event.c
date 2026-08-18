@@ -19,6 +19,27 @@
 #define RACE_EVENT_LOOP_SEARCH_RADIUS 2U
 #define RACE_EVENT_MOVING_SPEED_KMH 1.0
 
+static void race_event_reset_track_detection(RaceEvent *event)
+{
+    gps_track_init(&event->gps_track);
+    event->loop_history_index = 0U;
+    event->loop_current_index = 0U;
+    event->loop_match_count = 0U;
+    event->movement_started = false;
+    event->movement_start_timestamp_us = 0U;
+}
+
+static void race_event_exit_accel(RaceEvent *event, VehicleState *state)
+{
+    event->mode = RACE_EVENT_UNKNOWN;
+    race_event_reset_track_detection(event);
+    accel_test_init(&event->accel_test);
+    event->awaiting_stationary_after_accel = true;
+    state->accel_distance_m = 0.0;
+    state->accel_time_s = 0.0;
+    state->max_acceleration = 0.0;
+}
+
 static double race_event_heading_error(double first_deg, double second_deg)
 {
     double error = fabs(first_deg - second_deg);
@@ -211,6 +232,7 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
     size_t loop_end;
     size_t virtual_start;
     bool loop_detected;
+    bool detection_paused;
 
     if (event == NULL || sample == NULL || state == NULL ||
         sample->fix_type < 3U || !isfinite(sample->latitude) ||
@@ -242,52 +264,68 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
     }
 
     if (event->mode == RACE_EVENT_UNKNOWN) {
+        detection_paused = event->awaiting_stationary_after_accel;
         accel_test_update(&event->accel_test, timestamp_us, sample, &point,
                           state);
-        loop_detected = race_event_update_loop_detector(
-            event, event->gps_track.point_count - 1U, &loop_begin, &loop_end);
-        if (accel_test_is_candidate(&event->accel_test)) {
-            event->mode = RACE_EVENT_ACCEL_MODE;
-            LOG_INFO("[RACE] event detected: ACCEL_MODE");
-        } else if (loop_detected &&
-            gps_track_find_virtual_start(&event->gps_track, loop_begin,
-                                         loop_end, &virtual_start) &&
-            lap_timer_configure_from_loop(
-                &event->lap_timer, &event->gps_track, loop_begin, loop_end,
-                virtual_start,
-                event->movement_started
-                    ? event->movement_start_timestamp_us
-                    : gps_track_at(&event->gps_track, loop_begin)
-                          ->timestamp_us,
-                &point, state)) {
-            const GpsTrackPoint *loop_start =
-                gps_track_at(&event->gps_track, loop_begin);
-            const GpsTrackPoint *loop_finish =
-                gps_track_at(&event->gps_track, loop_end);
-            double loop_time_s =
-                loop_start != NULL && loop_finish != NULL
-                    ? (double)(loop_finish->timestamp_us -
-                               loop_start->timestamp_us) /
-                          1000000.0
-                    : 0.0;
-            double loop_distance_m =
-                loop_start != NULL && loop_finish != NULL
-                    ? loop_finish->total_distance_m -
-                          loop_start->total_distance_m
-                    : 0.0;
+        if (detection_paused) {
+            if (event->accel_test.state == ACCEL_TEST_ARMED) {
+                event->awaiting_stationary_after_accel = false;
+                race_event_reset_track_detection(event);
+                LOG_INFO("[RACE] next acceleration session armed");
+            }
+        } else {
+            loop_detected = race_event_update_loop_detector(
+                event, event->gps_track.point_count - 1U, &loop_begin,
+                &loop_end);
+            if (accel_test_is_candidate(&event->accel_test)) {
+                event->mode = RACE_EVENT_ACCEL_MODE;
+                LOG_INFO("[RACE] event detected: ACCEL_MODE");
+            } else if (loop_detected &&
+                       gps_track_find_virtual_start(
+                           &event->gps_track, loop_begin, loop_end,
+                           &virtual_start) &&
+                       lap_timer_configure_from_loop(
+                           &event->lap_timer, &event->gps_track, loop_begin,
+                           loop_end, virtual_start,
+                           event->movement_started
+                               ? event->movement_start_timestamp_us
+                               : gps_track_at(&event->gps_track, loop_begin)
+                                     ->timestamp_us,
+                           &point, state)) {
+                const GpsTrackPoint *loop_start =
+                    gps_track_at(&event->gps_track, loop_begin);
+                const GpsTrackPoint *loop_finish =
+                    gps_track_at(&event->gps_track, loop_end);
+                double loop_time_s =
+                    loop_start != NULL && loop_finish != NULL
+                        ? (double)(loop_finish->timestamp_us -
+                                   loop_start->timestamp_us) /
+                              1000000.0
+                        : 0.0;
+                double loop_distance_m =
+                    loop_start != NULL && loop_finish != NULL
+                        ? loop_finish->total_distance_m -
+                              loop_start->total_distance_m
+                        : 0.0;
 
-            event->mode = RACE_EVENT_CIRCUIT_MODE;
-            LOG_DEBUG("[RACE] loop candidate history=%zu current=%zu "
-                      "distance=%.1fm",
-                      loop_begin, loop_end, loop_distance_m);
-            LOG_INFO("[RACE] event detected: CIRCUIT_MODE loop=%.2fs",
-                     loop_time_s);
+                event->mode = RACE_EVENT_CIRCUIT_MODE;
+                LOG_DEBUG("[RACE] loop candidate history=%zu current=%zu "
+                          "distance=%.1fm",
+                          loop_begin, loop_end, loop_distance_m);
+                LOG_INFO("[RACE] event detected: CIRCUIT_MODE loop=%.2fs",
+                         loop_time_s);
+            }
         }
     } else if (event->mode == RACE_EVENT_CIRCUIT_MODE) {
         lap_timer_update(&event->lap_timer, &point, state);
     } else if (event->mode == RACE_EVENT_ACCEL_MODE) {
         accel_test_update(&event->accel_test, timestamp_us, sample, &point,
                           state);
+        if (accel_test_has_decelerated(&event->accel_test)) {
+            LOG_INFO("[RACE] acceleration deceleration detected; "
+                     "returning to UNKNOWN");
+            race_event_exit_accel(event, state);
+        }
     }
 
     state->event_mode = event->mode;
