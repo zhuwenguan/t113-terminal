@@ -7,6 +7,19 @@ project(t113_terminal
 
 find_package(Threads REQUIRED)
 
+# The build host may provide a newer shared libm than the T113 image.
+# Link libm statically so the binary does not require a newer GLIBC symbol
+# version from /lib/libm.so.6 at runtime.
+set(T113_LIBM_STATIC "")
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)" OR
+    CMAKE_C_COMPILER MATCHES "(arm|aarch64)-linux")
+    execute_process(
+        COMMAND ${CMAKE_C_COMPILER} -print-file-name=libm.a
+        OUTPUT_VARIABLE T113_LIBM_STATIC
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+endif()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -38,5 +51,10 @@ target_compile_options(t113_terminal PRIVATE
 
 target_link_libraries(t113_terminal PRIVATE
     Threads::Threads
-    m
 )
+
+if (EXISTS "${T113_LIBM_STATIC}")
+    target_link_libraries(t113_terminal PRIVATE "${T113_LIBM_STATIC}")
+else()
+    target_link_libraries(t113_terminal PRIVATE m)
+endif()
