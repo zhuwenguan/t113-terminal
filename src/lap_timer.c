@@ -164,7 +164,8 @@ static uint64_t lap_timer_crossing_timestamp(
 static void lap_timer_set_state(const LapTimer *timer, VehicleState *state)
 {
     state->lap_number = timer->lap_number;
-    state->lap_valid = timer->configured && timer->have_projection;
+    state->lap_valid = timer->configured &&
+                       timer->lap_start_timestamp_us != 0U;
     state->lap_time_s = timer->current_time_s;
     state->current_lap_time_s = timer->current_time_s;
     state->last_lap_time_s = timer->last_lap_time_s;
@@ -189,6 +190,7 @@ void lap_timer_init(LapTimer *timer, const char *trace_directory)
 bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
                                    size_t loop_begin, size_t loop_end,
                                    size_t virtual_start,
+                                   uint64_t initial_lap_start_timestamp_us,
                                    const GpsTrackPoint *current_point,
                                    VehicleState *state)
 {
@@ -202,7 +204,8 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
 
     if (timer == NULL || track == NULL || current_point == NULL ||
         state == NULL || loop_begin >= loop_end || loop_end > track->point_count ||
-        virtual_start < loop_begin || virtual_start >= loop_end) {
+        virtual_start < loop_begin || virtual_start >= loop_end ||
+        initial_lap_start_timestamp_us == 0U) {
         return false;
     }
     loop_count = loop_end - loop_begin;
@@ -272,6 +275,7 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
     timer->current_time_s = 0.0;
     timer->delta_time_s = 0.0;
     timer->estimated_lap_time_s = timer->reference_lap_time_s;
+    timer->lap_start_timestamp_us = initial_lap_start_timestamp_us;
     timer->previous_projection_timestamp_us = 0U;
 
     /* Start the first real crossing test at the original closed-loop point,
@@ -288,6 +292,12 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
         }
     }
     lap_timer_open_trace(timer);
+    if (current_point->timestamp_us >= timer->lap_start_timestamp_us) {
+        timer->current_time_s =
+            (double)(current_point->timestamp_us -
+                     timer->lap_start_timestamp_us) /
+            1000000.0;
+    }
     lap_timer_set_state(timer, state);
     if (current_point->timestamp_us > loop_end_point->timestamp_us) {
         lap_timer_update(timer, current_point, state);
@@ -317,6 +327,14 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
         timer->previous_projection_timestamp_us = point->timestamp_us;
         timer->previous_projection_valid = true;
         if (timer->waiting_for_initial_crossing) {
+            if (point->timestamp_us >= timer->lap_start_timestamp_us) {
+                timer->current_time_s =
+                    (double)(point->timestamp_us -
+                             timer->lap_start_timestamp_us) /
+                    1000000.0;
+            }
+            timer->current_distance_s_m = 0.0;
+            timer->delta_time_s = 0.0;
             lap_timer_set_state(timer, state);
             return;
         }
@@ -334,14 +352,22 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
         if (!wrapped) {
             timer->previous_projection_index = projection_index;
             timer->previous_projection_timestamp_us = point->timestamp_us;
+            if (point->timestamp_us >= timer->lap_start_timestamp_us) {
+                timer->current_time_s =
+                    (double)(point->timestamp_us -
+                             timer->lap_start_timestamp_us) /
+                    1000000.0;
+            }
+            timer->current_distance_s_m = 0.0;
+            timer->delta_time_s = 0.0;
             lap_timer_set_state(timer, state);
             return;
         }
 
         timer->last_lap_time_s =
-            crossing_timestamp_us >= timer->reference[0].timestamp_us
+            crossing_timestamp_us >= timer->lap_start_timestamp_us
                 ? (double)(crossing_timestamp_us -
-                           timer->reference[0].timestamp_us) /
+                           timer->lap_start_timestamp_us) /
                       1000000.0
                 : 0.0;
         if (timer->last_lap_time_s < timer->best_lap_time_s) {

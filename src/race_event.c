@@ -16,6 +16,7 @@
 #define RACE_EVENT_LOOP_CONTINUITY_HEADING_DEG 60.0
 #define RACE_EVENT_LOOP_MIN_MATCHES 5U
 #define RACE_EVENT_LOOP_SEARCH_RADIUS 2U
+#define RACE_EVENT_MOVING_SPEED_KMH 1.0
 
 static double race_event_heading_error(double first_deg, double second_deg)
 {
@@ -230,6 +231,14 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
         return;
     }
 
+    if (!event->movement_started &&
+        sample->speed_kmh > RACE_EVENT_MOVING_SPEED_KMH) {
+        event->movement_started = true;
+        event->movement_start_timestamp_us = timestamp_us;
+        LOG_DEBUG("[RACE] movement started at timestamp_us=%llu",
+                  (unsigned long long)timestamp_us);
+    }
+
     if (event->mode == RACE_EVENT_UNKNOWN) {
         accel_test_update(&event->accel_test, timestamp_us, sample, &point,
                           state);
@@ -240,7 +249,12 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
                                          loop_end, &virtual_start) &&
             lap_timer_configure_from_loop(
                 &event->lap_timer, &event->gps_track, loop_begin, loop_end,
-                virtual_start, &point, state)) {
+                virtual_start,
+                event->movement_started
+                    ? event->movement_start_timestamp_us
+                    : gps_track_at(&event->gps_track, loop_begin)
+                          ->timestamp_us,
+                &point, state)) {
             const GpsTrackPoint *loop_start =
                 gps_track_at(&event->gps_track, loop_begin);
             const GpsTrackPoint *loop_finish =

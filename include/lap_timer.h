@@ -48,6 +48,7 @@ void lap_timer_init(LapTimer *timer, const char *trace_directory);
 bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
                                    size_t loop_begin, size_t loop_end,
                                    size_t virtual_start,
+                                   uint64_t initial_lap_start_timestamp_us,
                                    const GpsTrackPoint *current_point,
                                    VehicleState *state);
 
