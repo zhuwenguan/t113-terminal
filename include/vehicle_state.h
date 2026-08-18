@@ -7,8 +7,7 @@
 enum {
     VEHICLE_STATE_VALID_SPEED_KMH = 1U << 0,
     VEHICLE_STATE_VALID_HEADING_DEG = 1U << 1,
-    VEHICLE_STATE_VALID_HACC_M = 1U << 2,
-    VEHICLE_STATE_VALID_ALTITUDE_M = 1U << 3,
+    /* Bits 2 and 3 are reserved for removed Vehicle State fields. */
     VEHICLE_STATE_VALID_LONGITUDE_DEG = 1U << 4,
     VEHICLE_STATE_VALID_LATITUDE_DEG = 1U << 5,
     VEHICLE_STATE_VALID_ACC_X_MPS2 = 1U << 6,
@@ -52,8 +51,6 @@ enum {
     VEHICLE_STATE_LAPPRO_REQUIRED_MASK =
         VEHICLE_STATE_VALID_SPEED_KMH |
         VEHICLE_STATE_VALID_HEADING_DEG |
-        VEHICLE_STATE_VALID_HACC_M |
-        VEHICLE_STATE_VALID_ALTITUDE_M |
         VEHICLE_STATE_VALID_LONGITUDE_DEG |
         VEHICLE_STATE_VALID_LATITUDE_DEG |
         VEHICLE_STATE_VALID_ACC_X_MPS2 |
@@ -83,8 +80,6 @@ typedef struct {
     uint8_t gps_num_sv;
     double speed_kmh;
     double heading_deg;
-    double hacc_m;
-    double altitude;
     double longitude;
     double latitude;
     double acc_x;

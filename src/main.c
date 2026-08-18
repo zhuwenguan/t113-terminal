@@ -96,8 +96,6 @@ static void main_lappro_sample_sink(uint64_t timestamp_us,
     if (sample->fix_type >= 3U) {
         can_context->vehicle_state.speed_kmh = sample->speed_kmh;
         can_context->vehicle_state.heading_deg = sample->heading_deg;
-        can_context->vehicle_state.hacc_m = sample->hacc_m;
-        can_context->vehicle_state.altitude = sample->altitude;
         can_context->vehicle_state.longitude = sample->longitude;
         can_context->vehicle_state.latitude = sample->latitude;
         can_context->vehicle_state.acc_x = sample->acc_x;
