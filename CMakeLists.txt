@@ -92,4 +92,24 @@ if (BUILD_TESTING)
         m
     )
     add_test(NAME lap_timer_trace_async COMMAND test_lap_timer_trace)
+
+    add_executable(test_race_event_mode
+        tests/test_race_event_mode.c
+        src/race_event.c
+        src/accel_test.c
+        src/lap_timer.c
+        src/gps_track.c
+        src/console_log.c
+    )
+    target_include_directories(test_race_event_mode PRIVATE include)
+    target_compile_options(test_race_event_mode PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_race_event_mode PRIVATE
+        Threads::Threads
+        m
+    )
+    add_test(NAME race_event_accel_priority COMMAND test_race_event_mode)
 endif()

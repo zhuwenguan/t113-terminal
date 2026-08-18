@@ -7,13 +7,14 @@
 #include <math.h>
 #include <string.h>
 
-#define ACCEL_TEST_STATIONARY_SPEED_KMH 1.0
+#define ACCEL_TEST_STATIONARY_SPEED_KMH 3.0
 #define ACCEL_TEST_STATIONARY_TIME_US 1500000ULL
 #define ACCEL_TEST_PI 3.14159265358979323846
 #define ACCEL_TEST_LAUNCH_SPEED_KMH 3.0
 #define ACCEL_TEST_LAUNCH_ACCEL_MPS2 1.5
 #define ACCEL_TEST_MAX_HEADING_ERROR_DEG 25.0
 #define ACCEL_TEST_MAX_LATERAL_DEVIATION_M 10.0
+#define ACCEL_TEST_MAX_BACKTRACK_M 1.0
 #define ACCEL_TEST_TIMING_OFFSET_M 1.0
 #define ACCEL_TEST_DISTANCE_M 75.0
 #define ACCEL_TEST_MIN_STRAIGHT_SAMPLES 3U
@@ -151,14 +152,20 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
     lateral_distance_m = fabs(accel_test_lateral_distance(test, point));
     heading_error_deg = accel_test_heading_error(sample->heading_deg,
                                                  test->launch_heading_deg);
-    straight = along_distance_m >= test->previous_along_m &&
+    straight = along_distance_m + ACCEL_TEST_MAX_BACKTRACK_M >=
+                   test->previous_along_m &&
                heading_error_deg <= ACCEL_TEST_MAX_HEADING_ERROR_DEG &&
                lateral_distance_m <= ACCEL_TEST_MAX_LATERAL_DEVIATION_M;
     if (!straight) {
-        if (!test->timing_started && along_distance_m >
-                                        ACCEL_TEST_TIMING_OFFSET_M) {
-            LOG_WARN("[ACCEL] straight-line check failed; test aborted");
+        if (test->timing_started ||
+            along_distance_m > ACCEL_TEST_TIMING_OFFSET_M) {
+            LOG_WARN("[ACCEL] straight-line check failed; test aborted "
+                     "along=%.1fm previous=%.1fm lateral=%.1fm "
+                     "heading_error=%.1fdeg",
+                     along_distance_m, test->previous_along_m,
+                     lateral_distance_m, heading_error_deg);
             test->state = ACCEL_TEST_ABORTED;
+            test->timing_started = false;
             test->accel_distance_m = 0.0;
             test->accel_time_s = 0.0;
             test->max_acceleration = 0.0;
@@ -225,9 +232,7 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
 
 bool accel_test_is_candidate(const AccelTest *test)
 {
-    return test != NULL &&
-           (test->state == ACCEL_TEST_RUNNING ||
-            test->state == ACCEL_TEST_FINISHED) &&
+    return test != NULL && test->state == ACCEL_TEST_FINISHED &&
            test->timing_started &&
            test->straight_samples >= ACCEL_TEST_MIN_STRAIGHT_SAMPLES;
 }

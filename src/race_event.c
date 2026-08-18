@@ -246,7 +246,10 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
                           state);
         loop_detected = race_event_update_loop_detector(
             event, event->gps_track.point_count - 1U, &loop_begin, &loop_end);
-        if (loop_detected &&
+        if (accel_test_is_candidate(&event->accel_test)) {
+            event->mode = RACE_EVENT_ACCEL_MODE;
+            LOG_INFO("[RACE] event detected: ACCEL_MODE");
+        } else if (loop_detected &&
             gps_track_find_virtual_start(&event->gps_track, loop_begin,
                                          loop_end, &virtual_start) &&
             lap_timer_configure_from_loop(
@@ -279,9 +282,6 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
                       loop_begin, loop_end, loop_distance_m);
             LOG_INFO("[RACE] event detected: CIRCUIT_MODE loop=%.2fs",
                      loop_time_s);
-        } else if (accel_test_is_candidate(&event->accel_test)) {
-            event->mode = RACE_EVENT_ACCEL_MODE;
-            LOG_INFO("[RACE] event detected: ACCEL_MODE");
         }
     } else if (event->mode == RACE_EVENT_CIRCUIT_MODE) {
         lap_timer_update(&event->lap_timer, &point, state);
