@@ -24,10 +24,10 @@
 - logger 每最多 32 条记录或首条记录起 1 秒批量写入一次 CSV，不对每条记录执行 `fsync`。
 - 每次运行原子创建 `/mnt/usb/sda/log/session_YYYYMMDD_HHMMSS[_NNN]/` 会话目录，并在其中生成 `can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv`、`vehicle_state_YYYYMMDD_HHMMSS.csv` 和 `lap_XXX[_NNN].csv`；所有文件以不覆盖方式创建，文件内记录时间戳仍使用 `CLOCK_MONOTONIC`。
 - Vehicle State 框架包含车速、姿态/GPS、加速度、圈速/赛道字段，以及 `motor_rpm`、`torque_nm`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent` 和 `lv_voltage_v`；当前 CAN Decoder 已接入 `0x121`、`0x201`、`0x123`，`hv_power_w` 由高压电压和电流计算，圈速字段及其他未提供字段保持预留状态。
-- `race_event` 在 `UNKNOWN` 状态同时维护闭环和直线加速检测器，自动锁定 `CIRCUIT_MODE` 或 `ACCEL_MODE`，不依赖人工模式参数；直线加速候选的优先级高于闭环候选，静止准备阈值为 3km/h；初始闭环匹配使用 8m 紧阈值排除近距离赛道交叉点，多个候选同时匹配时按历史时间更早者作为维修区汇入赛道点。
+- `race_event` 始终维护闭环检测和圈速状态，`CIRCUIT_MODE` 不会被直线加速测试抢占；初始闭环匹配使用 8m 紧阈值排除近距离赛道交叉点，多个候选同时匹配时按历史时间更早者作为维修区汇入赛道点。
 - `gps_track` 使用固定容量 4096 点缓存将有效 GPS 转换为局部 XY，并保留时间、速度、航向和累计距离；缓存满后仅保留最近一半样本，闭环连续匹配不允许回退到初始历史锚点之前。
 - `lap_timer` 从重复 GPS 轨迹学习临时赛道，只在闭环点沿赛道前进方向的前 15% 范围内选择最直区域作为虚拟起终点；当前圈从车辆首次有效运动开始计时，首次识别后等待真实虚拟起点通过，再输出当前圈、最佳圈、Delta 和圈轨迹。圈轨迹通过固定容量队列和独立 writer 线程异步写入，赛事状态锁内不执行文件 I/O。
-- `accel_test` 检测静止起步和持续直线运动，从 Launch Point 偏移 1m 后开始 75m 计时，并输出最大纵向加速度；完成后速度相对本次峰值下降至少 5km/h 并持续 5 秒时退出 `ACCEL_MODE`。退出后保持 `UNKNOWN` 并暂停闭环识别，直到车辆重新满足 3km/h 以下静止 1.5 秒；重新 ARM 时清除返程轨迹，允许下一次静止起步重新触发。
+- `accel_test` 是与赛道模式并行的独立 run 状态机：车速低于 3km/h 持续 1.5 秒后 ARM，车速达到 3km/h 或纵向加速度达到 1.5m/s² 时 Launch，从 Launch Point 偏移 1m 后开始计时，分别保存 50m 和 75m 成绩及最大纵向加速度，完成或转向中止后回到 `ACCEL_TEST_IDLE` 等待下一次静止起步；Vehicle State CSV 使用 `accel_50m_time_s` 和既有 `accel_time_s` 记录两项成绩。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
 - LapPro worker 每约 1 秒输出一条 INFO 状态摘要；GPS 原始逐条数据仅在 DEBUG 模式输出。

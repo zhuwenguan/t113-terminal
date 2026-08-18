@@ -28,7 +28,6 @@ enum {
 typedef enum {
     RACE_EVENT_UNKNOWN = 0,
     RACE_EVENT_CIRCUIT_MODE,
-    RACE_EVENT_ACCEL_MODE,
     RACE_EVENT_MODE_COUNT
 } RaceEventMode;
 
@@ -37,8 +36,6 @@ static inline const char *vehicle_state_event_mode_name(RaceEventMode mode)
     switch (mode) {
     case RACE_EVENT_CIRCUIT_MODE:
         return "CIRCUIT_MODE";
-    case RACE_EVENT_ACCEL_MODE:
-        return "ACCEL_MODE";
     case RACE_EVENT_UNKNOWN:
     default:
         return "UNKNOWN";
@@ -101,6 +98,7 @@ typedef struct {
     double hv_soc_percent;
     double lv_voltage_v;
     double accel_distance_m;
+    double accel_50m_time_s;
     double accel_time_s;
     double max_acceleration;
     uint8_t reserved[32];

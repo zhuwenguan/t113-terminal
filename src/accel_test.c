@@ -16,10 +16,8 @@
 #define ACCEL_TEST_MAX_LATERAL_DEVIATION_M 10.0
 #define ACCEL_TEST_MAX_BACKTRACK_M 1.0
 #define ACCEL_TEST_TIMING_OFFSET_M 1.0
+#define ACCEL_TEST_INTERMEDIATE_DISTANCE_M 50.0
 #define ACCEL_TEST_DISTANCE_M 75.0
-#define ACCEL_TEST_MIN_STRAIGHT_SAMPLES 3U
-#define ACCEL_TEST_DECELERATION_DROP_KMH 5.0
-#define ACCEL_TEST_DECELERATION_TIME_US 5000000ULL
 
 static double accel_test_heading_error(double first_deg, double second_deg)
 {
@@ -76,6 +74,7 @@ static uint64_t accel_test_interpolate_timestamp(
 static void accel_test_set_state(const AccelTest *test, VehicleState *state)
 {
     state->accel_distance_m = test->accel_distance_m;
+    state->accel_50m_time_s = test->accel_50m_time_s;
     state->accel_time_s = test->accel_time_s;
     state->max_acceleration = test->max_acceleration;
 }
@@ -101,17 +100,14 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
 
     if (test == NULL || sample == NULL || point == NULL || state == NULL ||
         sample->fix_type < 3U || !isfinite(sample->speed_kmh) ||
-        !isfinite(sample->heading_deg)) {
+        !isfinite(sample->heading_deg) || !isfinite(sample->acc_x)) {
         return;
     }
 
-    stationary = sample->speed_kmh <= ACCEL_TEST_STATIONARY_SPEED_KMH;
+    stationary = sample->speed_kmh < ACCEL_TEST_STATIONARY_SPEED_KMH;
     if (stationary) {
         if (test->stationary_since_us == 0U) {
             test->stationary_since_us = timestamp_us;
-        }
-        if (test->state == ACCEL_TEST_ABORTED) {
-            accel_test_init(test);
         }
         if (test->state == ACCEL_TEST_IDLE &&
             timestamp_us >= test->stationary_since_us &&
@@ -128,6 +124,7 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
         (sample->speed_kmh >= ACCEL_TEST_LAUNCH_SPEED_KMH ||
          sample->acc_x >= ACCEL_TEST_LAUNCH_ACCEL_MPS2)) {
         test->state = ACCEL_TEST_RUNNING;
+        test->stationary_since_us = 0U;
         test->launch_timestamp_us = timestamp_us;
         test->launch_x_m = point->x_m;
         test->launch_y_m = point->y_m;
@@ -135,30 +132,13 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
         test->previous_along_m = 0.0;
         test->previous_timestamp_us = timestamp_us;
         test->previous_speed_kmh = sample->speed_kmh;
-        test->peak_speed_kmh = sample->speed_kmh;
         test->straight_samples = 0U;
+        test->intermediate_finished = false;
         test->accel_distance_m = 0.0;
+        test->accel_50m_time_s = 0.0;
         test->accel_time_s = 0.0;
         test->max_acceleration = 0.0;
         LOG_INFO("[ACCEL] launch detected");
-    }
-
-    if (test->state == ACCEL_TEST_FINISHED) {
-        if (sample->speed_kmh > test->peak_speed_kmh) {
-            test->peak_speed_kmh = sample->speed_kmh;
-            test->deceleration_since_us = 0U;
-        } else if (test->peak_speed_kmh - sample->speed_kmh >=
-                   ACCEL_TEST_DECELERATION_DROP_KMH) {
-            if (test->deceleration_since_us == 0U) {
-                test->deceleration_since_us = timestamp_us;
-            } else if (timestamp_us >= test->deceleration_since_us &&
-                       timestamp_us - test->deceleration_since_us >=
-                           ACCEL_TEST_DECELERATION_TIME_US) {
-                test->deceleration_detected = true;
-            }
-        } else {
-            test->deceleration_since_us = 0U;
-        }
     }
 
     if (test->state != ACCEL_TEST_RUNNING) {
@@ -173,9 +153,6 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
     lateral_distance_m = fabs(accel_test_lateral_distance(test, point));
     heading_error_deg = accel_test_heading_error(sample->heading_deg,
                                                  test->launch_heading_deg);
-    if (sample->speed_kmh > test->peak_speed_kmh) {
-        test->peak_speed_kmh = sample->speed_kmh;
-    }
     straight = along_distance_m + ACCEL_TEST_MAX_BACKTRACK_M >=
                    test->previous_along_m &&
                heading_error_deg <= ACCEL_TEST_MAX_HEADING_ERROR_DEG &&
@@ -188,9 +165,12 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
                      "heading_error=%.1fdeg",
                      along_distance_m, test->previous_along_m,
                      lateral_distance_m, heading_error_deg);
-            test->state = ACCEL_TEST_ABORTED;
+            test->state = ACCEL_TEST_IDLE;
+            test->stationary_since_us = 0U;
             test->timing_started = false;
+            test->intermediate_finished = false;
             test->accel_distance_m = 0.0;
+            test->accel_50m_time_s = 0.0;
             test->accel_time_s = 0.0;
             test->max_acceleration = 0.0;
             accel_test_set_state(test, state);
@@ -229,6 +209,23 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
                          test->max_acceleration);
                 test->last_report_timestamp_us = timestamp_us;
             }
+            if (!test->intermediate_finished &&
+                test->accel_distance_m >=
+                    ACCEL_TEST_INTERMEDIATE_DISTANCE_M) {
+                test->intermediate_timestamp_us =
+                    accel_test_interpolate_timestamp(
+                        test->previous_timestamp_us, test->previous_along_m,
+                        timestamp_us, along_distance_m,
+                        ACCEL_TEST_TIMING_OFFSET_M +
+                            ACCEL_TEST_INTERMEDIATE_DISTANCE_M);
+                test->accel_50m_time_s =
+                    (double)(test->intermediate_timestamp_us -
+                             test->timing_start_timestamp_us) /
+                    1000000.0;
+                test->intermediate_finished = true;
+                LOG_INFO("[ACCEL] 50m split time=%.2fs",
+                         test->accel_50m_time_s);
+            }
             if (test->accel_distance_m >= ACCEL_TEST_DISTANCE_M) {
                 test->finish_timestamp_us =
                     accel_test_interpolate_timestamp(
@@ -240,9 +237,13 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
                              test->timing_start_timestamp_us) /
                     1000000.0;
                 test->accel_distance_m = ACCEL_TEST_DISTANCE_M;
-                test->state = ACCEL_TEST_FINISHED;
-                LOG_INFO("[ACCEL] 75m finished time=%.2fs max_acc=%.2fm/s2",
-                         test->accel_time_s, test->max_acceleration);
+                test->state = ACCEL_TEST_IDLE;
+                test->timing_started = false;
+                test->stationary_since_us = 0U;
+                LOG_INFO("[ACCEL] run finished 50m=%.2fs 75m=%.2fs "
+                         "max_acc=%.2fm/s2",
+                         test->accel_50m_time_s, test->accel_time_s,
+                         test->max_acceleration);
             }
         }
     }
@@ -252,19 +253,6 @@ void accel_test_update(AccelTest *test, uint64_t timestamp_us,
     test->previous_along_m = along_distance_m;
     test->previous_speed_kmh = sample->speed_kmh;
     accel_test_set_state(test, state);
-}
-
-bool accel_test_is_candidate(const AccelTest *test)
-{
-    return test != NULL && test->state == ACCEL_TEST_FINISHED &&
-           test->timing_started &&
-           test->straight_samples >= ACCEL_TEST_MIN_STRAIGHT_SAMPLES;
-}
-
-bool accel_test_has_decelerated(const AccelTest *test)
-{
-    return test != NULL && test->state == ACCEL_TEST_FINISHED &&
-           test->deceleration_detected;
 }
 
 void accel_test_close(AccelTest *test)

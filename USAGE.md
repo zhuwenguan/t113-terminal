@@ -125,10 +125,14 @@ tail -f /mnt/usb/sda/log/session_*/vehicle_state_*.csv
 
 ## 赛事模式
 
-赛事模式不需要手动切换：
+赛事模式不需要手动切换。`event_mode` 只表示赛道检测状态：
 
 - `CIRCUIT_MODE`：检测到重复闭环 GPS 轨迹后自动进入，输出圈时间、最佳圈、Delta 和预计圈速。
-- `ACCEL_MODE`：检测到静止起步和持续直线运动后自动进入，Launch Point 后 1m 开始 75m 计时。
+
+直线加速是与赛道检测、圈速计量并行运行的独立 Run，不改变
+`event_mode`。车辆静止并 Launch 后，从 Launch Point 后 1m 开始计时；
+Vehicle State CSV 的 `accel_50m_time_s` 保存 50m 成绩，`accel_time_s`
+保存 75m 成绩。75m 完成后 Run 自动回到 IDLE，等待下一次静止起步。
 
 Vehicle State 只有 CAN 必要数据在最近 1 秒内齐全且 GPS `fix_type >= 3`
 时才写入 `vehicle_state.csv`；高频 CAN 流量会优先让出日志队列容量给
