@@ -14,7 +14,7 @@
 
 #define LOGGER_MOUNT_POINT "/mnt/usb/sda"
 #define LOGGER_LOG_DIRECTORY "/mnt/usb/sda/log"
-#define LOGGER_QUEUE_CAPACITY 256U
+#define LOGGER_QUEUE_CAPACITY 1024U
 #define LOGGER_BATCH_SIZE 32U
 #define LOGGER_FLUSH_INTERVAL_MS 1000U
 /* Keep room for the lower-rate records while raw CAN traffic is busy. */
