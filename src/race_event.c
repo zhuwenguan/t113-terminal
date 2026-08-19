@@ -191,6 +191,22 @@ static bool race_event_update_loop_detector(RaceEvent *event,
     return *loop_begin < *loop_end && *loop_end < event->gps_track.point_count;
 }
 
+static void race_event_set_unknown_lap_time(const RaceEvent *event,
+                                            uint64_t timestamp_us,
+                                            VehicleState *state)
+{
+    state->lap_valid = false;
+    state->delta_time_s = 0.0;
+    if (event->movement_started &&
+        timestamp_us >= event->movement_start_timestamp_us) {
+        state->lap_time_s =
+            (double)(timestamp_us - event->movement_start_timestamp_us) /
+            1000000.0;
+    } else {
+        state->lap_time_s = 0.0;
+    }
+}
+
 void race_event_init(RaceEvent *event, const char *trace_directory)
 {
     if (event == NULL) {
@@ -280,6 +296,9 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
                       loop_begin, loop_end, loop_distance_m);
             LOG_INFO("[RACE] event detected: CIRCUIT_MODE loop=%.2fs",
                      loop_time_s);
+        }
+        if (event->mode == RACE_EVENT_UNKNOWN) {
+            race_event_set_unknown_lap_time(event, timestamp_us, state);
         }
     } else if (event->mode == RACE_EVENT_CIRCUIT_MODE) {
         lap_timer_update(&event->lap_timer, &point, state);

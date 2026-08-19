@@ -642,17 +642,20 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
     timer->lap_start_timestamp_us = initial_lap_start_timestamp_us;
     timer->previous_projection_timestamp_us = 0U;
 
-    /* Start the first real crossing test at the original closed-loop point,
-     * not at the delayed detector-confirmation point. */
+    /* Start the first real crossing test at the delayed detector point. The
+     * detector may recognize the loop several samples after the car already
+     * passed the virtual start; replaying that old crossing would make the
+     * running time jump backwards. */
     {
         size_t initial_projection =
-            lap_timer_find_projection(timer, loop_end_point);
+            lap_timer_find_projection(timer, current_point);
 
         if (initial_projection < timer->reference_count) {
             timer->previous_projection_index = initial_projection;
             timer->previous_projection_timestamp_us =
-                loop_end_point->timestamp_us;
+                current_point->timestamp_us;
             timer->previous_projection_valid = true;
+            timer->have_projection = true;
         }
     }
     lap_timer_begin_current_lap(timer, loop_end_point->timestamp_us, NULL);
@@ -663,10 +666,12 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
                      timer->lap_start_timestamp_us) /
             1000000.0;
     }
-    lap_timer_set_state(timer, state);
-    if (current_point->timestamp_us > loop_end_point->timestamp_us) {
-        lap_timer_update(timer, current_point, state);
+    if (timer->previous_projection_valid) {
+        timer->current_distance_s_m =
+            timer->reference[timer->previous_projection_index].distance_s_m;
     }
+    timer->delta_time_s = 0.0;
+    lap_timer_set_state(timer, state);
     return timer->configured;
 }
 

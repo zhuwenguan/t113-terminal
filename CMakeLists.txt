@@ -133,6 +133,26 @@ if (BUILD_TESTING)
     )
     add_test(NAME race_event_parallel_accel COMMAND test_race_event_accel)
 
+    add_executable(test_race_event_laptime
+        tests/test_race_event_laptime.c
+        src/race_event.c
+        src/accel_test.c
+        src/lap_timer.c
+        src/gps_track.c
+        src/console_log.c
+    )
+    target_include_directories(test_race_event_laptime PRIVATE include)
+    target_compile_options(test_race_event_laptime PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_race_event_laptime PRIVATE
+        Threads::Threads
+        m
+    )
+    add_test(NAME race_event_laptime COMMAND test_race_event_laptime)
+
     add_executable(test_accel_axis
         tests/test_accel_axis.c
         src/accel_test.c
