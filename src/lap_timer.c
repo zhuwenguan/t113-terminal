@@ -387,6 +387,140 @@ static uint64_t lap_timer_crossing_timestamp(
                       fraction);
 }
 
+static bool lap_timer_append_current_lap_point(
+    LapTimer *timer, uint64_t timestamp_us, double x_m, double y_m,
+    double speed_kmh, double heading_deg)
+{
+    LapReferencePoint *destination;
+
+    if (timer->current_lap_count >= LAP_TIMER_REFERENCE_CAPACITY) {
+        timer->current_lap_overflow = true;
+        return false;
+    }
+    destination = &timer->current_lap[timer->current_lap_count];
+    memset(destination, 0, sizeof(*destination));
+    destination->timestamp_us = timestamp_us;
+    destination->x_m = x_m;
+    destination->y_m = y_m;
+    destination->speed_kmh = speed_kmh;
+    destination->heading_deg = heading_deg;
+    if (timer->current_lap_count > 0U) {
+        const LapReferencePoint *previous =
+            &timer->current_lap[timer->current_lap_count - 1U];
+
+        destination->distance_s_m =
+            previous->distance_s_m +
+            hypot(destination->x_m - previous->x_m,
+                 destination->y_m - previous->y_m);
+    }
+    destination->time_s = timestamp_us >= timer->current_lap_start_timestamp_us
+                              ? (double)(timestamp_us -
+                                         timer->current_lap_start_timestamp_us) /
+                                    1000000.0
+                              : 0.0;
+    timer->current_lap_count++;
+    return true;
+}
+
+static void lap_timer_begin_current_lap(LapTimer *timer,
+                                        uint64_t start_timestamp_us,
+                                        const GpsTrackPoint *current_point)
+{
+    timer->current_lap_count = 0U;
+    timer->current_lap_start_timestamp_us = start_timestamp_us;
+    timer->current_lap_overflow = false;
+    if (timer->reference_count > 0U) {
+        const LapReferencePoint *start = &timer->reference[0];
+
+        lap_timer_append_current_lap_point(
+            timer, start_timestamp_us, start->x_m, start->y_m,
+            start->speed_kmh, start->heading_deg);
+    }
+    if (current_point != NULL &&
+        current_point->timestamp_us >= start_timestamp_us) {
+        lap_timer_append_current_lap_point(
+            timer, current_point->timestamp_us, current_point->x_m,
+            current_point->y_m, current_point->speed_kmh,
+            current_point->heading_deg);
+    }
+}
+
+static bool lap_timer_rebuild_reference_from_current_lap(
+    LapTimer *timer, double lap_time_s)
+{
+    size_t index;
+    double closure_distance_m;
+    double loop_distance_m;
+
+    if (timer->current_lap_overflow || timer->current_lap_count < 2U ||
+        lap_time_s <= 0.0 || !isfinite(lap_time_s)) {
+        return false;
+    }
+    for (index = 0U; index < timer->current_lap_count; ++index) {
+        LapReferencePoint *point = &timer->current_lap[index];
+
+        if (index == 0U) {
+            point->distance_s_m = 0.0;
+        } else {
+            const LapReferencePoint *previous =
+                &timer->current_lap[index - 1U];
+
+            point->distance_s_m =
+                previous->distance_s_m +
+                hypot(point->x_m - previous->x_m,
+                      point->y_m - previous->y_m);
+        }
+        point->time_s =
+            point->timestamp_us >= timer->current_lap_start_timestamp_us
+                ? (double)(point->timestamp_us -
+                           timer->current_lap_start_timestamp_us) /
+                      1000000.0
+                : 0.0;
+    }
+    closure_distance_m =
+        hypot(timer->current_lap[timer->current_lap_count - 1U].x_m -
+                  timer->current_lap[0].x_m,
+              timer->current_lap[timer->current_lap_count - 1U].y_m -
+                  timer->current_lap[0].y_m);
+    loop_distance_m =
+        timer->current_lap[timer->current_lap_count - 1U].distance_s_m +
+        closure_distance_m;
+    if (loop_distance_m <= 0.1 || !isfinite(loop_distance_m)) {
+        return false;
+    }
+    timer->reference_count = timer->current_lap_count;
+    memcpy(timer->reference, timer->current_lap,
+           timer->reference_count * sizeof(timer->reference[0]));
+    timer->reference_lap_time_s = lap_time_s;
+    timer->reference_loop_distance_s_m = loop_distance_m;
+    return true;
+}
+
+static bool lap_timer_finish_current_lap(LapTimer *timer,
+                                         uint64_t crossing_timestamp_us,
+                                         double lap_time_s)
+{
+    const LapReferencePoint *start;
+
+    if (timer->reference_count == 0U) {
+        return false;
+    }
+    start = &timer->reference[0];
+    lap_timer_append_current_lap_point(
+        timer, crossing_timestamp_us, start->x_m, start->y_m,
+        start->speed_kmh, start->heading_deg);
+    if (lap_time_s < timer->best_lap_time_s) {
+        if (lap_timer_rebuild_reference_from_current_lap(timer,
+                                                         lap_time_s)) {
+            timer->best_lap_time_s = lap_time_s;
+            return true;
+        }
+        LOG_WARN("[LAP] best lap %.2fs has no complete reference trace",
+                 lap_time_s);
+    }
+    return false;
+}
+
 static void lap_timer_set_state(const LapTimer *timer, VehicleState *state)
 {
     state->lap_number = timer->lap_number;
@@ -504,6 +638,9 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
     timer->current_distance_s_m = 0.0;
     timer->current_time_s = 0.0;
     timer->delta_time_s = 0.0;
+    timer->current_lap_count = 0U;
+    timer->current_lap_start_timestamp_us = 0U;
+    timer->current_lap_overflow = false;
     timer->estimated_lap_time_s = timer->reference_lap_time_s;
     timer->lap_start_timestamp_us = initial_lap_start_timestamp_us;
     timer->previous_projection_timestamp_us = 0U;
@@ -521,6 +658,7 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
             timer->previous_projection_valid = true;
         }
     }
+    lap_timer_begin_current_lap(timer, loop_end_point->timestamp_us, NULL);
     lap_timer_trace_queue_open(timer);
     if (current_point->timestamp_us >= timer->lap_start_timestamp_us) {
         timer->current_time_s =
@@ -541,6 +679,8 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
     size_t projection_index;
     const LapReferencePoint *reference;
     uint64_t crossing_timestamp_us;
+    bool started_new_lap = false;
+    bool reference_updated = false;
     bool wrapped = false;
 
     if (timer == NULL || point == NULL || state == NULL ||
@@ -565,6 +705,9 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
             }
             timer->current_distance_s_m = 0.0;
             timer->delta_time_s = 0.0;
+            lap_timer_append_current_lap_point(
+                timer, point->timestamp_us, point->x_m, point->y_m,
+                point->speed_kmh, point->heading_deg);
             lap_timer_set_state(timer, state);
             return;
         }
@@ -590,6 +733,9 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
             }
             timer->current_distance_s_m = 0.0;
             timer->delta_time_s = 0.0;
+            lap_timer_append_current_lap_point(
+                timer, point->timestamp_us, point->x_m, point->y_m,
+                point->speed_kmh, point->heading_deg);
             lap_timer_set_state(timer, state);
             return;
         }
@@ -600,15 +746,21 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
                            timer->lap_start_timestamp_us) /
                       1000000.0
                 : 0.0;
-        if (timer->last_lap_time_s < timer->best_lap_time_s) {
-            timer->best_lap_time_s = timer->last_lap_time_s;
-        }
+        reference_updated = lap_timer_finish_current_lap(
+            timer, crossing_timestamp_us, timer->last_lap_time_s);
         LOG_INFO("[LAP] lap=1 time=%.2fs best=%.2fs",
                  timer->last_lap_time_s, timer->best_lap_time_s);
         timer->waiting_for_initial_crossing = false;
         timer->have_projection = true;
         timer->lap_number = 2U;
         timer->lap_start_timestamp_us = crossing_timestamp_us;
+        if (reference_updated) {
+            projection_index = lap_timer_find_projection(timer, point);
+            if (projection_index >= timer->reference_count) {
+                projection_index = 0U;
+            }
+            reference = &timer->reference[projection_index];
+        }
         timer->current_time_s =
             point->timestamp_us >= crossing_timestamp_us
                 ? (double)(point->timestamp_us - crossing_timestamp_us) /
@@ -617,6 +769,7 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
         timer->current_distance_s_m = reference->distance_s_m;
         timer->delta_time_s = timer->current_time_s - reference->time_s;
         timer->estimated_lap_time_s = timer->reference_lap_time_s;
+        lap_timer_begin_current_lap(timer, crossing_timestamp_us, point);
         timer->previous_projection_index = projection_index;
         timer->previous_projection_timestamp_us = point->timestamp_us;
         lap_timer_trace_queue_open(timer);
@@ -638,14 +791,22 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
         timer->last_lap_time_s =
             (double)(crossing_timestamp_us - timer->lap_start_timestamp_us) /
             1000000.0;
-        if (timer->last_lap_time_s < timer->best_lap_time_s) {
-            timer->best_lap_time_s = timer->last_lap_time_s;
-        }
+        reference_updated = lap_timer_finish_current_lap(
+            timer, crossing_timestamp_us, timer->last_lap_time_s);
         LOG_INFO("[LAP] lap=%u time=%.2fs best=%.2fs delta=%+.2fs",
                  timer->lap_number, timer->last_lap_time_s,
                  timer->best_lap_time_s, timer->delta_time_s);
         timer->lap_number++;
         timer->lap_start_timestamp_us = crossing_timestamp_us;
+        if (reference_updated) {
+            projection_index = lap_timer_find_projection(timer, point);
+            if (projection_index >= timer->reference_count) {
+                projection_index = 0U;
+            }
+            reference = &timer->reference[projection_index];
+        }
+        lap_timer_begin_current_lap(timer, crossing_timestamp_us, point);
+        started_new_lap = true;
         lap_timer_trace_queue_open(timer);
     }
     timer->have_projection = true;
@@ -664,6 +825,11 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
             timer->current_distance_s_m;
     } else {
         timer->estimated_lap_time_s = timer->reference_lap_time_s;
+    }
+    if (!started_new_lap) {
+        lap_timer_append_current_lap_point(
+            timer, point->timestamp_us, point->x_m, point->y_m,
+            point->speed_kmh, point->heading_deg);
     }
     lap_timer_trace_queue_sample(timer, point);
     if (timer->last_report_timestamp_us == 0U ||

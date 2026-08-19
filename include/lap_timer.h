@@ -12,6 +12,7 @@
 #include "vehicle_state.h"
 
 #define LAP_TIMER_TRACE_QUEUE_CAPACITY 256U
+#define LAP_TIMER_REFERENCE_CAPACITY (GPS_TRACK_MAX_POINTS + 2U)
 
 typedef struct {
     uint64_t timestamp_us;
@@ -56,8 +57,12 @@ typedef struct {
     bool trace_queue_initialized;
     bool trace_thread_started;
     bool trace_stop_requested;
-    LapReferencePoint reference[GPS_TRACK_MAX_POINTS];
+    LapReferencePoint reference[LAP_TIMER_REFERENCE_CAPACITY];
     size_t reference_count;
+    LapReferencePoint current_lap[LAP_TIMER_REFERENCE_CAPACITY];
+    size_t current_lap_count;
+    uint64_t current_lap_start_timestamp_us;
+    bool current_lap_overflow;
     size_t previous_projection_index;
     double reference_lap_time_s;
     double reference_loop_distance_s_m;
