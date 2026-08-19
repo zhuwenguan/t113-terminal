@@ -3,6 +3,7 @@
 
 #include "replay.h"
 #include "console_log.h"
+#include "vehicle_state_snapshot.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -984,6 +985,23 @@ static bool replay_wait_until(const struct timespec *deadline)
     return false;
 }
 
+static void replay_emit_vehicle_state_snapshots(
+    const ReplayConfig *config, VehicleStateSnapshotSchedule *schedule,
+    uint64_t timestamp_us, bool include_current)
+{
+    uint64_t snapshot_timestamp_us;
+
+    if (config == NULL || schedule == NULL ||
+        config->vehicle_state_snapshot_sink == NULL) {
+        return;
+    }
+    while (vehicle_state_snapshot_schedule_next_due(
+        schedule, timestamp_us, include_current, &snapshot_timestamp_us)) {
+        config->vehicle_state_snapshot_sink(snapshot_timestamp_us,
+                                            config->sink_context);
+    }
+}
+
 int replay_run(const ReplayConfig *config)
 {
     ReplayDiscovery discovery;
@@ -994,9 +1012,12 @@ int replay_run(const ReplayConfig *config)
     bool lappro_ready = false;
     bool input_open = false;
     bool have_first_timestamp = false;
+    bool have_last_event_timestamp = false;
     uint64_t first_timestamp_us = 0U;
+    uint64_t last_event_timestamp_us = 0U;
     uint64_t wall_start_us = 0U;
     uint64_t last_report_us = 0U;
+    VehicleStateSnapshotSchedule snapshot_schedule;
     struct timespec wall_start;
     struct sigaction signal_action;
     unsigned int stream_index;
@@ -1013,6 +1034,7 @@ int replay_run(const ReplayConfig *config)
     memset(&discovery, 0, sizeof(discovery));
     memset(&selection, 0, sizeof(selection));
     memset(streams, 0, sizeof(streams));
+    memset(&snapshot_schedule, 0, sizeof(snapshot_schedule));
     LOG_INFO("[Replay] mode enabled");
 
     if (replay_discover_inputs(config->directory, &discovery) < 0 ||
@@ -1112,6 +1134,8 @@ int replay_run(const ReplayConfig *config)
                 break;
             }
             first_timestamp_us = event.timestamp_us;
+            vehicle_state_snapshot_schedule_init(&snapshot_schedule,
+                                                 first_timestamp_us);
             wall_start = now;
             wall_start_us = replay_monotonic_us();
             have_first_timestamp = true;
@@ -1128,6 +1152,15 @@ int replay_run(const ReplayConfig *config)
             }
         }
 
+        /* Advance snapshots on replay time, not by a second wall-clock
+         * thread. Wait until all events at the previous timestamp have been
+         * applied before emitting a tick at that timestamp. */
+        if (have_last_event_timestamp &&
+            event.timestamp_us > last_event_timestamp_us) {
+            replay_emit_vehicle_state_snapshots(config, &snapshot_schedule,
+                                                event.timestamp_us, false);
+        }
+
         if (event.source == REPLAY_LAPPRO) {
             if (lappro_ready) {
                 lappro_update_state(&lappro, event.timestamp_us,
@@ -1139,6 +1172,9 @@ int replay_run(const ReplayConfig *config)
         } else {
             config->can_sink(&event.payload.can, config->sink_context);
         }
+
+        last_event_timestamp_us = event.timestamp_us;
+        have_last_event_timestamp = true;
 
         {
             uint64_t now_us = replay_monotonic_us();
@@ -1167,6 +1203,11 @@ int replay_run(const ReplayConfig *config)
         if (!replay_stream_read_next(selected)) {
             selected->has_event = false;
         }
+    }
+
+    if (have_last_event_timestamp) {
+        replay_emit_vehicle_state_snapshots(config, &snapshot_schedule,
+                                            last_event_timestamp_us, true);
     }
 
     if (!have_first_timestamp) {

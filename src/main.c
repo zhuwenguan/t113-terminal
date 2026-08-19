@@ -13,6 +13,7 @@
 #include "logger.h"
 #include "race_event.h"
 #include "replay.h"
+#include "vehicle_state_snapshot.h"
 
 typedef struct {
     pthread_mutex_t mutex;
@@ -28,26 +29,64 @@ typedef struct {
     double replay_speed;
 } MainOptions;
 
-static void main_log_vehicle_state_locked(MainCanContext *can_context,
-                                          uint64_t timestamp_us)
+static bool main_vehicle_state_snapshot_provider(uint64_t timestamp_us,
+                                                 VehicleState *state,
+                                                 void *context)
 {
     const uint32_t required_mask = VEHICLE_STATE_CAN_REQUIRED_MASK |
                                     VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
-    VehicleState *state = &can_context->vehicle_state;
+    MainCanContext *can_context = context;
+    bool complete;
 
-    state->can_valid = (state->valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) ==
-                       VEHICLE_STATE_CAN_REQUIRED_MASK;
+    if (can_context == NULL || state == NULL) {
+        return false;
+    }
+
+    pthread_mutex_lock(&can_context->mutex);
+    can_decoder_expire_stale(&can_context->decoder, timestamp_us,
+                             &can_context->vehicle_state);
+    can_context->vehicle_state.can_valid =
+        (can_context->vehicle_state.valid_mask &
+         VEHICLE_STATE_CAN_REQUIRED_MASK) == VEHICLE_STATE_CAN_REQUIRED_MASK;
+    can_context->vehicle_state.gps_valid =
+        (can_context->vehicle_state.valid_mask &
+         VEHICLE_STATE_LAPPRO_REQUIRED_MASK) ==
+        VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
+    *state = can_context->vehicle_state;
+    state->timestamp_us = timestamp_us;
+    state->can_valid =
+        (state->valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) ==
+        VEHICLE_STATE_CAN_REQUIRED_MASK;
     state->gps_valid =
         (state->valid_mask & VEHICLE_STATE_LAPPRO_REQUIRED_MASK) ==
         VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
+    complete = (state->valid_mask & required_mask) == required_mask;
+    pthread_mutex_unlock(&can_context->mutex);
 
-    if (can_context->logger == NULL ||
-        (state->valid_mask & required_mask) != required_mask) {
+    return complete;
+}
+
+static void main_vehicle_state_snapshot_sink(uint64_t timestamp_us,
+                                             const VehicleState *state,
+                                             void *context)
+{
+    MainCanContext *can_context = context;
+
+    if (can_context == NULL || state == NULL || can_context->logger == NULL) {
         return;
     }
 
-    state->timestamp_us = timestamp_us;
     logger_vehicle_state_sink(timestamp_us, state, can_context->logger);
+}
+
+static void main_replay_vehicle_state_snapshot_sink(uint64_t timestamp_us,
+                                                    void *context)
+{
+    VehicleState state;
+
+    if (main_vehicle_state_snapshot_provider(timestamp_us, &state, context)) {
+        main_vehicle_state_snapshot_sink(timestamp_us, &state, context);
+    }
 }
 
 static void main_can_message_sink(const CanMessage *message, void *context)
@@ -64,11 +103,8 @@ static void main_can_message_sink(const CanMessage *message, void *context)
     }
 
     pthread_mutex_lock(&can_context->mutex);
-    if (can_decoder_process(&can_context->decoder, message,
-                            &can_context->vehicle_state)) {
-        main_log_vehicle_state_locked(can_context,
-                                      can_context->vehicle_state.timestamp_us);
-    }
+    (void)can_decoder_process(&can_context->decoder, message,
+                              &can_context->vehicle_state);
     pthread_mutex_unlock(&can_context->mutex);
 }
 
@@ -107,7 +143,6 @@ static void main_lappro_sample_sink(uint64_t timestamp_us,
     }
     race_event_update(&can_context->race_event, timestamp_us, sample,
                       &can_context->vehicle_state);
-    main_log_vehicle_state_locked(can_context, timestamp_us);
     pthread_mutex_unlock(&can_context->mutex);
 }
 
@@ -194,14 +229,17 @@ int main(int argc, char *argv[])
     Logger logger;
     LapProConfig lappro_config;
     LapPro lappro;
+    VehicleStateSnapshotter snapshotter;
     static MainCanContext can_context;
     MainOptions options;
     bool lappro_ready = false;
     bool logger_ready = false;
+    bool snapshotter_ready = false;
     int context_mutex_result;
     int result;
 
     memset(&can_context, 0, sizeof(can_context));
+    memset(&snapshotter, 0, sizeof(snapshotter));
     can_decoder_init(&can_context.decoder);
     console_log_init();
     if (main_parse_arguments(argc, argv, &options) < 0) {
@@ -236,6 +274,8 @@ int main(int argc, char *argv[])
         replay_config.lappro_sink = main_lappro_sample_sink;
         replay_config.sink_context = &can_context;
         replay_config.vehicle_state = &can_context.vehicle_state;
+        replay_config.vehicle_state_snapshot_sink =
+            main_replay_vehicle_state_snapshot_sink;
         result = replay_run(&replay_config);
         race_event_close(&can_context.race_event);
         if (logger_ready) {
@@ -278,9 +318,21 @@ int main(int argc, char *argv[])
 
     can_receiver_set_message_sink(&receiver, main_can_message_sink,
                                   &can_context);
+    if (vehicle_state_snapshotter_init(
+            &snapshotter, main_vehicle_state_snapshot_provider,
+            main_vehicle_state_snapshot_sink, &can_context) < 0 ||
+        vehicle_state_snapshotter_start(&snapshotter) < 0) {
+        vehicle_state_snapshotter_stop(&snapshotter);
+        LOG_WARN("VehicleState snapshotter did not start");
+    } else {
+        snapshotter_ready = true;
+    }
     result = can_receiver_run(&receiver);
     can_receiver_print_stats(&receiver);
     can_receiver_close(&receiver);
+    if (snapshotter_ready) {
+        vehicle_state_snapshotter_stop(&snapshotter);
+    }
     if (lappro_ready) {
         lappro_stop(&lappro);
     }

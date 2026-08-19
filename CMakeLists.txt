@@ -35,6 +35,7 @@ add_executable(t113_terminal
     src/race_event.c
     src/logger.c
     src/replay.c
+    src/vehicle_state_snapshot.c
     src/lappro.c
     src/lappro_transport.c
     src/lappro_crypto.c
@@ -112,4 +113,25 @@ if (BUILD_TESTING)
         m
     )
     add_test(NAME race_event_parallel_accel COMMAND test_race_event_accel)
+
+    add_executable(test_replay_vehicle_state_snapshot
+        tests/test_replay_vehicle_state_snapshot.c
+        src/replay.c
+        src/vehicle_state_snapshot.c
+        src/console_log.c
+    )
+    target_include_directories(test_replay_vehicle_state_snapshot PRIVATE
+        include
+    )
+    target_compile_options(test_replay_vehicle_state_snapshot PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_replay_vehicle_state_snapshot PRIVATE
+        Threads::Threads
+        m
+    )
+    add_test(NAME replay_vehicle_state_snapshot
+             COMMAND test_replay_vehicle_state_snapshot)
 endif()

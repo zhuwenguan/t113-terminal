@@ -26,6 +26,8 @@ typedef struct {
 typedef void (*ReplayCanSink)(const CanMessage *message, void *context);
 typedef void (*ReplayLapProSink)(uint64_t timestamp_us,
                                  const LapProState *state, void *context);
+typedef void (*ReplayVehicleStateSnapshotSink)(uint64_t timestamp_us,
+                                               void *context);
 
 typedef struct {
     const char *directory;
@@ -34,6 +36,7 @@ typedef struct {
     ReplayLapProSink lappro_sink;
     void *sink_context;
     const VehicleState *vehicle_state;
+    ReplayVehicleStateSnapshotSink vehicle_state_snapshot_sink;
 } ReplayConfig;
 
 /* Runs a merged, timestamp-ordered replay until the input is exhausted. */
