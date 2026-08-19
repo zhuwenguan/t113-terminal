@@ -527,7 +527,6 @@ static void lap_timer_set_state(const LapTimer *timer, VehicleState *state)
     state->lap_valid = timer->configured &&
                        timer->lap_start_timestamp_us != 0U;
     state->lap_time_s = timer->current_time_s;
-    state->current_lap_time_s = timer->current_time_s;
     state->last_lap_time_s = timer->last_lap_time_s;
     state->best_lap_time_s = timer->best_lap_time_s;
     state->delta_time_s = timer->delta_time_s;
