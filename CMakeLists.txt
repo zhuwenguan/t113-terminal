@@ -133,6 +133,23 @@ if (BUILD_TESTING)
     )
     add_test(NAME race_event_parallel_accel COMMAND test_race_event_accel)
 
+    add_executable(test_accel_axis
+        tests/test_accel_axis.c
+        src/accel_test.c
+        src/console_log.c
+    )
+    target_include_directories(test_accel_axis PRIVATE include)
+    target_compile_options(test_accel_axis PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_accel_axis PRIVATE
+        Threads::Threads
+        m
+    )
+    add_test(NAME accel_axis_acquisition COMMAND test_accel_axis)
+
     add_executable(test_replay_vehicle_state_snapshot
         tests/test_replay_vehicle_state_snapshot.c
         src/replay.c

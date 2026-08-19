@@ -2,6 +2,7 @@
 #define T113_ACCEL_TEST_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "gps_track.h"
@@ -13,6 +14,15 @@ typedef enum {
     ACCEL_TEST_ARMED,
     ACCEL_TEST_RUNNING
 } AccelTestState;
+
+#define ACCEL_AXIS_MAX_POINTS 64U
+
+typedef struct {
+    uint64_t timestamp_us;
+    double x_m;
+    double y_m;
+    double acc_x_mps2;
+} AccelAxisSample;
 
 typedef struct {
     AccelTestState state;
@@ -29,6 +39,12 @@ typedef struct {
     uint64_t last_report_timestamp_us;
     double launch_x_m;
     double launch_y_m;
+    bool axis_locked;
+    double axis_x;
+    double axis_y;
+    double axis_heading_deg;
+    size_t axis_sample_count;
+    AccelAxisSample axis_samples[ACCEL_AXIS_MAX_POINTS];
     double launch_heading_deg;
     double previous_along_m;
     double furthest_along_m;
