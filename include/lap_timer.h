@@ -69,7 +69,6 @@ typedef struct {
     double current_distance_s_m;
     double current_time_s;
     double delta_time_s;
-    double estimated_lap_time_s;
     uint64_t previous_projection_timestamp_us;
     uint64_t lap_start_timestamp_us;
     uint64_t last_report_timestamp_us;

@@ -530,7 +530,6 @@ static void lap_timer_set_state(const LapTimer *timer, VehicleState *state)
     state->last_lap_time_s = timer->last_lap_time_s;
     state->best_lap_time_s = timer->best_lap_time_s;
     state->delta_time_s = timer->delta_time_s;
-    state->estimated_lap_time_s = timer->estimated_lap_time_s;
     state->track_distance_m = timer->current_distance_s_m;
 }
 
@@ -640,7 +639,6 @@ bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
     timer->current_lap_count = 0U;
     timer->current_lap_start_timestamp_us = 0U;
     timer->current_lap_overflow = false;
-    timer->estimated_lap_time_s = timer->reference_lap_time_s;
     timer->lap_start_timestamp_us = initial_lap_start_timestamp_us;
     timer->previous_projection_timestamp_us = 0U;
 
@@ -767,7 +765,6 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
                 : 0.0;
         timer->current_distance_s_m = reference->distance_s_m;
         timer->delta_time_s = timer->current_time_s - reference->time_s;
-        timer->estimated_lap_time_s = timer->reference_lap_time_s;
         lap_timer_begin_current_lap(timer, crossing_timestamp_us, point);
         timer->previous_projection_index = projection_index;
         timer->previous_projection_timestamp_us = point->timestamp_us;
@@ -816,15 +813,6 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
         (double)(point->timestamp_us - timer->lap_start_timestamp_us) /
         1000000.0;
     timer->delta_time_s = timer->current_time_s - reference->time_s;
-    if (timer->current_distance_s_m > 0.1 &&
-        timer->reference_loop_distance_s_m > 0.1) {
-        timer->estimated_lap_time_s =
-            timer->current_time_s *
-            timer->reference_loop_distance_s_m /
-            timer->current_distance_s_m;
-    } else {
-        timer->estimated_lap_time_s = timer->reference_lap_time_s;
-    }
     if (!started_new_lap) {
         lap_timer_append_current_lap_point(
             timer, point->timestamp_us, point->x_m, point->y_m,

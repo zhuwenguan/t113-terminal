@@ -70,7 +70,6 @@ typedef struct {
     double last_lap_time_s;
     double best_lap_time_s;
     double delta_time_s;
-    double estimated_lap_time_s;
     double track_distance_m;
     uint32_t sector_number;
     bool can_valid;
