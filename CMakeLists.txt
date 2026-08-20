@@ -36,6 +36,7 @@ add_executable(t113_terminal
     src/logger.c
     src/replay.c
     src/vehicle_state_snapshot.c
+    src/hmi.c
     src/lappro.c
     src/lappro_transport.c
     src/lappro_crypto.c
@@ -190,4 +191,21 @@ if (BUILD_TESTING)
     )
     add_test(NAME replay_vehicle_state_snapshot
              COMMAND test_replay_vehicle_state_snapshot)
+
+    add_executable(test_hmi
+        tests/test_hmi.c
+        src/hmi.c
+        src/console_log.c
+    )
+    target_include_directories(test_hmi PRIVATE include)
+    target_compile_options(test_hmi PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_hmi PRIVATE
+        Threads::Threads
+        m
+    )
+    add_test(NAME hmi_ascii_rs485_protocol COMMAND test_hmi)
 endif()

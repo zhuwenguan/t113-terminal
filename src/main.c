@@ -9,6 +9,7 @@
 #include "can_decoder.h"
 #include "can_receiver.h"
 #include "console_log.h"
+#include "hmi.h"
 #include "lappro.h"
 #include "logger.h"
 #include "race_event.h"
@@ -21,6 +22,7 @@ typedef struct {
     CanDecoder decoder;
     RaceEvent race_event;
     VehicleState vehicle_state;
+    Hmi *hmi;
 } MainCanContext;
 
 typedef struct {
@@ -33,10 +35,7 @@ static bool main_vehicle_state_snapshot_provider(uint64_t timestamp_us,
                                                  VehicleState *state,
                                                  void *context)
 {
-    const uint32_t required_mask = VEHICLE_STATE_CAN_REQUIRED_MASK |
-                                    VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
     MainCanContext *can_context = context;
-    bool complete;
 
     if (can_context == NULL || state == NULL) {
         return false;
@@ -60,10 +59,11 @@ static bool main_vehicle_state_snapshot_provider(uint64_t timestamp_us,
     state->gps_valid =
         (state->valid_mask & VEHICLE_STATE_LAPPRO_REQUIRED_MASK) ==
         VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
-    complete = (state->valid_mask & required_mask) == required_mask;
     pthread_mutex_unlock(&can_context->mutex);
 
-    return complete;
+    /* HMI can display partial state; the logger applies its own completeness
+     * policy in the sink below. */
+    return true;
 }
 
 static void main_vehicle_state_snapshot_sink(uint64_t timestamp_us,
@@ -71,12 +71,20 @@ static void main_vehicle_state_snapshot_sink(uint64_t timestamp_us,
                                              void *context)
 {
     MainCanContext *can_context = context;
+    const uint32_t required_mask = VEHICLE_STATE_CAN_REQUIRED_MASK |
+                                   VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
 
-    if (can_context == NULL || state == NULL || can_context->logger == NULL) {
+    if (can_context == NULL || state == NULL) {
         return;
     }
 
-    logger_vehicle_state_sink(timestamp_us, state, can_context->logger);
+    if (can_context->hmi != NULL) {
+        (void)hmi_update(can_context->hmi, timestamp_us, state);
+    }
+    if (can_context->logger != NULL &&
+        (state->valid_mask & required_mask) == required_mask) {
+        logger_vehicle_state_sink(timestamp_us, state, can_context->logger);
+    }
 }
 
 static void main_replay_vehicle_state_snapshot_sink(uint64_t timestamp_us,
@@ -227,6 +235,7 @@ int main(int argc, char *argv[])
     };
     CanReceiver receiver;
     Logger logger;
+    Hmi hmi;
     LapProConfig lappro_config;
     LapPro lappro;
     VehicleStateSnapshotter snapshotter;
@@ -234,6 +243,7 @@ int main(int argc, char *argv[])
     MainOptions options;
     bool lappro_ready = false;
     bool logger_ready = false;
+    bool hmi_ready = false;
     bool snapshotter_ready = false;
     int context_mutex_result;
     int result;
@@ -260,6 +270,12 @@ int main(int argc, char *argv[])
         logger_ready = true;
     }
     can_context.logger = logger_ready ? &logger : NULL;
+    if (hmi_init(&hmi, HMI_DEFAULT_DEVICE_PATH) < 0) {
+        LOG_WARN("HMI unavailable; continuing without display output");
+    } else {
+        hmi_ready = true;
+    }
+    can_context.hmi = hmi_ready ? &hmi : NULL;
     race_event_init(&can_context.race_event,
                     logger_ready ? logger_get_session_directory(&logger)
                                  : NULL);
@@ -281,6 +297,9 @@ int main(int argc, char *argv[])
         if (logger_ready) {
             logger_stop(&logger);
             logger_print_stats(&logger);
+        }
+        if (hmi_ready) {
+            hmi_close(&hmi);
         }
         sync();
         pthread_mutex_destroy(&can_context.mutex);
@@ -312,6 +331,9 @@ int main(int argc, char *argv[])
         if (logger_ready) {
             logger_stop(&logger);
         }
+        if (hmi_ready) {
+            hmi_close(&hmi);
+        }
         pthread_mutex_destroy(&can_context.mutex);
         return EXIT_FAILURE;
     }
@@ -340,6 +362,9 @@ int main(int argc, char *argv[])
     if (logger_ready) {
         logger_stop(&logger);
         logger_print_stats(&logger);
+    }
+    if (hmi_ready) {
+        hmi_close(&hmi);
     }
     sync();
     pthread_mutex_destroy(&can_context.mutex);
