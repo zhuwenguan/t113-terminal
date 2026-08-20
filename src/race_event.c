@@ -17,7 +17,7 @@
 #define RACE_EVENT_LOOP_CONTINUITY_HEADING_DEG 60.0
 #define RACE_EVENT_LOOP_MIN_MATCHES 5U
 #define RACE_EVENT_LOOP_SEARCH_RADIUS 2U
-#define RACE_EVENT_MOVING_SPEED_KMH 1.0
+#define RACE_EVENT_MOVING_SPEED_KMH 2.0
 
 static double race_event_heading_error(double first_deg, double second_deg)
 {
