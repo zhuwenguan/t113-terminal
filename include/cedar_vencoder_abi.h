@@ -22,7 +22,22 @@ typedef enum {
     CEDAR_VENC_PIXEL_YUV420SP = 0,
     CEDAR_VENC_PIXEL_YVU420SP = 1,
     CEDAR_VENC_PIXEL_YUV420P = 2,
-    CEDAR_VENC_PIXEL_YVU420P = 3
+    CEDAR_VENC_PIXEL_YVU420P = 3,
+    CEDAR_VENC_PIXEL_YUV422SP = 4,
+    CEDAR_VENC_PIXEL_YVU422SP = 5,
+    CEDAR_VENC_PIXEL_YUV422P = 6,
+    CEDAR_VENC_PIXEL_YVU422P = 7,
+    CEDAR_VENC_PIXEL_YUYV422 = 8,
+    CEDAR_VENC_PIXEL_UYVY422 = 9,
+    CEDAR_VENC_PIXEL_YVYU422 = 10,
+    CEDAR_VENC_PIXEL_VYUY422 = 11,
+    CEDAR_VENC_PIXEL_ARGB = 12,
+    CEDAR_VENC_PIXEL_RGBA = 13,
+    CEDAR_VENC_PIXEL_ABGR = 14,
+    CEDAR_VENC_PIXEL_BGRA = 15,
+    CEDAR_VENC_PIXEL_TILE_32X32 = 16,
+    CEDAR_VENC_PIXEL_TILE_128X32 = 17,
+    CEDAR_VENC_PIXEL_AFBC_AW = 18
 } CedarVencPixelFormat;
 
 /*
@@ -36,6 +51,11 @@ typedef enum {
  */
 #define CEDAR_VENC_MAX_OVERLAY_SIZE 64U
 #define CEDAR_VENC_INDEX_PARAM_SET_OVERLAY 0x404
+#define CEDAR_VENC_INDEX_PARAM_RGB2YUV 0x009
+#define CEDAR_VENC_INDEX_PARAM_COLOR_FORMAT 0x00d
+#define CEDAR_VENC_INDEX_PARAM_SIZE 0x00e
+#define CEDAR_VENC_INDEX_PARAM_MAX_SUPPORT_SIZE 0x016
+#define CEDAR_VENC_INDEX_PARAM_CHECK_COLOR_FORMAT 0x017
 
 typedef enum {
     CEDAR_VENC_OVERLAY_ARGB_MIN = -1,
@@ -76,6 +96,11 @@ typedef struct {
     CedarVencOverlayArgbType argb_type;
     CedarVencOverlayHeader overlay_header_list[CEDAR_VENC_MAX_OVERLAY_SIZE];
 } CedarVencOverlayInfo;
+
+typedef struct {
+    int index;
+    CedarVencPixelFormat color_format;
+} CedarVencCheckColorFormat;
 
 #if UINTPTR_MAX == 0xffffffffU
 _Static_assert(offsetof(CedarVencOverlayHeader, overlay_blk_addr) == 20U,
@@ -211,5 +236,7 @@ typedef CedarAlreadyUsedInputBuffer CedarVencUsedInputBuffer;
 typedef CedarGetOneBitstreamFrame CedarVencGetOutputBuffer;
 typedef CedarFreeOneBitstreamFrame CedarVencFreeOutputBuffer;
 typedef CedarVideoEncSetParameter CedarVencSetParameter;
+typedef int (*CedarVencGetParameter)(CedarVideoEncoder *encoder,
+                                     int index, void *value);
 
 #endif
