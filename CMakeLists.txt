@@ -5,6 +5,24 @@ project(t113_terminal
     LANGUAGES C
 )
 
+add_executable(g2d_smoke_test
+    tools/g2d_smoke_test.c
+)
+
+target_include_directories(g2d_smoke_test PRIVATE
+    ${CMAKE_SOURCE_DIR}
+)
+
+target_compile_options(g2d_smoke_test PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+target_link_libraries(g2d_smoke_test PRIVATE
+    ${CMAKE_DL_LIBS}
+)
+
 find_path(T113_JPEG_INCLUDE_DIR jpeglib.h
     PATHS
         ${CMAKE_SYSROOT}/usr/include
