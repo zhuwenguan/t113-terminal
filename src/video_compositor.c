@@ -128,6 +128,148 @@ static void video_compositor_blend_layer(VideoFrame *output,
     }
 }
 
+static uint8_t video_compositor_blend_u8(uint8_t background,
+                                         uint8_t foreground, uint32_t alpha)
+{
+    return (uint8_t)((foreground * alpha + background * (255U - alpha) +
+                      127U) / 255U);
+}
+
+static uint8_t video_compositor_clamp_u8(int value)
+{
+    if (value < 0) {
+        return 0U;
+    }
+    if (value > 255) {
+        return 255U;
+    }
+    return (uint8_t)value;
+}
+
+static void video_compositor_rgb_to_yuv(uint8_t red, uint8_t green,
+                                        uint8_t blue, uint8_t *y,
+                                        uint8_t *u, uint8_t *v)
+{
+    *y = video_compositor_clamp_u8(((66 * (int)red + 129 * (int)green +
+                                     25 * (int)blue + 128) >> 8) + 16);
+    *u = video_compositor_clamp_u8(((-38 * (int)red - 74 * (int)green +
+                                     112 * (int)blue + 128) >> 8) + 128);
+    *v = video_compositor_clamp_u8(((112 * (int)red - 94 * (int)green -
+                                     18 * (int)blue + 128) >> 8) + 128);
+}
+
+static bool video_compositor_yuv_pixel(VideoYuvFrame *frame, uint32_t x,
+                                       uint32_t y, const uint8_t *overlay)
+{
+    uint32_t source_x;
+    uint32_t source_y;
+    uint8_t foreground_y;
+    uint8_t foreground_u;
+    uint8_t foreground_v;
+    uint32_t alpha;
+    uint8_t *y_plane;
+    uint8_t *u_plane;
+    uint8_t *v_plane;
+
+    if (frame == NULL || overlay == NULL || frame->plane[0] == NULL ||
+        x >= frame->width || y >= frame->height ||
+        x > UINT32_MAX - frame->left_offset ||
+        y > UINT32_MAX - frame->top_offset) {
+        return false;
+    }
+    source_x = x + frame->left_offset;
+    source_y = y + frame->top_offset;
+    alpha = overlay[3];
+    if (alpha == 0U) {
+        return true;
+    }
+    video_compositor_rgb_to_yuv(overlay[0], overlay[1], overlay[2],
+                                &foreground_y, &foreground_u, &foreground_v);
+    y_plane = frame->plane[0] + (size_t)source_y * frame->stride[0] + source_x;
+    *y_plane = video_compositor_blend_u8(*y_plane, foreground_y, alpha);
+    if (frame->format == VIDEO_YUV_FORMAT_YUV420P ||
+        frame->format == VIDEO_YUV_FORMAT_YV12) {
+        if (frame->plane[1] == NULL || frame->plane[2] == NULL) {
+            return false;
+        }
+        u_plane = frame->plane[1] + (size_t)(source_y / 2U) * frame->stride[1] +
+                  source_x / 2U;
+        v_plane = frame->plane[2] + (size_t)(source_y / 2U) * frame->stride[2] +
+                  source_x / 2U;
+        if (frame->format == VIDEO_YUV_FORMAT_YV12) {
+            uint8_t *swap = u_plane;
+            u_plane = v_plane;
+            v_plane = swap;
+        }
+        *u_plane = video_compositor_blend_u8(*u_plane, foreground_u, alpha);
+        *v_plane = video_compositor_blend_u8(*v_plane, foreground_v, alpha);
+        return true;
+    }
+    if (frame->format == VIDEO_YUV_FORMAT_NV12 ||
+        frame->format == VIDEO_YUV_FORMAT_NV21) {
+        uint8_t *chroma;
+
+        if (frame->plane[1] == NULL) {
+            return false;
+        }
+        chroma = frame->plane[1] + (size_t)(source_y / 2U) * frame->stride[1] +
+                 (source_x / 2U) * 2U;
+        if (frame->format == VIDEO_YUV_FORMAT_NV12) {
+            chroma[0] = video_compositor_blend_u8(chroma[0], foreground_u,
+                                                  alpha);
+            chroma[1] = video_compositor_blend_u8(chroma[1], foreground_v,
+                                                  alpha);
+        } else {
+            chroma[0] = video_compositor_blend_u8(chroma[0], foreground_v,
+                                                  alpha);
+            chroma[1] = video_compositor_blend_u8(chroma[1], foreground_u,
+                                                  alpha);
+        }
+        return true;
+    }
+    return false;
+}
+
+static bool video_compositor_blend_yuv_layer(VideoYuvFrame *output,
+                                             const HudLayer *layer)
+{
+    size_t region_index;
+
+    if (output == NULL || layer == NULL || layer->pixels == NULL) {
+        return false;
+    }
+    for (region_index = 0U; region_index < layer->region_count;
+         ++region_index) {
+        const HudRegion *region = &layer->regions[region_index];
+        uint32_t row_end = region->height > output->height -
+                           (region->y < output->height ? region->y : output->height) ?
+                           output->height : region->y + region->height;
+        uint32_t row;
+
+        if (region->x >= output->width || region->y >= output->height) {
+            continue;
+        }
+        if (region->x > UINT32_MAX - region->width) {
+            return false;
+        }
+        for (row = region->y; row < row_end; ++row) {
+            uint32_t column_end = region->width > output->width - region->x ?
+                                  output->width : region->x + region->width;
+            uint32_t column;
+
+            for (column = region->x; column < column_end; ++column) {
+                const uint8_t *overlay = layer->pixels +
+                    (size_t)row * layer->stride +
+                    (size_t)column * VIDEO_FRAME_CHANNELS;
+                if (!video_compositor_yuv_pixel(output, column, row, overlay)) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 bool video_compositor_compose(const VideoCompositor *compositor,
                               const VideoFrame *camera,
                               const HudLayer *static_layer,
@@ -156,4 +298,24 @@ bool video_compositor_compose(const VideoCompositor *compositor,
     video_compositor_blend_layer(output, dynamic_layer);
     output->timestamp_us = camera->timestamp_us;
     return true;
+}
+
+bool video_compositor_compose_yuv(const VideoCompositor *compositor,
+                                  VideoYuvFrame *camera,
+                                  const HudLayer *static_layer,
+                                  const HudLayer *dynamic_layer)
+{
+    if (compositor == NULL || !compositor->initialized || camera == NULL ||
+        camera->plane[0] == NULL || camera->width != compositor->width ||
+        camera->height != compositor->height || static_layer == NULL ||
+        dynamic_layer == NULL || static_layer->width != compositor->width ||
+        dynamic_layer->width != compositor->width ||
+        (camera->format != VIDEO_YUV_FORMAT_YUV420P &&
+         camera->format != VIDEO_YUV_FORMAT_YV12 &&
+         camera->format != VIDEO_YUV_FORMAT_NV12 &&
+         camera->format != VIDEO_YUV_FORMAT_NV21)) {
+        return false;
+    }
+    return video_compositor_blend_yuv_layer(camera, static_layer) &&
+           video_compositor_blend_yuv_layer(camera, dynamic_layer);
 }

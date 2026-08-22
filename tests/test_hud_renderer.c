@@ -4,6 +4,7 @@
 
 #include <assert.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 static size_t count_opaque_pixels(const HudLayer *layer)
@@ -113,9 +114,65 @@ static void test_render_at_size(uint32_t width, uint32_t height)
     hud_renderer_close(&renderer);
 }
 
+static void test_yuv_compose_with_stride_and_crop(void)
+{
+    VideoCompositor compositor;
+    VideoYuvFrame camera;
+    HudLayer static_layer;
+    HudLayer dynamic_layer;
+    uint8_t y_plane[32];
+    uint8_t u_plane[16];
+    uint8_t v_plane[16];
+    uint8_t *overlay;
+
+    memset(&camera, 0, sizeof(camera));
+    memset(&static_layer, 0, sizeof(static_layer));
+    memset(&dynamic_layer, 0, sizeof(dynamic_layer));
+    memset(y_plane, 16, sizeof(y_plane));
+    memset(u_plane, 128, sizeof(u_plane));
+    memset(v_plane, 128, sizeof(v_plane));
+    assert(video_compositor_init(&compositor, 4U, 2U) == 0);
+    camera.format = VIDEO_YUV_FORMAT_YUV420P;
+    camera.width = 4U;
+    camera.height = 2U;
+    camera.stride[0] = 8U;
+    camera.stride[1] = 4U;
+    camera.stride[2] = 4U;
+    camera.left_offset = 1U;
+    camera.top_offset = 1U;
+    camera.plane[0] = y_plane;
+    camera.plane[1] = u_plane;
+    camera.plane[2] = v_plane;
+    static_layer.width = dynamic_layer.width = 4U;
+    static_layer.height = dynamic_layer.height = 2U;
+    static_layer.stride = dynamic_layer.stride = 4U * VIDEO_FRAME_CHANNELS;
+    static_layer.pixels = calloc(1U, (size_t)static_layer.stride * 2U);
+    dynamic_layer.pixels = calloc(1U, (size_t)dynamic_layer.stride * 2U);
+    assert(static_layer.pixels != NULL && dynamic_layer.pixels != NULL);
+    static_layer.region_count = 1U;
+    static_layer.regions[0].width = 4U;
+    static_layer.regions[0].height = 2U;
+    overlay = static_layer.pixels;
+    overlay[0] = 255U;
+    overlay[3] = 255U;
+    dynamic_layer.region_count = 1U;
+    dynamic_layer.regions[0].width = 4U;
+    dynamic_layer.regions[0].height = 2U;
+    assert(video_compositor_compose_yuv(&compositor, &camera,
+                                        &static_layer, &dynamic_layer));
+    /* The crop starts at (1, 1), and the padded luma stride must be honored. */
+    assert(y_plane[1U * 8U + 1U] > 60U);
+    assert(y_plane[0] == 16U);
+    /* The red overlay must update U and V in the same 2x2 chroma sample. */
+    assert(u_plane[0] != 128U && v_plane[0] != 128U);
+    free(dynamic_layer.pixels);
+    free(static_layer.pixels);
+}
+
 int main(void)
 {
     test_render_at_size(HUD_BASE_WIDTH, HUD_BASE_HEIGHT);
     test_render_at_size(640U, 360U);
+    test_yuv_compose_with_stride_and_crop();
     return 0;
 }

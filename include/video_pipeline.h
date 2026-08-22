@@ -68,6 +68,7 @@ typedef struct {
     VideoCapture capture;
     JpegDecoder decoder;
     VideoFrame camera_frame;
+    JpegDecodedFrame native_camera_frame;
     HudRenderer hud;
     VideoCompositor compositor;
     VideoRecorder recorder;

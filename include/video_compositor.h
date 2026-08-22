@@ -19,5 +19,9 @@ bool video_compositor_compose(const VideoCompositor *compositor,
                               const HudLayer *static_layer,
                               const HudLayer *dynamic_layer,
                               VideoFrame *output);
+bool video_compositor_compose_yuv(const VideoCompositor *compositor,
+                                  VideoYuvFrame *camera,
+                                  const HudLayer *static_layer,
+                                  const HudLayer *dynamic_layer);
 
 #endif

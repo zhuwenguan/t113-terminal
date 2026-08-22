@@ -93,24 +93,14 @@ typedef struct {
     uint64_t format_convert_time_us;
 } JpegDecoderTiming;
 
-typedef enum {
-    JPEG_DECODED_FORMAT_UNKNOWN = 0,
-    JPEG_DECODED_FORMAT_YUV420P = 1,
-    JPEG_DECODED_FORMAT_YV12 = 2,
-    JPEG_DECODED_FORMAT_NV21 = 3,
-    JPEG_DECODED_FORMAT_NV12 = 4
-} JpegDecodedPixelFormat;
+typedef VideoYuvPixelFormat JpegDecodedPixelFormat;
+typedef VideoYuvFrame JpegDecodedFrame;
 
-typedef struct {
-    JpegDecodedPixelFormat format;
-    uint32_t width;
-    uint32_t height;
-    uint32_t stride[3];
-    uint32_t left_offset;
-    uint32_t top_offset;
-    const uint8_t *plane[3];
-    void *opaque;
-} JpegDecodedFrame;
+#define JPEG_DECODED_FORMAT_UNKNOWN VIDEO_YUV_FORMAT_UNKNOWN
+#define JPEG_DECODED_FORMAT_YUV420P VIDEO_YUV_FORMAT_YUV420P
+#define JPEG_DECODED_FORMAT_YV12 VIDEO_YUV_FORMAT_YV12
+#define JPEG_DECODED_FORMAT_NV21 VIDEO_YUV_FORMAT_NV21
+#define JPEG_DECODED_FORMAT_NV12 VIDEO_YUV_FORMAT_NV12
 
 typedef struct {
     JpegCodecApi api;
@@ -135,6 +125,17 @@ bool jpeg_decoder_decode_timed(JpegDecoder *decoder, const uint8_t *jpeg_data,
                                JpegDecoderTiming *timing);
 bool jpeg_decoder_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
                          size_t jpeg_size, VideoFrame *destination);
+bool jpeg_decoder_is_native(const JpegDecoder *decoder);
+bool jpeg_decoder_decode_native_timed(JpegDecoder *decoder,
+                                      const uint8_t *jpeg_data,
+                                      size_t jpeg_size,
+                                      JpegDecodedFrame *frame,
+                                      JpegDecoderTiming *timing);
+bool jpeg_decoder_return_native_frame(JpegDecoder *decoder,
+                                      JpegDecodedFrame *frame,
+                                      JpegDecoderTiming *timing);
+bool jpeg_decoded_frame_to_rgba(const JpegDecodedFrame *source,
+                                VideoFrame *destination);
 
 int jpeg_encoder_init(JpegEncoder *encoder, uint32_t width,
                       size_t output_capacity);

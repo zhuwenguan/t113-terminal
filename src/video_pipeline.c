@@ -94,6 +94,7 @@ static void video_pipeline_note_application_drop(VideoPipeline *pipeline)
 }
 
 static bool video_pipeline_render_frame(VideoPipeline *pipeline,
+                                        VideoYuvFrame *native_camera,
                                         uint64_t timestamp_us)
 {
     VehicleState state;
@@ -101,6 +102,7 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
     VideoRecorderFrameTiming recorder_timing;
     uint64_t render_start = video_pipeline_now_us();
     uint64_t stage_start;
+    bool need_rgba_output;
     bool state_available = video_pipeline_get_state(pipeline, &state);
 
     (void)state_available;
@@ -112,15 +114,34 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
     pipeline->stats.hud_time_us += video_pipeline_now_us() - stage_start;
     stage_start = video_pipeline_now_us();
     if (dynamic_layer == NULL ||
-        !video_compositor_compose(&pipeline->compositor,
-                                  &pipeline->camera_frame,
-                                  hud_renderer_static_layer(&pipeline->hud),
-                                  dynamic_layer, &pipeline->camera_frame)) {
+        (native_camera != NULL &&
+         !video_compositor_compose_yuv(
+             &pipeline->compositor, native_camera,
+             hud_renderer_static_layer(&pipeline->hud), dynamic_layer)) ||
+        (native_camera == NULL &&
+         !video_compositor_compose(
+             &pipeline->compositor, &pipeline->camera_frame,
+             hud_renderer_static_layer(&pipeline->hud), dynamic_layer,
+             &pipeline->camera_frame))) {
         video_pipeline_note_application_drop(pipeline);
         return false;
     }
     pipeline->stats.compose_time_us += video_pipeline_now_us() - stage_start;
     pipeline->camera_frame.timestamp_us = timestamp_us;
+    need_rgba_output = native_camera != NULL &&
+        ((pipeline->config.single_frame_path != NULL &&
+          pipeline->stats.rendered_frames == 0U) || pipeline->recorder_ready);
+    if (need_rgba_output) {
+        stage_start = video_pipeline_now_us();
+        if (!jpeg_decoded_frame_to_rgba(native_camera, &pipeline->camera_frame)) {
+            pipeline->stats.format_convert_time_us +=
+                video_pipeline_now_us() - stage_start;
+            video_pipeline_note_application_drop(pipeline);
+            return false;
+        }
+        pipeline->stats.format_convert_time_us +=
+            video_pipeline_now_us() - stage_start;
+    }
     if (pipeline->config.single_frame_path != NULL &&
         pipeline->stats.rendered_frames == 0U &&
         !video_frame_write_image(&pipeline->camera_frame,
@@ -348,7 +369,7 @@ static void *video_pipeline_thread(void *context)
             pipeline->stats.capture_frames++;
             pipeline->stats.camera_received_frames++;
             processed = video_pipeline_render_frame(
-                pipeline, pipeline->camera_frame.timestamp_us);
+                pipeline, NULL, pipeline->camera_frame.timestamp_us);
             if (processed) {
                 pipeline->stats.total_frame_time_us +=
                     video_pipeline_now_us() - frame_start_us;
@@ -417,9 +438,19 @@ static void *video_pipeline_thread(void *context)
             {
                 uint64_t decode_start = video_pipeline_now_us();
                 JpegDecoderTiming decoder_timing;
-                bool decoded = jpeg_decoder_decode_timed(
-                    &pipeline->decoder, buffer.data, buffer.size,
-                    &pipeline->camera_frame, &decoder_timing);
+                bool decoded;
+
+                memset(&pipeline->native_camera_frame, 0,
+                       sizeof(pipeline->native_camera_frame));
+                if (jpeg_decoder_is_native(&pipeline->decoder)) {
+                    decoded = jpeg_decoder_decode_native_timed(
+                        &pipeline->decoder, buffer.data, buffer.size,
+                        &pipeline->native_camera_frame, &decoder_timing);
+                } else {
+                    decoded = jpeg_decoder_decode_timed(
+                        &pipeline->decoder, buffer.data, buffer.size,
+                        &pipeline->camera_frame, &decoder_timing);
+                }
                 pipeline->stats.decode_time_us +=
                     video_pipeline_now_us() - decode_start;
                 if (!decoded) {
@@ -450,9 +481,24 @@ static void *video_pipeline_thread(void *context)
             }
             pipeline->camera_frame.timestamp_us = buffer.timestamp_us;
             (void)video_capture_queue(&pipeline->capture, buffer.index);
-            if (video_pipeline_render_frame(pipeline, buffer.timestamp_us)) {
+            if (video_pipeline_render_frame(
+                    pipeline,
+                    jpeg_decoder_is_native(&pipeline->decoder) ?
+                    &pipeline->native_camera_frame : NULL,
+                    buffer.timestamp_us)) {
                 pipeline->stats.total_frame_time_us +=
                     video_pipeline_now_us() - frame_start_us;
+            }
+            if (jpeg_decoder_is_native(&pipeline->decoder) &&
+                pipeline->native_camera_frame.opaque != NULL) {
+                JpegDecoderTiming return_timing;
+
+                memset(&return_timing, 0, sizeof(return_timing));
+                (void)jpeg_decoder_return_native_frame(
+                    &pipeline->decoder, &pipeline->native_camera_frame,
+                    &return_timing);
+                pipeline->stats.decoder_return_picture_time_us +=
+                    return_timing.decoder_return_picture_time_us;
             }
         }
         video_pipeline_log_low_frequency_stats(

@@ -438,9 +438,9 @@ static bool jpeg_native_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
                          (uint32_t)picture->nLeftOffset : 0U;
     frame->top_offset = picture->nTopOffset > 0 ?
                         (uint32_t)picture->nTopOffset : 0U;
-    frame->plane[0] = (const uint8_t *)picture->pData0;
-    frame->plane[1] = (const uint8_t *)picture->pData1;
-    frame->plane[2] = (const uint8_t *)picture->pData2;
+    frame->plane[0] = (uint8_t *)picture->pData0;
+    frame->plane[1] = (uint8_t *)picture->pData1;
+    frame->plane[2] = (uint8_t *)picture->pData2;
     frame->opaque = picture;
     context->held_picture = picture;
     if (frame->format == JPEG_DECODED_FORMAT_UNKNOWN) {
@@ -496,8 +496,8 @@ static uint8_t jpeg_clamp_u8(int value)
     return (uint8_t)value;
 }
 
-static bool jpeg_native_convert_to_rgba(const JpegDecodedFrame *source,
-                                        VideoFrame *destination)
+bool jpeg_decoded_frame_to_rgba(const JpegDecodedFrame *source,
+                                VideoFrame *destination)
 {
     uint32_t row;
 
@@ -573,6 +573,34 @@ static bool jpeg_native_convert_to_rgba(const JpegDecodedFrame *source,
         }
     }
     return true;
+}
+
+bool jpeg_decoder_is_native(const JpegDecoder *decoder)
+{
+    return decoder != NULL && decoder->initialized &&
+           decoder->native_initialized;
+}
+
+bool jpeg_decoder_decode_native_timed(JpegDecoder *decoder,
+                                      const uint8_t *jpeg_data,
+                                      size_t jpeg_size,
+                                      JpegDecodedFrame *frame,
+                                      JpegDecoderTiming *timing)
+{
+    if (timing != NULL) {
+        memset(timing, 0, sizeof(*timing));
+    }
+    if (!jpeg_decoder_is_native(decoder) || frame == NULL) {
+        return false;
+    }
+    return jpeg_native_decode(decoder, jpeg_data, jpeg_size, frame, timing);
+}
+
+bool jpeg_decoder_return_native_frame(JpegDecoder *decoder,
+                                      JpegDecodedFrame *frame,
+                                      JpegDecoderTiming *timing)
+{
+    return jpeg_native_return_frame(decoder, frame, timing);
 }
 
 static bool jpeg_hardware_decoder_init(JpegDecoder *decoder)
@@ -868,7 +896,7 @@ bool jpeg_decoder_decode_timed(JpegDecoder *decoder, const uint8_t *jpeg_data,
             decoder->native_frame_logged = true;
         }
         convert_start_us = jpeg_codec_now_us();
-        converted = jpeg_native_convert_to_rgba(&source, destination);
+        converted = jpeg_decoded_frame_to_rgba(&source, destination);
         if (timing != NULL) {
             timing->format_convert_time_us +=
                 jpeg_codec_now_us() - convert_start_us;
