@@ -1,5 +1,6 @@
-# CMake build directory
+# CMake build directories
 /build/
+/build*/
 
 # CMake files generated in the project root
 /CMakeFiles/
@@ -25,3 +26,7 @@
 # OS metadata
 .DS_Store
 Thumbs.db
+*:Zone.Identifier
+
+# Local agent/session notes
+/goal.md
