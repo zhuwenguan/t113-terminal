@@ -21,8 +21,20 @@ enum {
     VEHICLE_STATE_VALID_HV_SOC_PERCENT = 1U << 14,
     VEHICLE_STATE_VALID_LV_VOLTAGE_V = 1U << 15,
     VEHICLE_STATE_VALID_GPS_FIX_TYPE = 1U << 16,
-    VEHICLE_STATE_VALID_GPS_NUM_SV = 1U << 17
+    VEHICLE_STATE_VALID_GPS_NUM_SV = 1U << 17,
+    VEHICLE_STATE_VALID_THROTTLE_PERCENT = 1U << 18,
+    VEHICLE_STATE_VALID_BRAKE_PERCENT = 1U << 19,
+    VEHICLE_STATE_VALID_DRIVE_STATE = 1U << 20
 };
+
+typedef enum {
+    VEHICLE_DRIVE_STATE_UNKNOWN = 0,
+    VEHICLE_DRIVE_STATE_OFF,
+    VEHICLE_DRIVE_STATE_NEUTRAL,
+    VEHICLE_DRIVE_STATE_DRIVE,
+    VEHICLE_DRIVE_STATE_REVERSE,
+    VEHICLE_DRIVE_STATE_READY
+} VehicleDriveState;
 
 typedef enum {
     RACE_EVENT_UNKNOWN = 0,
@@ -94,6 +106,11 @@ typedef struct {
     double accel_50m_time_s;
     double accel_time_s;
     double max_acceleration;
+    /* Optional inputs reserved for future CAN mappings. HUD renders them as
+     * -- until the corresponding validity bit is supplied. */
+    double throttle_percent;
+    double brake_percent;
+    VehicleDriveState drive_state;
     uint8_t reserved[32];
 } VehicleState;
 

@@ -5,6 +5,16 @@ project(t113_terminal
     LANGUAGES C
 )
 
+find_path(T113_JPEG_INCLUDE_DIR jpeglib.h
+    PATHS
+        ${CMAKE_SYSROOT}/usr/include
+        ${CMAKE_SYSROOT}/include
+        ${CMAKE_SOURCE_DIR}/third_party/libjpeg
+)
+if (NOT T113_JPEG_INCLUDE_DIR)
+    set(T113_JPEG_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/third_party/libjpeg)
+endif()
+
 find_package(Threads REQUIRED)
 include(CTest)
 
@@ -37,6 +47,13 @@ add_executable(t113_terminal
     src/replay.c
     src/vehicle_state_snapshot.c
     src/hmi.c
+    src/video_frame.c
+    src/jpeg_codec.c
+    src/video_capture.c
+    src/hud_renderer.c
+    src/video_compositor.c
+    src/video_recorder.c
+    src/video_pipeline.c
     src/lappro.c
     src/lappro_transport.c
     src/lappro_crypto.c
@@ -44,6 +61,7 @@ add_executable(t113_terminal
 
 target_include_directories(t113_terminal PRIVATE
     include
+    ${T113_JPEG_INCLUDE_DIR}
 )
 
 target_compile_options(t113_terminal PRIVATE
@@ -54,7 +72,16 @@ target_compile_options(t113_terminal PRIVATE
 
 target_link_libraries(t113_terminal PRIVATE
     Threads::Threads
+    ${CMAKE_DL_LIBS}
 )
+
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)" OR
+    CMAKE_C_COMPILER MATCHES "(arm|aarch64)-linux")
+    target_compile_options(t113_terminal PRIVATE
+        -mfpu=neon
+        -mfloat-abi=hard
+    )
+endif()
 
 if (EXISTS "${T113_LIBM_STATIC}")
     target_link_libraries(t113_terminal PRIVATE "${T113_LIBM_STATIC}")
@@ -208,4 +235,37 @@ if (BUILD_TESTING)
         m
     )
     add_test(NAME hmi_ascii_rs485_protocol COMMAND test_hmi)
+
+    add_executable(test_hud_renderer
+        tests/test_hud_renderer.c
+        src/hud_renderer.c
+        src/video_compositor.c
+        src/video_frame.c
+    )
+    target_include_directories(test_hud_renderer PRIVATE include)
+    target_compile_options(test_hud_renderer PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_hud_renderer PRIVATE m)
+    add_test(NAME hud_renderer_layout_and_invalid_state
+             COMMAND test_hud_renderer)
+
+    add_executable(test_jpeg_codec
+        tests/test_jpeg_codec.c
+        src/jpeg_codec.c
+        src/video_frame.c
+        src/console_log.c
+    )
+    target_include_directories(test_jpeg_codec PRIVATE
+        include
+        ${T113_JPEG_INCLUDE_DIR}
+    )
+    target_compile_options(test_jpeg_codec PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_jpeg_codec PRIVATE ${CMAKE_DL_LIBS})
 endif()
