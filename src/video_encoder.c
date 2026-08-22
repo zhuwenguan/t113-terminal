@@ -226,6 +226,9 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
         errno = EIO;
         goto fail;
     }
+    /* VideoEncUnInit is required even when a later input allocation step
+     * fails, so mark the hardware session initialized immediately. */
+    encoder->initialized = true;
     memset(&buffer_param, 0, sizeof(buffer_param));
     buffer_param.nBufferNum = 1U;
     buffer_param.nSizeY = (uint32_t)aligned_width * (uint32_t)aligned_height;
@@ -245,7 +248,6 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
     encoder->input_memory.pAddrVirY = input_buffer.pAddrVirY;
     encoder->input_memory.pAddrVirC = input_buffer.pAddrVirC;
     (void)encoder->api.return_input(handle, &input_buffer);
-    encoder->initialized = true;
     encoder->available = true;
     LOG_INFO("Video encoder: Cedar hardware MJPEG %ux%u stride=%u "
              "format=YUV420P quality=%d", width, height, encoder->stride,
@@ -267,6 +269,14 @@ void video_encoder_close(VideoEncoder *encoder)
         return;
     }
     handle = (CedarVideoEncoder *)encoder->encoder;
+    if (handle != NULL && encoder->input_buffers_allocated &&
+        encoder->api.release_input != NULL) {
+        (void)encoder->api.release_input(handle);
+    }
+    if (handle != NULL && encoder->initialized &&
+        encoder->api.uninit != NULL) {
+        (void)encoder->api.uninit(handle);
+    }
     if (handle != NULL && encoder->api.destroy != NULL) {
         encoder->api.destroy(handle);
     }
@@ -370,6 +380,9 @@ release_input:
         goto release_output;
     }
     memcpy(encoder->output, output_buffer.pData0, output_buffer.nSize0);
+    if (output_buffer.nSize1 > 0U && output_buffer.pData1 == NULL) {
+        goto release_output;
+    }
     if (output_buffer.nSize1 > 0U && output_buffer.pData1 != NULL) {
         memcpy(encoder->output + output_buffer.nSize0, output_buffer.pData1,
                output_buffer.nSize1);
