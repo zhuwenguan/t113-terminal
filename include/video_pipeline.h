@@ -39,6 +39,23 @@ typedef struct {
     uint64_t first_timestamp_us;
     uint64_t last_timestamp_us;
     uint64_t memory_bytes;
+    uint64_t camera_received_frames;
+    uint64_t camera_sequence_lost;
+    uint64_t decoded_frames;
+    uint64_t processed_frames;
+    uint64_t encoded_frames;
+    uint64_t written_frames;
+    uint64_t application_dropped_frames;
+    uint64_t capture_time_us;
+    uint64_t decoder_init_time_us;
+    uint64_t jpeg_input_copy_time_us;
+    uint64_t decoder_submit_time_us;
+    uint64_t decoder_get_frame_time_us;
+    uint64_t decoder_release_time_us;
+    uint64_t format_convert_time_us;
+    uint64_t jpeg_encode_time_us;
+    uint64_t mux_write_time_us;
+    uint64_t total_frame_time_us;
 } VideoPipelineStats;
 
 typedef struct {
@@ -57,6 +74,8 @@ typedef struct {
     bool initialized;
     bool started;
     bool stop_requested;
+    bool have_camera_sequence;
+    uint32_t last_camera_sequence;
 } VideoPipeline;
 
 int video_pipeline_init(VideoPipeline *pipeline,

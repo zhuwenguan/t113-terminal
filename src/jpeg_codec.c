@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <stddef.h>
 #include <string.h>
+#include <time.h>
 
 #define JPEG_CODEC_VERSION JPEG_LIB_VERSION
 
@@ -45,6 +46,17 @@ typedef struct {
 } JpegHardwareApi;
 
 static void *jpeg_hardware_vdecoder_library;
+
+static uint64_t jpeg_codec_now_us(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
+        return 0U;
+    }
+    return (uint64_t)now.tv_sec * 1000000ULL +
+           (uint64_t)now.tv_nsec / 1000ULL;
+}
 
 static void jpeg_codec_error_exit(j_common_ptr common)
 {
@@ -353,10 +365,15 @@ void jpeg_decoder_close(JpegDecoder *decoder)
     memset(decoder, 0, sizeof(*decoder));
 }
 
-bool jpeg_decoder_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
-                         size_t jpeg_size, VideoFrame *destination)
+bool jpeg_decoder_decode_timed(JpegDecoder *decoder, const uint8_t *jpeg_data,
+                               size_t jpeg_size, VideoFrame *destination,
+                               JpegDecoderTiming *timing)
 {
     uint32_t row;
+
+    if (timing != NULL) {
+        memset(timing, 0, sizeof(*timing));
+    }
 
     if (decoder == NULL || !decoder->initialized || jpeg_data == NULL ||
         jpeg_size == 0U || destination == NULL || destination->pixels == NULL) {
@@ -388,16 +405,42 @@ bool jpeg_decoder_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
         if (jpeg_size > INT_MAX) {
             return false;
         }
-        decoder->hardware_input = malloc(jpeg_size);
-        if (decoder->hardware_input == NULL) {
-            return false;
+        {
+            uint64_t copy_start_us = jpeg_codec_now_us();
+
+            decoder->hardware_input = malloc(jpeg_size);
+            if (decoder->hardware_input == NULL) {
+                return false;
+            }
+            memcpy(decoder->hardware_input, jpeg_data, jpeg_size);
+            if (timing != NULL) {
+                timing->input_copy_time_us +=
+                    jpeg_codec_now_us() - copy_start_us;
+            }
         }
-        memcpy(decoder->hardware_input, jpeg_data, jpeg_size);
         decoder->hardware_input_transferred = true;
-        hardware.set_data_source_buf(decoder->hardware_decoder,
-                                     (char *)decoder->hardware_input,
-                                     (int)jpeg_size, 0, 5);
-        source = hardware.get_frame(decoder->hardware_decoder);
+        {
+            uint64_t submit_start_us = jpeg_codec_now_us();
+
+            hardware.set_data_source_buf(decoder->hardware_decoder,
+                                         (char *)decoder->hardware_input,
+                                         (int)jpeg_size, 0, 5);
+            if (timing != NULL) {
+                timing->decoder_submit_time_us +=
+                    jpeg_codec_now_us() - submit_start_us;
+            }
+        }
+        {
+            uint64_t get_frame_start_us = jpeg_codec_now_us();
+
+            source = hardware.get_frame(decoder->hardware_decoder);
+            if (timing != NULL) {
+                /* The vendor wrapper performs decode and picture acquire in
+                 * one GetFrame call, so they cannot be split at this ABI. */
+                timing->decoder_get_frame_time_us +=
+                    jpeg_codec_now_us() - get_frame_start_us;
+            }
+        }
         /* The vendor implementation frees mSrcBuf before returning from
          * JpegDecoderGetFrame().  Do not retain or free this pointer again. */
         decoder->hardware_input = NULL;
@@ -407,31 +450,53 @@ bool jpeg_decoder_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
             source->display_height < destination->height ||
             source->rgb565_size < destination->width * destination->height *
                                       2U) {
+            uint64_t release_start_us = jpeg_codec_now_us();
+
             jpeg_hardware_release_video_decoder(decoder);
+            if (timing != NULL) {
+                timing->decoder_release_time_us +=
+                    jpeg_codec_now_us() - release_start_us;
+            }
             return false;
         }
-        for (row = 0U; row < destination->height; ++row) {
-            const uint8_t *input = source->rgb565_data +
-                                   (size_t)row * source->width * 2U;
-            uint8_t *output = destination->pixels +
-                              (size_t)row * destination->stride;
-            uint32_t column;
+        {
+            uint64_t convert_start_us = jpeg_codec_now_us();
 
-            for (column = 0U; column < destination->width; ++column) {
-                uint16_t pixel = (uint16_t)input[column * 2U] |
-                                 (uint16_t)input[column * 2U + 1U] << 8U;
-                uint8_t *target = output + (size_t)column * 4U;
+            for (row = 0U; row < destination->height; ++row) {
+                const uint8_t *input = source->rgb565_data +
+                                       (size_t)row * source->width * 2U;
+                uint8_t *output = destination->pixels +
+                                  (size_t)row * destination->stride;
+                uint32_t column;
 
-                target[0] = (uint8_t)(((pixel >> 11U) & 0x1FU) << 3U);
-                target[1] = (uint8_t)(((pixel >> 5U) & 0x3FU) << 2U);
-                target[2] = (uint8_t)((pixel & 0x1FU) << 3U);
-                target[3] = 255U;
+                for (column = 0U; column < destination->width; ++column) {
+                    uint16_t pixel = (uint16_t)input[column * 2U] |
+                                     (uint16_t)input[column * 2U + 1U] << 8U;
+                    uint8_t *target = output + (size_t)column * 4U;
+
+                    target[0] = (uint8_t)(((pixel >> 11U) & 0x1FU) << 3U);
+                    target[1] = (uint8_t)(((pixel >> 5U) & 0x3FU) << 2U);
+                    target[2] = (uint8_t)((pixel & 0x1FU) << 3U);
+                    target[3] = 255U;
+                }
+            }
+            if (timing != NULL) {
+                timing->format_convert_time_us +=
+                    jpeg_codec_now_us() - convert_start_us;
             }
         }
         /* JpegDecoderGetFrame creates a new VideoDecoder internally.  Release
          * that child here so the long-lived JpegDecoder context does not
          * accumulate one Cedar decoder per camera frame. */
-        jpeg_hardware_release_video_decoder(decoder);
+        {
+            uint64_t release_start_us = jpeg_codec_now_us();
+
+            jpeg_hardware_release_video_decoder(decoder);
+            if (timing != NULL) {
+                timing->decoder_release_time_us +=
+                    jpeg_codec_now_us() - release_start_us;
+            }
+        }
         return true;
     }
     if (setjmp(decoder->error.jump) != 0) {
@@ -479,6 +544,13 @@ bool jpeg_decoder_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
         return false;
     }
     return true;
+}
+
+bool jpeg_decoder_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
+                         size_t jpeg_size, VideoFrame *destination)
+{
+    return jpeg_decoder_decode_timed(decoder, jpeg_data, jpeg_size,
+                                     destination, NULL);
 }
 
 static void jpeg_encoder_init_destination(j_compress_ptr cinfo)

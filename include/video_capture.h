@@ -22,6 +22,7 @@ typedef struct {
     const uint8_t *data;
     size_t size;
     unsigned int index;
+    uint32_t sequence;
     uint64_t timestamp_us;
 } VideoCaptureBuffer;
 

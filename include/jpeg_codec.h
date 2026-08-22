@@ -78,6 +78,15 @@ typedef struct {
 } JpegDecoder;
 
 typedef struct {
+    uint64_t input_copy_time_us;
+    uint64_t decoder_submit_time_us;
+    /* The current vendor GetFrame API combines decode and picture acquire. */
+    uint64_t decoder_get_frame_time_us;
+    uint64_t decoder_release_time_us;
+    uint64_t format_convert_time_us;
+} JpegDecoderTiming;
+
+typedef struct {
     JpegCodecApi api;
     JpegCodecError error;
     struct jpeg_compress_struct cinfo;
@@ -95,6 +104,9 @@ typedef struct {
 
 int jpeg_decoder_init(JpegDecoder *decoder, uint32_t width);
 void jpeg_decoder_close(JpegDecoder *decoder);
+bool jpeg_decoder_decode_timed(JpegDecoder *decoder, const uint8_t *jpeg_data,
+                               size_t jpeg_size, VideoFrame *destination,
+                               JpegDecoderTiming *timing);
 bool jpeg_decoder_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
                          size_t jpeg_size, VideoFrame *destination);
 

@@ -229,6 +229,7 @@ VideoCaptureResult video_capture_dequeue(VideoCapture *capture,
     buffer->data = capture->mapped[v4l2_buffer.index];
     buffer->size = v4l2_buffer.bytesused;
     buffer->index = v4l2_buffer.index;
+    buffer->sequence = v4l2_buffer.sequence;
     buffer->timestamp_us = video_capture_monotonic_us();
     return VIDEO_CAPTURE_FRAME;
 }

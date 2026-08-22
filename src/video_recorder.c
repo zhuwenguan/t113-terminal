@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 typedef struct {
@@ -23,6 +24,17 @@ typedef struct {
     size_t size;
     size_t capacity;
 } Mp4Buffer;
+
+static uint64_t video_recorder_now_us(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
+        return 0U;
+    }
+    return (uint64_t)now.tv_sec * 1000000ULL +
+           (uint64_t)now.tv_nsec / 1000ULL;
+}
 
 static void mp4_put_u16(Mp4Buffer *buffer, uint16_t value)
 {
@@ -402,30 +414,53 @@ int video_recorder_init(VideoRecorder *recorder, const char *path,
     return 0;
 }
 
-bool video_recorder_write_frame(VideoRecorder *recorder,
-                                const VideoFrame *frame)
+bool video_recorder_write_frame_timed(VideoRecorder *recorder,
+                                      const VideoFrame *frame,
+                                      VideoRecorderFrameTiming *timing)
 {
     const uint8_t *jpeg_data;
     size_t jpeg_size;
     off_t offset;
     VideoRecorderSample sample;
+    uint64_t total_start_us;
+    uint64_t encode_start_us;
+    uint64_t mux_start_us = 0U;
+    bool encoded;
+    bool success = false;
 
+    if (timing != NULL) {
+        memset(timing, 0, sizeof(*timing));
+    }
     if (recorder == NULL || !recorder->initialized || recorder->file == NULL ||
         recorder->index_file == NULL || frame == NULL) {
         return false;
     }
+    total_start_us = video_recorder_now_us();
+    encode_start_us = video_recorder_now_us();
     if (recorder->frame_count >=
-        (uint64_t)VIDEO_RECORDER_MAX_DURATION_SECONDS * recorder->fps ||
-        !jpeg_encoder_encode_rgba(&recorder->encoder, frame, 82, &jpeg_data,
-                                  &jpeg_size) || jpeg_size > UINT32_MAX) {
+        (uint64_t)VIDEO_RECORDER_MAX_DURATION_SECONDS * recorder->fps) {
         recorder->stats.dropped_frames++;
-        return false;
+        goto done;
     }
+    encoded = jpeg_encoder_encode_rgba(&recorder->encoder, frame, 82,
+                                       &jpeg_data, &jpeg_size);
+    if (timing != NULL) {
+        timing->encode_time_us = video_recorder_now_us() - encode_start_us;
+    }
+    if (!encoded || jpeg_size > UINT32_MAX) {
+        recorder->stats.dropped_frames++;
+        goto done;
+    }
+    if (timing != NULL) {
+        timing->encoded_size = jpeg_size;
+        timing->encoded = true;
+    }
+    mux_start_us = video_recorder_now_us();
     offset = ftello(recorder->file);
     if (offset < 0 || fwrite(jpeg_data, 1U, jpeg_size, recorder->file) !=
                           jpeg_size) {
         recorder->stats.dropped_frames++;
-        return false;
+        goto done;
     }
     sample.offset = (uint64_t)offset;
     sample.size = (uint32_t)jpeg_size;
@@ -433,13 +468,30 @@ bool video_recorder_write_frame(VideoRecorder *recorder,
     if (fwrite(&sample, 1U, sizeof(sample), recorder->index_file) !=
         sizeof(sample)) {
         recorder->stats.dropped_frames++;
-        return false;
+        goto done;
     }
     recorder->media_bytes += jpeg_size;
     recorder->frame_count++;
     recorder->stats.encoded_frames++;
     recorder->stats.bytes_written += jpeg_size;
-    return true;
+    success = true;
+    if (timing != NULL) {
+        timing->written = true;
+    }
+done:
+    if (timing != NULL) {
+        if (timing->encoded) {
+            timing->mux_write_time_us = video_recorder_now_us() - mux_start_us;
+        }
+        timing->total_time_us = video_recorder_now_us() - total_start_us;
+    }
+    return success;
+}
+
+bool video_recorder_write_frame(VideoRecorder *recorder,
+                                const VideoFrame *frame)
+{
+    return video_recorder_write_frame_timed(recorder, frame, NULL);
 }
 
 int video_recorder_finalize(VideoRecorder *recorder)

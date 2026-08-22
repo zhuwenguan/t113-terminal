@@ -21,6 +21,15 @@ typedef struct {
 } VideoRecorderStats;
 
 typedef struct {
+    uint64_t encode_time_us;
+    uint64_t mux_write_time_us;
+    uint64_t total_time_us;
+    size_t encoded_size;
+    bool encoded;
+    bool written;
+} VideoRecorderFrameTiming;
+
+typedef struct {
     FILE *file;
     FILE *index_file;
     char path[512];
@@ -38,6 +47,9 @@ typedef struct {
 
 int video_recorder_init(VideoRecorder *recorder, const char *path,
                         uint32_t width, uint32_t height, uint32_t fps);
+bool video_recorder_write_frame_timed(VideoRecorder *recorder,
+                                      const VideoFrame *frame,
+                                      VideoRecorderFrameTiming *timing);
 bool video_recorder_write_frame(VideoRecorder *recorder,
                                 const VideoFrame *frame);
 int video_recorder_finalize(VideoRecorder *recorder);
