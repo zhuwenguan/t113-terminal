@@ -175,16 +175,13 @@ static void unload_api(EncoderApi *api)
 }
 
 static void close_encoder(const EncoderApi *api, CedarVideoEncoder *encoder,
-                          bool input_buffers_allocated, bool initialized)
+                          bool input_buffers_allocated)
 {
     if (encoder == NULL) {
         return;
     }
     if (input_buffers_allocated) {
         (void)api->release_input(encoder);
-    }
-    if (initialized) {
-        (void)api->uninit(encoder);
     }
     api->destroy(encoder);
 }
@@ -483,7 +480,6 @@ static bool test_format(const EncoderApi *api, const RgbFormat *format,
     TimingStats stats = {0};
     ResourceMonitor monitor;
     int quality = TEST_QUALITY;
-    bool initialized = false;
     bool input_buffers_allocated = false;
 
     resource_monitor_init(&monitor, monitor_interval);
@@ -505,10 +501,9 @@ static bool test_format(const EncoderApi *api, const RgbFormat *format,
         api->init(encoder, &config) != 0) {
         fprintf(stderr, "[%s] Init failed for format=%d\n", format->name,
                 format->format);
-        close_encoder(api, encoder, false, false);
+        close_encoder(api, encoder, false);
         return false;
     }
-    initialized = true;
     memset(&buffer_param, 0, sizeof(buffer_param));
     buffer_param.nBufferNum = 1U;
     buffer_param.nSizeY = TEST_FRAME_BYTES;
@@ -519,7 +514,7 @@ static bool test_format(const EncoderApi *api, const RgbFormat *format,
            buffer_param.nSizeC);
     if (api->alloc_input(encoder, &buffer_param) != 0) {
         fprintf(stderr, "[%s] AllocInputBuffer failed\n", format->name);
-        close_encoder(api, encoder, false, initialized);
+        close_encoder(api, encoder, false);
         return false;
     }
     input_buffers_allocated = true;
@@ -527,7 +522,7 @@ static bool test_format(const EncoderApi *api, const RgbFormat *format,
     if (!encode_frames(api, encoder, format, frames, output_prefix, &stats,
                        &monitor)) {
         resource_monitor_finish(&monitor, stats.frames);
-        close_encoder(api, encoder, input_buffers_allocated, initialized);
+        close_encoder(api, encoder, input_buffers_allocated);
         return false;
     }
     printf("[%s] PASS: frames=%" PRIu64 " avg_prepare=%.2fms "
@@ -548,7 +543,7 @@ static bool test_format(const EncoderApi *api, const RgbFormat *format,
            stats.max_acquire_us / 1000.0, stats.max_release_us / 1000.0,
            stats.max_total_us / 1000.0);
     resource_monitor_finish(&monitor, stats.frames);
-    close_encoder(api, encoder, input_buffers_allocated, initialized);
+    close_encoder(api, encoder, input_buffers_allocated);
     return true;
 }
 

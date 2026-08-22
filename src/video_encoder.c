@@ -226,8 +226,8 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
         errno = EIO;
         goto fail;
     }
-    /* VideoEncUnInit is required even when a later input allocation step
-     * fails, so mark the hardware session initialized immediately. */
+    /* Keep the hardware session marked active so VideoEncDestroy can perform
+     * the vendor-side uninitialization if a later allocation step fails. */
     encoder->initialized = true;
     memset(&buffer_param, 0, sizeof(buffer_param));
     buffer_param.nBufferNum = 1U;
@@ -272,10 +272,6 @@ void video_encoder_close(VideoEncoder *encoder)
     if (handle != NULL && encoder->input_buffers_allocated &&
         encoder->api.release_input != NULL) {
         (void)encoder->api.release_input(handle);
-    }
-    if (handle != NULL && encoder->initialized &&
-        encoder->api.uninit != NULL) {
-        (void)encoder->api.uninit(handle);
     }
     if (handle != NULL && encoder->api.destroy != NULL) {
         encoder->api.destroy(handle);

@@ -134,16 +134,13 @@ static void unload_api(EncoderApi *api)
 }
 
 static void close_encoder(EncoderApi *api, CedarVideoEncoder *encoder,
-                          bool input_buffers_allocated, bool initialized)
+                          bool input_buffers_allocated)
 {
     if (encoder == NULL) {
         return;
     }
     if (input_buffers_allocated) {
         (void)api->release_input(encoder);
-    }
-    if (initialized) {
-        (void)api->uninit(encoder);
     }
     api->destroy(encoder);
 }
@@ -367,7 +364,6 @@ int main(int argc, char **argv)
     unsigned int frame;
     int quality = TEST_QUALITY;
     bool success = false;
-    bool initialized = false;
     bool input_buffers_allocated = false;
     unsigned int monitor_interval = 100U;
     ResourceMonitor monitor;
@@ -443,7 +439,6 @@ int main(int argc, char **argv)
         fprintf(stderr, "JPEG encoder init failed\n");
         goto cleanup;
     }
-    initialized = true;
     memset(&buffer_param, 0, sizeof(buffer_param));
     buffer_param.nBufferNum = 1U;
     buffer_param.nSizeY = TEST_STRIDE * TEST_ALIGNED_HEIGHT;
@@ -530,7 +525,7 @@ cleanup:
     free(c);
     free(y);
     if (encoder != NULL) {
-        close_encoder(&api, encoder, input_buffers_allocated, initialized);
+        close_encoder(&api, encoder, input_buffers_allocated);
     }
     unload_api(&api);
     return success ? EXIT_SUCCESS : EXIT_FAILURE;
