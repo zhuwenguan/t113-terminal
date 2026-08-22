@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "cedar_vencoder_abi.h"
+#include "resource_monitor.h"
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -28,7 +29,9 @@ typedef struct {
     CedarVencCreate create;
     CedarVencDestroy destroy;
     CedarVencInit init;
+    CedarVideoEncUnInit uninit;
     CedarVencAllocInputBuffer alloc_input;
+    CedarReleaseAllocInputBuffer release_input;
     CedarVencGetInputBuffer get_input;
     CedarVencFlushInputBuffer flush_input;
     CedarVencReturnInputBuffer return_input;
@@ -103,7 +106,9 @@ static bool load_api(EncoderApi *api)
     LOAD(create, "VideoEncCreate");
     LOAD(destroy, "VideoEncDestroy");
     LOAD(init, "VideoEncInit");
+    LOAD(uninit, "VideoEncUnInit");
     LOAD(alloc_input, "AllocInputBuffer");
+    LOAD(release_input, "ReleaseAllocInputBuffer");
     LOAD(get_input, "GetOneAllocInputBuffer");
     LOAD(flush_input, "FlushCacheAllocInputBuffer");
     LOAD(return_input, "ReturnOneAllocInputBuffer");
@@ -126,6 +131,21 @@ static void unload_api(EncoderApi *api)
         dlclose(api->library);
     }
     memset(api, 0, sizeof(*api));
+}
+
+static void close_encoder(EncoderApi *api, CedarVideoEncoder *encoder,
+                          bool input_buffers_allocated, bool initialized)
+{
+    if (encoder == NULL) {
+        return;
+    }
+    if (input_buffers_allocated) {
+        (void)api->release_input(encoder);
+    }
+    if (initialized) {
+        (void)api->uninit(encoder);
+    }
+    api->destroy(encoder);
 }
 
 static void fill_gray_yuv(uint8_t *y, uint8_t *c)
@@ -193,25 +213,20 @@ static bool write_file(const char *path, const uint8_t *data, size_t size)
 }
 
 static bool encode_one(EncoderApi *api, CedarVideoEncoder *encoder,
-                       uint8_t *y, uint8_t *c, const char *output_path,
+                       uint8_t *y, uint8_t *c, uint8_t *bitmap,
+                       const char *output_path,
                        uint64_t *overlay_update_us, TimingStats *timing,
                        unsigned int frame)
 {
     CedarVencInputBuffer input;
     CedarVencOutputBuffer output;
     CedarVencOverlayInfo overlay;
-    uint8_t *bitmap;
     uint64_t start;
     uint64_t stage;
     size_t output_size;
     int set_overlay_result;
     bool output_acquired = false;
 
-    bitmap = aligned_alloc(16U, TEST_OVERLAY_WIDTH * TEST_OVERLAY_HEIGHT * 4U);
-    if (bitmap == NULL) {
-        fprintf(stderr, "overlay bitmap allocation failed\n");
-        return false;
-    }
     start = now_us();
     fill_overlay(bitmap, frame);
     prepare_overlay(&overlay, bitmap, frame);
@@ -223,26 +238,25 @@ static bool encode_one(EncoderApi *api, CedarVideoEncoder *encoder,
                 "errno=%d (%s)\n", set_overlay_result,
                 CEDAR_VENC_INDEX_PARAM_SET_OVERLAY, frame, errno,
                 strerror(errno));
-        free(bitmap);
         return false;
     }
     *overlay_update_us = now_us() - start;
-    printf("overlay[%u]: enable=1 index=0x%x type=%d format=ARGB8888 "
-           "bitmap=%ux%u stride=%u bytes=%u x=%u y=%u alpha=128 "
-           "blocks=%u buffer=%p fd=-1 physical=unknown update=%" PRIu64
-           "us\n", frame, CEDAR_VENC_INDEX_PARAM_SET_OVERLAY,
-           overlay.overlay_header_list[0].overlay_type,
-           TEST_OVERLAY_WIDTH, TEST_OVERLAY_HEIGHT, TEST_OVERLAY_WIDTH * 4U,
-           overlay.overlay_header_list[0].bitmap_size,
-           overlay.overlay_header_list[0].start_mb_x * 16U,
-           overlay.overlay_header_list[0].start_mb_y * 16U,
-           overlay.blk_num, (void *)bitmap, *overlay_update_us);
+    if (frame == 0U) {
+        printf("overlay: persistent bitmap=%p fd=-1 physical=unknown "
+               "index=0x%x format=ARGB8888 bitmap=%ux%u bytes=%u\n",
+               (void *)bitmap, CEDAR_VENC_INDEX_PARAM_SET_OVERLAY,
+               TEST_OVERLAY_WIDTH, TEST_OVERLAY_HEIGHT,
+               overlay.overlay_header_list[0].bitmap_size);
+    }
 
     memset(&input, 0, sizeof(input));
-    if (api->get_input(encoder, &input) != 0 || input.pAddrVirY == NULL ||
-        input.pAddrVirC == NULL) {
+    if (api->get_input(encoder, &input) != 0) {
         fprintf(stderr, "GetOneAllocInputBuffer failed at frame %u\n", frame);
-        free(bitmap);
+        return false;
+    }
+    if (input.pAddrVirY == NULL || input.pAddrVirC == NULL) {
+        (void)api->return_input(encoder, &input);
+        fprintf(stderr, "invalid input buffer at frame %u\n", frame);
         return false;
     }
     memcpy(input.pAddrVirY, y, TEST_STRIDE * TEST_ALIGNED_HEIGHT);
@@ -256,7 +270,6 @@ static bool encode_one(EncoderApi *api, CedarVideoEncoder *encoder,
         api->add_input(encoder, &input) != 0) {
         (void)api->return_input(encoder, &input);
         fprintf(stderr, "submit failed at frame %u\n", frame);
-        free(bitmap);
         return false;
     }
     timing->submit_us = now_us() - stage;
@@ -265,7 +278,6 @@ static bool encode_one(EncoderApi *api, CedarVideoEncoder *encoder,
         (void)api->used_input(encoder, &input);
         (void)api->return_input(encoder, &input);
         fprintf(stderr, "VideoEncodeOneFrame failed at frame %u\n", frame);
-        free(bitmap);
         return false;
     }
     timing->hardware_encode_us = now_us() - stage;
@@ -274,13 +286,15 @@ static bool encode_one(EncoderApi *api, CedarVideoEncoder *encoder,
 
     memset(&output, 0, sizeof(output));
     stage = now_us();
-    if (api->get_output(encoder, &output) != 0 || output.pData0 == NULL ||
-        output.nSize0 == 0U) {
+    if (api->get_output(encoder, &output) != 0) {
         fprintf(stderr, "GetOneBitstreamFrame failed at frame %u\n", frame);
-        free(bitmap);
         return false;
     }
     output_acquired = true;
+    if (output.pData0 == NULL || output.nSize0 == 0U) {
+        fprintf(stderr, "invalid bitstream at frame %u\n", frame);
+        goto fail_output;
+    }
     timing->acquire_us = now_us() - stage;
     output_size = (size_t)output.nSize0 + output.nSize1;
     if (output.nSize1 > 0U && output.pData1 == NULL) {
@@ -307,29 +321,33 @@ static bool encode_one(EncoderApi *api, CedarVideoEncoder *encoder,
     }
     timing->output_bytes = output_size;
     stage = now_us();
-    api->free_output(encoder, &output);
+    if (api->free_output(encoder, &output) != 0) {
+        fprintf(stderr, "FreeOneBitStreamFrame failed at frame %u\n", frame);
+        return false;
+    }
     timing->release_us = now_us() - stage;
     timing->total_us = now_us() - start;
-    printf("frame %u: JPEG=%zu bytes submit=%.2fms encode=%.2fms "
-           "acquire=%.2fms release=%.2fms total=%.2fms\n", frame,
-           output_size, timing->submit_us / 1000.0,
-           timing->hardware_encode_us / 1000.0,
-           timing->acquire_us / 1000.0, timing->release_us / 1000.0,
-           timing->total_us / 1000.0);
-    free(bitmap);
+    if (frame < 2U || frame % 100U == 0U) {
+        printf("frame %u: JPEG=%zu bytes submit=%.2fms encode=%.2fms "
+               "acquire=%.2fms release=%.2fms total=%.2fms\n", frame,
+               output_size, timing->submit_us / 1000.0,
+               timing->hardware_encode_us / 1000.0,
+               timing->acquire_us / 1000.0, timing->release_us / 1000.0,
+               timing->total_us / 1000.0);
+    }
     return true;
 
 fail_output:
     if (output_acquired) {
         (void)api->free_output(encoder, &output);
     }
-    free(bitmap);
     return false;
 }
 
 static void print_usage(const char *program)
 {
-    printf("Usage: %s [--output FILE] [--frames N]\n", program);
+    printf("Usage: %s [--output FILE] [--frames N] [--monitor-interval N]\n",
+           program);
     printf("  default: one 1280x720 JPEG at /tmp/overlay_test.jpg\n");
     printf("  frames > 1 writes FILE.first.jpg and FILE.last.jpg\n");
 }
@@ -345,9 +363,14 @@ int main(int argc, char **argv)
     CedarVencInputBuffer input;
     uint8_t *y = NULL;
     uint8_t *c = NULL;
+    uint8_t *bitmap = NULL;
     unsigned int frame;
     int quality = TEST_QUALITY;
     bool success = false;
+    bool initialized = false;
+    bool input_buffers_allocated = false;
+    unsigned int monitor_interval = 100U;
+    ResourceMonitor monitor;
     TimingStats totals = {0};
     uint64_t max_overlay_update_us = 0U;
     uint64_t max_total_us = 0U;
@@ -369,12 +392,29 @@ int main(int argc, char **argv)
             }
             continue;
         }
+        if (strcmp(argv[index], "--monitor-interval") == 0 &&
+            index + 1 < argc) {
+            char *end = NULL;
+            unsigned long value;
+
+            errno = 0;
+            value = strtoul(argv[++index], &end, 10);
+            if (errno != 0 || end == argv[index] || *end != '\0' ||
+                value > UINT32_MAX) {
+                fprintf(stderr, "invalid --monitor-interval value\n");
+                return EXIT_FAILURE;
+            }
+            monitor_interval = (unsigned int)value;
+            continue;
+        }
         print_usage(argv[0]);
         return EXIT_FAILURE;
     }
 
     printf("vencoder overlay test: %ux%u input=YUV420P stride=%u "
-           "frames=%u\n", TEST_WIDTH, TEST_HEIGHT, TEST_STRIDE, frames);
+           "frames=%u monitor_interval=%u\n", TEST_WIDTH, TEST_HEIGHT,
+           TEST_STRIDE, frames, monitor_interval);
+    resource_monitor_init(&monitor, monitor_interval);
     printf("overlay ABI: index=0x%x info=%zu header=%zu header_ptr_offset=%zu "
            "bitmap_offset=%zu max_blocks=%u\n",
            CEDAR_VENC_INDEX_PARAM_SET_OVERLAY, sizeof(CedarVencOverlayInfo),
@@ -403,6 +443,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "JPEG encoder init failed\n");
         goto cleanup;
     }
+    initialized = true;
     memset(&buffer_param, 0, sizeof(buffer_param));
     buffer_param.nBufferNum = 1U;
     buffer_param.nSizeY = TEST_STRIDE * TEST_ALIGNED_HEIGHT;
@@ -411,15 +452,21 @@ int main(int argc, char **argv)
         fprintf(stderr, "AllocInputBuffer failed\n");
         goto cleanup;
     }
+    input_buffers_allocated = true;
     memset(&input, 0, sizeof(input));
-    if (api.get_input(encoder, &input) != 0 || input.pAddrVirY == NULL ||
-        input.pAddrVirC == NULL) {
+    if (api.get_input(encoder, &input) != 0) {
         fprintf(stderr, "initial GetOneAllocInputBuffer failed\n");
+        goto cleanup;
+    }
+    if (input.pAddrVirY == NULL || input.pAddrVirC == NULL) {
+        (void)api.return_input(encoder, &input);
+        fprintf(stderr, "initial input buffer is invalid\n");
         goto cleanup;
     }
     y = malloc(TEST_STRIDE * TEST_ALIGNED_HEIGHT);
     c = malloc(TEST_STRIDE * TEST_ALIGNED_HEIGHT / 2U);
-    if (y == NULL || c == NULL) {
+    bitmap = aligned_alloc(16U, TEST_OVERLAY_WIDTH * TEST_OVERLAY_HEIGHT * 4U);
+    if (y == NULL || c == NULL || bitmap == NULL) {
         fprintf(stderr, "test buffer allocation failed\n");
         (void)api.return_input(encoder, &input);
         goto cleanup;
@@ -446,8 +493,8 @@ int main(int argc, char **argv)
                 frame_path = path;
             }
         }
-        if (!encode_one(&api, encoder, y, c, frame_path, &overlay_update_us,
-                        &timing, frame)) {
+        if (!encode_one(&api, encoder, y, c, bitmap, frame_path,
+                        &overlay_update_us, &timing, frame)) {
             goto cleanup;
         }
         totals.overlay_update_us += overlay_update_us;
@@ -460,6 +507,7 @@ int main(int argc, char **argv)
         max_overlay_update_us = max_u64(max_overlay_update_us,
                                         overlay_update_us);
         max_total_us = max_u64(max_total_us, timing.total_us);
+        resource_monitor_sample(&monitor, (uint64_t)frame + 1U, false);
     }
     printf("PASS: %u JPEG frames, overlay set succeeded for every frame\n",
            frames);
@@ -477,10 +525,12 @@ int main(int argc, char **argv)
     success = true;
 
 cleanup:
+    resource_monitor_finish(&monitor, success ? frames : 0U);
+    free(bitmap);
     free(c);
     free(y);
     if (encoder != NULL) {
-        api.destroy(encoder);
+        close_encoder(&api, encoder, input_buffers_allocated, initialized);
     }
     unload_api(&api);
     return success ? EXIT_SUCCESS : EXIT_FAILURE;

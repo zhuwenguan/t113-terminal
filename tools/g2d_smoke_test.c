@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include "g2d_driver.h"
+#include "resource_monitor.h"
 
 #define G2D_DEVICE "/dev/g2d"
 #define AWION_LIBRARY "libawion.so"
@@ -20,6 +21,7 @@
 #define DEFAULT_HEIGHT 720U
 #define DEFAULT_ITERATIONS 4096U
 #define VERIFY_INTERVAL 512U
+#define DEFAULT_MONITOR_INTERVAL 100U
 
 typedef enum {
     SMOKE_OPERATION_COPY = 0,
@@ -28,7 +30,8 @@ typedef enum {
     SMOKE_OPERATION_ARGB_TO_NV12,
     SMOKE_OPERATION_ARGB_TO_NV21,
     SMOKE_OPERATION_BLEND,
-    SMOKE_OPERATION_YUV_BLEND
+    SMOKE_OPERATION_YUV_BLEND,
+    SMOKE_OPERATION_YUV_TO_ARGB_BLEND
 } SmokeOperation;
 
 typedef int (*IonOpenFn)(void);
@@ -50,6 +53,7 @@ typedef struct {
 
 typedef struct {
     unsigned int iterations;
+    unsigned int monitor_interval;
     const char *output_path;
     SmokeOperation operation;
 } SmokeOptions;
@@ -117,12 +121,15 @@ static void ion_unload(IonApi *api)
 
 static void print_usage(const char *program)
 {
-    printf("Usage: %s [--operation OP] [--iterations N] [--output FILE]\n",
+    printf("Usage: %s [--operation OP] [--iterations N] [--monitor-interval N] "
+           "[--output FILE]\n",
            program);
     printf("  OP: copy, yuv-to-argb, argb-to-yuv, argb-to-nv12, "
-           "argb-to-nv21, blend, yuv-blend.\n");
+           "argb-to-nv21, blend, yuv-blend, yuv-to-argb-blend.\n");
     printf("  copy runs ARGB8888 dma-buf -> dma-buf G2D BITBLT_H.\n");
-    printf("  Defaults: 1280x720, %u iterations.\n", DEFAULT_ITERATIONS);
+    printf("  yuv-to-argb-blend runs both G2D stages with persistent buffers.\n");
+    printf("  Defaults: 1280x720, %u iterations, monitor every %u frames.\n",
+           DEFAULT_ITERATIONS, DEFAULT_MONITOR_INTERVAL);
 }
 
 static const char *operation_name(SmokeOperation operation)
@@ -142,6 +149,8 @@ static const char *operation_name(SmokeOperation operation)
         return "blend";
     case SMOKE_OPERATION_YUV_BLEND:
         return "yuv-blend";
+    case SMOKE_OPERATION_YUV_TO_ARGB_BLEND:
+        return "yuv-to-argb-blend";
     default:
         return "unknown";
     }
@@ -163,6 +172,8 @@ static bool parse_operation(const char *value, SmokeOperation *operation)
         *operation = SMOKE_OPERATION_BLEND;
     } else if (strcmp(value, "yuv-blend") == 0) {
         *operation = SMOKE_OPERATION_YUV_BLEND;
+    } else if (strcmp(value, "yuv-to-argb-blend") == 0) {
+        *operation = SMOKE_OPERATION_YUV_TO_ARGB_BLEND;
     } else {
         return false;
     }
@@ -174,6 +185,7 @@ static bool parse_options(int argc, char **argv, SmokeOptions *options)
     int index;
 
     options->iterations = DEFAULT_ITERATIONS;
+    options->monitor_interval = DEFAULT_MONITOR_INTERVAL;
     options->output_path = NULL;
     options->operation = SMOKE_OPERATION_COPY;
     for (index = 1; index < argc; ++index) {
@@ -202,6 +214,21 @@ static bool parse_options(int argc, char **argv, SmokeOptions *options)
                         argv[index]);
                 return false;
             }
+            continue;
+        }
+        if (strcmp(argv[index], "--monitor-interval") == 0 &&
+            index + 1 < argc) {
+            char *end = NULL;
+            unsigned long value;
+
+            errno = 0;
+            value = strtoul(argv[++index], &end, 10);
+            if (errno != 0 || end == argv[index] || *end != '\0' ||
+                value > UINT32_MAX) {
+                fprintf(stderr, "invalid --monitor-interval value\n");
+                return false;
+            }
+            options->monitor_interval = (unsigned int)value;
             continue;
         }
         if (strcmp(argv[index], "--output") == 0 && index + 1 < argc) {
@@ -522,12 +549,14 @@ int main(int argc, char **argv)
     IonBuffer source;
     IonBuffer overlay;
     IonBuffer destination;
+    IonBuffer intermediate;
     g2d_fmt_enh source_format = G2D_FORMAT_ARGB8888;
     g2d_fmt_enh overlay_format = G2D_FORMAT_ARGB8888;
     g2d_fmt_enh destination_format = G2D_FORMAT_ARGB8888;
     int g2d_fd = -1;
     bool ion_opened = false;
     bool success = false;
+    ResourceMonitor monitor;
     unsigned int iteration;
     size_t source_size;
     size_t overlay_size;
@@ -536,6 +565,7 @@ int main(int argc, char **argv)
     ion_buffer_reset(&source);
     ion_buffer_reset(&overlay);
     ion_buffer_reset(&destination);
+    ion_buffer_reset(&intermediate);
 
     if (!parse_options(argc, argv, &options)) {
         print_usage(argv[0]);
@@ -558,12 +588,17 @@ int main(int argc, char **argv)
         source_format = G2D_FORMAT_YUV420_PLANAR;
         destination_format = G2D_FORMAT_YUV420_PLANAR;
         break;
+    case SMOKE_OPERATION_YUV_TO_ARGB_BLEND:
+        source_format = G2D_FORMAT_YUV420_PLANAR;
+        destination_format = G2D_FORMAT_ARGB8888;
+        break;
     default:
         break;
     }
     source_size = image_size_for_format(source_format, width, height);
     overlay_size = image_size_for_format(overlay_format, width, height);
     destination_size = image_size_for_format(destination_format, width, height);
+    resource_monitor_init(&monitor, options.monitor_interval);
     printf("g2d smoke: operation=%s %ux%u, iterations=%u\n",
            operation_name(options.operation), width, height,
            options.iterations);
@@ -587,14 +622,20 @@ int main(int argc, char **argv)
 
     if (!ion_buffer_alloc(&ion, &source, source_size) ||
         ((options.operation == SMOKE_OPERATION_BLEND ||
-          options.operation == SMOKE_OPERATION_YUV_BLEND) &&
+          options.operation == SMOKE_OPERATION_YUV_BLEND ||
+          options.operation == SMOKE_OPERATION_YUV_TO_ARGB_BLEND) &&
          !ion_buffer_alloc(&ion, &overlay, overlay_size)) ||
+        (options.operation == SMOKE_OPERATION_YUV_TO_ARGB_BLEND &&
+         !ion_buffer_alloc(&ion, &intermediate,
+                           image_size_for_format(G2D_FORMAT_ARGB8888,
+                                                 width, height))) ||
         !ion_buffer_alloc(&ion, &destination, destination_size)) {
         fprintf(stderr, "libawion allocation failed\n");
         goto cleanup;
     }
 
-    if (options.operation == SMOKE_OPERATION_YUV_BLEND) {
+    if (options.operation == SMOKE_OPERATION_YUV_BLEND ||
+        options.operation == SMOKE_OPERATION_YUV_TO_ARGB_BLEND) {
         fill_yuv420_pattern((uint8_t *)source.memory, width, height);
         fill_blend_foreground((uint32_t *)overlay.memory, width, height);
     } else if (options.operation == SMOKE_OPERATION_BLEND) {
@@ -606,23 +647,37 @@ int main(int argc, char **argv)
         fill_pattern((uint32_t *)source.memory, width, height);
     }
     memset(destination.memory, 0, destination_size);
+    if (intermediate.memory != NULL) {
+        memset(intermediate.memory, 0, intermediate.size);
+    }
     flush_buffer(&ion, &source);
     flush_buffer(&ion, &overlay);
     flush_buffer(&ion, &destination);
+    flush_buffer(&ion, &intermediate);
 
     g2d_fd = open(G2D_DEVICE, O_RDWR | O_CLOEXEC);
     if (g2d_fd < 0) {
         fprintf(stderr, "cannot open %s: %s\n", G2D_DEVICE, strerror(errno));
         goto cleanup;
     }
-    printf("buffers: src_fd=%d dst_fd=%d g2d_fd=%d\n",
-           source.fd, destination.fd, g2d_fd);
+    printf("buffers: src_fd=%d overlay_fd=%d intermediate_fd=%d "
+           "dst_fd=%d g2d_fd=%d\n", source.fd, overlay.fd,
+           intermediate.fd, destination.fd, g2d_fd);
+    resource_monitor_sample(&monitor, 0U, true);
 
     for (iteration = 0U; iteration < options.iterations; ++iteration) {
         bool operation_ok;
 
-        if (options.operation == SMOKE_OPERATION_BLEND ||
-            options.operation == SMOKE_OPERATION_YUV_BLEND) {
+        if (options.operation == SMOKE_OPERATION_YUV_TO_ARGB_BLEND) {
+            operation_ok = run_bitblt(g2d_fd, source_format, source.fd,
+                                      G2D_FORMAT_ARGB8888, intermediate.fd,
+                                      width, height, iteration + 1U) &&
+                           run_blend(g2d_fd, G2D_FORMAT_ARGB8888,
+                                     intermediate.fd, overlay.fd,
+                                     destination_format, destination.fd,
+                                     width, height, iteration + 1U);
+        } else if (options.operation == SMOKE_OPERATION_BLEND ||
+                   options.operation == SMOKE_OPERATION_YUV_BLEND) {
             operation_ok = run_blend(g2d_fd, source_format, source.fd,
                                      overlay.fd, destination_format,
                                      destination.fd, width, height,
@@ -636,6 +691,7 @@ int main(int argc, char **argv)
             goto cleanup;
         }
         flush_buffer(&ion, &destination);
+        flush_buffer(&ion, &intermediate);
 
         if (iteration == 0U ||
             iteration + 1U == options.iterations ||
@@ -658,6 +714,7 @@ int main(int argc, char **argv)
                    checksum32((const uint8_t *)destination.memory,
                               destination.size));
         }
+        resource_monitor_sample(&monitor, (uint64_t)iteration + 1U, false);
     }
 
     if (!write_output(options.output_path, (const uint8_t *)destination.memory,
@@ -666,6 +723,7 @@ int main(int argc, char **argv)
     }
     printf("PASS: %u %s operations\n", options.iterations,
            operation_name(options.operation));
+    resource_monitor_finish(&monitor, options.iterations);
     success = true;
 
 cleanup:
@@ -673,6 +731,7 @@ cleanup:
         close(g2d_fd);
     }
     ion_buffer_free(&ion, &destination);
+    ion_buffer_free(&ion, &intermediate);
     ion_buffer_free(&ion, &overlay);
     ion_buffer_free(&ion, &source);
     if (ion_opened) {

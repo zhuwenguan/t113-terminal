@@ -87,3 +87,40 @@ Phase 4 已移除录像模式的软件 JPEG encode 约 180 ms 瓶颈，当前主
 CPU YUV HUD 合成。G2D 尚未重新接入：板端没有可核对的 KickPi kernel/BSP
 G2D UAPI 源码，按最接近的厂商头文件调用曾触发 `dma_buf_get failed` 和
 kernel Oops，因此该阶段保持隔离并等待匹配的 BSP UAPI。
+
+## 硬件链长期运行资源诊断
+
+独立测试工具默认每 100 帧读取一次 `/proc/meminfo`、进程 RSS、fd 数量、
+`dma_buf/bufinfo` 和 KickPi ION debugfs；退出时打印资源斜率。`0` 可关闭
+周期采样，但启动和退出快照仍会保留。
+
+部署后按以下顺序运行，先完成 2000 帧；若 `CmaFree` 持续单向下降，可提前
+停止并保留输出：
+
+```sh
+# A: G2D YUV -> ARGB
+/mnt/UDISK/g2d_smoke_test --operation yuv-to-argb \
+  --iterations 2000 --monitor-interval 100
+
+# B: G2D ARGB BLD_H
+/mnt/UDISK/g2d_smoke_test --operation blend \
+  --iterations 2000 --monitor-interval 100
+
+# C: Cedar ARGB -> JPEG，ARGB 输入 buffer 只在初始化时分配
+/mnt/UDISK/vencoder_rgb_test --format ARGB \
+  --frames 5000 --monitor-interval 100
+
+# D: G2D YUV -> ARGB -> G2D BLD_H
+/mnt/UDISK/g2d_smoke_test --operation yuv-to-argb-blend \
+  --iterations 2000 --monitor-interval 100
+
+# Cedar overlay 变更的补充长测
+/mnt/UDISK/vencoder_overlay_test --frames 2000 --monitor-interval 100
+```
+
+`resource slope` 中 `cma_free_loss_kb_per_frame` 为正表示连续内存下降；
+同时 `dma_buf_count_delta` 或 `fd_delta` 上升优先检查用户态生命周期。若
+fd、dma-buf 和 ION allocation 均稳定而 CmaFree 仍固定下降，才进入 G2D
+内核调用链审查。当前仓库没有 `video_argb_pipe` 的独立 E/F 桥接工具，
+因此不把生产视频线程接入本轮诊断；E/F 应继续使用上次已验证的离线链程序，
+并带上相同的监控快照。

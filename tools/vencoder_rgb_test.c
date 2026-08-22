@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "cedar_vencoder_abi.h"
+#include "resource_monitor.h"
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -30,7 +31,9 @@ typedef struct {
     CedarVencCreate create;
     CedarVencDestroy destroy;
     CedarVencInit init;
+    CedarVideoEncUnInit uninit;
     CedarVencAllocInputBuffer alloc_input;
+    CedarReleaseAllocInputBuffer release_input;
     CedarVencGetInputBuffer get_input;
     CedarVencFlushInputBuffer flush_input;
     CedarVencReturnInputBuffer return_input;
@@ -66,6 +69,19 @@ static const RgbFormat RGB_FORMATS[] = {
     {CEDAR_VENC_PIXEL_ABGR, "ABGR"},
     {CEDAR_VENC_PIXEL_BGRA, "BGRA"},
 };
+
+static const RgbFormat *find_rgb_format(const char *name)
+{
+    unsigned int index;
+
+    for (index = 0U; index < sizeof(RGB_FORMATS) / sizeof(RGB_FORMATS[0]);
+         ++index) {
+        if (strcmp(name, RGB_FORMATS[index].name) == 0) {
+            return &RGB_FORMATS[index];
+        }
+    }
+    return NULL;
+}
 
 static uint64_t now_us(void)
 {
@@ -128,7 +144,9 @@ static bool load_api(EncoderApi *api)
     LOAD(create, "VideoEncCreate");
     LOAD(destroy, "VideoEncDestroy");
     LOAD(init, "VideoEncInit");
+    LOAD(uninit, "VideoEncUnInit");
     LOAD(alloc_input, "AllocInputBuffer");
+    LOAD(release_input, "ReleaseAllocInputBuffer");
     LOAD(get_input, "GetOneAllocInputBuffer");
     LOAD(flush_input, "FlushCacheAllocInputBuffer");
     LOAD(return_input, "ReturnOneAllocInputBuffer");
@@ -154,6 +172,21 @@ static void unload_api(EncoderApi *api)
         dlclose(api->library);
     }
     memset(api, 0, sizeof(*api));
+}
+
+static void close_encoder(const EncoderApi *api, CedarVideoEncoder *encoder,
+                          bool input_buffers_allocated, bool initialized)
+{
+    if (encoder == NULL) {
+        return;
+    }
+    if (input_buffers_allocated) {
+        (void)api->release_input(encoder);
+    }
+    if (initialized) {
+        (void)api->uninit(encoder);
+    }
+    api->destroy(encoder);
 }
 
 static void put_pixel(uint8_t *pixel, CedarVencPixelFormat format,
@@ -282,7 +315,8 @@ static void query_color_format(const EncoderApi *api,
 
 static bool encode_frames(const EncoderApi *api, CedarVideoEncoder *encoder,
                           const RgbFormat *format, unsigned int frames,
-                          const char *output_prefix, TimingStats *stats)
+                          const char *output_prefix, TimingStats *stats,
+                          ResourceMonitor *monitor)
 {
     unsigned int frame;
     bool success = true;
@@ -303,8 +337,14 @@ static bool encode_frames(const EncoderApi *api, CedarVideoEncoder *encoder,
         bool output_acquired = false;
 
         memset(&input, 0, sizeof(input));
-        if (api->get_input(encoder, &input) != 0 || input.pAddrVirY == NULL) {
+        if (api->get_input(encoder, &input) != 0) {
             fprintf(stderr, "[%s] input buffer unavailable at frame %u\n",
+                    format->name, frame);
+            return false;
+        }
+        if (input.pAddrVirY == NULL) {
+            (void)api->return_input(encoder, &input);
+            fprintf(stderr, "[%s] input buffer is invalid at frame %u\n",
                     format->name, frame);
             return false;
         }
@@ -348,13 +388,22 @@ static bool encode_frames(const EncoderApi *api, CedarVideoEncoder *encoder,
 
         memset(&output, 0, sizeof(output));
         stage = now_us();
-        if (api->get_output(encoder, &output) != 0 || output.pData0 == NULL ||
-            output.nSize0 == 0U) {
+        if (api->get_output(encoder, &output) != 0) {
             fprintf(stderr, "[%s] output unavailable at frame %u\n",
                     format->name, frame);
             return false;
         }
         output_acquired = true;
+        if (output.pData0 == NULL || output.nSize0 == 0U) {
+            fprintf(stderr, "[%s] invalid output at frame %u\n",
+                    format->name, frame);
+            goto frame_fail;
+        }
+        if (output.nSize1 > 0U && output.pData1 == NULL) {
+            fprintf(stderr, "[%s] invalid second output plane at frame %u\n",
+                    format->name, frame);
+            goto frame_fail;
+        }
         acquire_us = now_us() - stage;
         stats->acquire_us += acquire_us;
         stats->output_bytes += (uint64_t)output.nSize0 + output.nSize1;
@@ -373,7 +422,11 @@ static bool encode_frames(const EncoderApi *api, CedarVideoEncoder *encoder,
             }
         }
         stage = now_us();
-        (void)api->free_output(encoder, &output);
+        if (api->free_output(encoder, &output) != 0) {
+            fprintf(stderr, "[%s] output release failed at frame %u\n",
+                    format->name, frame);
+            return false;
+        }
         output_acquired = false;
         release_us = now_us() - stage;
         stats->release_us += release_us;
@@ -407,6 +460,7 @@ static bool encode_frames(const EncoderApi *api, CedarVideoEncoder *encoder,
                    hardware_encode_us / 1000.0, acquire_us / 1000.0,
                    release_us / 1000.0, total_us / 1000.0);
         }
+        resource_monitor_sample(monitor, (uint64_t)frame + 1U, false);
         continue;
 
 frame_fail:
@@ -420,13 +474,19 @@ frame_fail:
 }
 
 static bool test_format(const EncoderApi *api, const RgbFormat *format,
-                        unsigned int frames, const char *output_prefix)
+                        unsigned int frames, const char *output_prefix,
+                        unsigned int monitor_interval)
 {
     CedarVideoEncoder *encoder;
     CedarVencBaseConfig config;
     CedarVencAllocateBufferParam buffer_param;
     TimingStats stats = {0};
+    ResourceMonitor monitor;
     int quality = TEST_QUALITY;
+    bool initialized = false;
+    bool input_buffers_allocated = false;
+
+    resource_monitor_init(&monitor, monitor_interval);
 
     encoder = api->create(CEDAR_VENC_CODEC_JPEG);
     if (encoder == NULL) {
@@ -445,9 +505,10 @@ static bool test_format(const EncoderApi *api, const RgbFormat *format,
         api->init(encoder, &config) != 0) {
         fprintf(stderr, "[%s] Init failed for format=%d\n", format->name,
                 format->format);
-        api->destroy(encoder);
+        close_encoder(api, encoder, false, false);
         return false;
     }
+    initialized = true;
     memset(&buffer_param, 0, sizeof(buffer_param));
     buffer_param.nBufferNum = 1U;
     buffer_param.nSizeY = TEST_FRAME_BYTES;
@@ -458,11 +519,15 @@ static bool test_format(const EncoderApi *api, const RgbFormat *format,
            buffer_param.nSizeC);
     if (api->alloc_input(encoder, &buffer_param) != 0) {
         fprintf(stderr, "[%s] AllocInputBuffer failed\n", format->name);
-        api->destroy(encoder);
+        close_encoder(api, encoder, false, initialized);
         return false;
     }
-    if (!encode_frames(api, encoder, format, frames, output_prefix, &stats)) {
-        api->destroy(encoder);
+    input_buffers_allocated = true;
+    resource_monitor_sample(&monitor, 0U, true);
+    if (!encode_frames(api, encoder, format, frames, output_prefix, &stats,
+                       &monitor)) {
+        resource_monitor_finish(&monitor, stats.frames);
+        close_encoder(api, encoder, input_buffers_allocated, initialized);
         return false;
     }
     printf("[%s] PASS: frames=%" PRIu64 " avg_prepare=%.2fms "
@@ -482,21 +547,26 @@ static bool test_format(const EncoderApi *api, const RgbFormat *format,
            stats.max_hardware_encode_us / 1000.0,
            stats.max_acquire_us / 1000.0, stats.max_release_us / 1000.0,
            stats.max_total_us / 1000.0);
-    api->destroy(encoder);
+    resource_monitor_finish(&monitor, stats.frames);
+    close_encoder(api, encoder, input_buffers_allocated, initialized);
     return true;
 }
 
 static void print_usage(const char *program)
 {
-    printf("Usage: %s [--frames N] [--output-prefix PATH]\n", program);
+    printf("Usage: %s [--frames N] [--format NAME] [--monitor-interval N] "
+           "[--output-prefix PATH]\n", program);
     printf("  tests ABI-declared ARGB/RGBA/ABGR/BGRA at 1280x720\n");
-    printf("  default: one frame per format, outputs under /tmp/rgb_test\n");
+    printf("  NAME: ARGB, RGBA, ABGR, BGRA, or all\n");
+    printf("  default: one frame per format, monitor every 100 frames\n");
 }
 
 int main(int argc, char **argv)
 {
     const char *output_prefix = "/tmp/rgb_test";
     unsigned int frames = 1U;
+    unsigned int monitor_interval = 100U;
+    const RgbFormat *selected_format = NULL;
     EncoderApi api;
     unsigned int index;
     unsigned int successful_formats = 0U;
@@ -515,6 +585,36 @@ int main(int argc, char **argv)
             }
             continue;
         }
+        if (strcmp(argv[index], "--format") == 0 && index + 1U <
+            (unsigned int)argc) {
+            const char *name = argv[++index];
+
+            if (strcmp(name, "all") == 0) {
+                selected_format = NULL;
+            } else {
+                selected_format = find_rgb_format(name);
+                if (selected_format == NULL) {
+                    fprintf(stderr, "invalid --format value: %s\n", name);
+                    return EXIT_FAILURE;
+                }
+            }
+            continue;
+        }
+        if (strcmp(argv[index], "--monitor-interval") == 0 &&
+            index + 1U < (unsigned int)argc) {
+            char *end = NULL;
+            unsigned long value;
+
+            errno = 0;
+            value = strtoul(argv[++index], &end, 10);
+            if (errno != 0 || end == argv[index] || *end != '\0' ||
+                value > UINT32_MAX) {
+                fprintf(stderr, "invalid --monitor-interval value\n");
+                return EXIT_FAILURE;
+            }
+            monitor_interval = (unsigned int)value;
+            continue;
+        }
         if (strcmp(argv[index], "--output-prefix") == 0 && index + 1U <
             (unsigned int)argc) {
             output_prefix = argv[++index];
@@ -524,14 +624,21 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
     printf("vencoder RGB test: input=RGB 1280x720 stride=%u bytes=%u "
-           "frames=%u\n", TEST_STRIDE, TEST_FRAME_BYTES, frames);
+           "frames=%u format=%s monitor_interval=%u\n", TEST_STRIDE,
+           TEST_FRAME_BYTES, frames,
+           selected_format == NULL ? "all" : selected_format->name,
+           monitor_interval);
     if (!load_api(&api)) {
         unload_api(&api);
         return EXIT_FAILURE;
     }
     for (index = 0U; index < sizeof(RGB_FORMATS) / sizeof(RGB_FORMATS[0]);
          ++index) {
-        if (test_format(&api, &RGB_FORMATS[index], frames, output_prefix)) {
+        if (selected_format != NULL && &RGB_FORMATS[index] != selected_format) {
+            continue;
+        }
+        if (test_format(&api, &RGB_FORMATS[index], frames, output_prefix,
+                        monitor_interval)) {
             successful_formats++;
         }
     }
