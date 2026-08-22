@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "jpeg_codec.h"
+#include "cedar_vdecoder_abi.h"
 #include "console_log.h"
 
 #include <dlfcn.h>
@@ -46,6 +47,31 @@ typedef struct {
 } JpegHardwareApi;
 
 static void *jpeg_hardware_vdecoder_library;
+#if defined(__arm__) || defined(__aarch64__)
+static void *jpeg_native_vdecoder_library;
+#endif
+
+typedef struct {
+    void *library;
+    void *jpeg_wrapper_library;
+    void *jpeg_wrapper_decoder;
+    JpegHardwareCreate jpeg_wrapper_create;
+    JpegHardwareDestroy jpeg_wrapper_destroy;
+    CedarCreateVideoDecoder create;
+    CedarDestroyVideoDecoder destroy;
+    CedarInitializeVideoDecoder initialize;
+    CedarResetVideoDecoder reset;
+    CedarDecodeVideoStream decode;
+    CedarRequestVideoStreamBuffer request_stream_buffer;
+    CedarSubmitVideoStreamData submit_stream_data;
+    CedarRequestPicture request_picture;
+    CedarReturnPicture return_picture;
+    CedarVideoDecoder *decoder;
+    uint32_t width;
+    uint32_t height;
+    uint64_t frame_number;
+    CedarVideoPicture *held_picture;
+} JpegNativeContext;
 
 static uint64_t jpeg_codec_now_us(void)
 {
@@ -110,6 +136,442 @@ static bool jpeg_hardware_load_symbol(void *library, void *target,
         return false;
     }
     memcpy(target, &symbol, target_size);
+    return true;
+}
+
+static void jpeg_native_context_close(JpegNativeContext *context)
+{
+    if (context == NULL) {
+        return;
+    }
+    if (context->held_picture != NULL && context->return_picture != NULL) {
+        (void)context->return_picture(context->decoder,
+                                       context->held_picture);
+        context->held_picture = NULL;
+    }
+    if (context->destroy != NULL && context->decoder != NULL) {
+        context->destroy(context->decoder);
+    }
+    if (context->jpeg_wrapper_destroy != NULL &&
+        context->jpeg_wrapper_decoder != NULL) {
+        context->jpeg_wrapper_destroy(context->jpeg_wrapper_decoder);
+    }
+    /* Keep the wrapper library resident.  Its plugin registry is global to
+     * the Cedar process and the board's vendor allocator is not safe to
+     * unload after registration. */
+    free(context);
+}
+
+static bool jpeg_native_decoder_init(JpegDecoder *decoder, uint32_t width)
+{
+#if !defined(__arm__) && !defined(__aarch64__)
+    (void)decoder;
+    (void)width;
+    return false;
+#else
+    JpegNativeContext *context;
+    CedarVideoStreamInfo stream_info;
+    CedarVConfig config;
+
+    if (decoder == NULL || width == 0U) {
+        return false;
+    }
+    if (jpeg_native_vdecoder_library == NULL) {
+        jpeg_native_vdecoder_library =
+            dlopen("libvdecoder.so", RTLD_NOW | RTLD_LOCAL);
+    }
+    if (jpeg_native_vdecoder_library == NULL) {
+        return false;
+    }
+    context = calloc(1U, sizeof(*context));
+    if (context == NULL) {
+        return false;
+    }
+    context->library = jpeg_native_vdecoder_library;
+    context->jpeg_wrapper_library =
+        dlopen("libjpegdecode.so", RTLD_NOW | RTLD_LOCAL);
+    if (context->jpeg_wrapper_library == NULL ||
+        !jpeg_hardware_load_symbol(context->jpeg_wrapper_library,
+                                   &context->jpeg_wrapper_create,
+                                   sizeof(context->jpeg_wrapper_create),
+                                   "JpegDecoderCreate") ||
+        !jpeg_hardware_load_symbol(context->jpeg_wrapper_library,
+                                   &context->jpeg_wrapper_destroy,
+                                   sizeof(context->jpeg_wrapper_destroy),
+                                   "JpegDecoderDestory")) {
+        jpeg_native_context_close(context);
+        return false;
+    }
+    /* JpegDecoderCreate registers libawmjpeg.so with libvdecoder.  The
+     * direct vdecoder API does not perform that registration itself. */
+    context->jpeg_wrapper_decoder = context->jpeg_wrapper_create();
+    if (context->jpeg_wrapper_decoder == NULL) {
+        jpeg_native_context_close(context);
+        return false;
+    }
+    if (!jpeg_hardware_load_symbol(context->library, &context->create,
+                                   sizeof(context->create),
+                                   "CreateVideoDecoder") ||
+        !jpeg_hardware_load_symbol(context->library, &context->destroy,
+                                   sizeof(context->destroy),
+                                   "DestroyVideoDecoder") ||
+        !jpeg_hardware_load_symbol(context->library, &context->initialize,
+                                   sizeof(context->initialize),
+                                   "InitializeVideoDecoder") ||
+        !jpeg_hardware_load_symbol(context->library, &context->reset,
+                                   sizeof(context->reset),
+                                   "ResetVideoDecoder") ||
+        !jpeg_hardware_load_symbol(context->library, &context->decode,
+                                   sizeof(context->decode),
+                                   "DecodeVideoStream") ||
+        !jpeg_hardware_load_symbol(context->library,
+                                   &context->request_stream_buffer,
+                                   sizeof(context->request_stream_buffer),
+                                   "RequestVideoStreamBuffer") ||
+        !jpeg_hardware_load_symbol(context->library,
+                                   &context->submit_stream_data,
+                                   sizeof(context->submit_stream_data),
+                                   "SubmitVideoStreamData") ||
+        !jpeg_hardware_load_symbol(context->library, &context->request_picture,
+                                   sizeof(context->request_picture),
+                                   "RequestPicture") ||
+        !jpeg_hardware_load_symbol(context->library, &context->return_picture,
+                                   sizeof(context->return_picture),
+                                   "ReturnPicture")) {
+        jpeg_native_context_close(context);
+        return false;
+    }
+    context->decoder = context->create();
+    if (context->decoder == NULL) {
+        jpeg_native_context_close(context);
+        return false;
+    }
+    memset(&stream_info, 0, sizeof(stream_info));
+    stream_info.eCodecFormat = CEDAR_VIDEO_CODEC_FORMAT_MJPEG;
+    stream_info.nWidth = (int)width;
+    stream_info.nHeight = 720;
+    stream_info.nFrameRate = 30;
+    stream_info.nFrameDuration = 33333;
+    memset(&config, 0, sizeof(config));
+    config.value[CEDAR_VCONFIG_OUTPUT_PIXEL_FORMAT] =
+        CEDAR_PIXEL_FORMAT_YUV_PLANER_420;
+    if (context->initialize(context->decoder, &stream_info, &config) != 0) {
+        jpeg_native_context_close(context);
+        return false;
+    }
+    context->width = width;
+    context->height = 720U;
+    decoder->native_context = context;
+    decoder->native_initialized = true;
+    return true;
+#endif
+}
+
+static void jpeg_native_decoder_close(JpegDecoder *decoder)
+{
+    JpegNativeContext *context;
+
+    if (decoder == NULL || !decoder->native_initialized) {
+        return;
+    }
+    context = (JpegNativeContext *)decoder->native_context;
+    jpeg_native_context_close(context);
+    decoder->native_context = NULL;
+    decoder->native_initialized = false;
+}
+
+static JpegDecodedPixelFormat jpeg_native_pixel_format(int format)
+{
+    switch (format) {
+    case CEDAR_PIXEL_FORMAT_YUV_PLANER_420:
+        return JPEG_DECODED_FORMAT_YUV420P;
+    case CEDAR_PIXEL_FORMAT_YV12:
+        return JPEG_DECODED_FORMAT_YV12;
+    case CEDAR_PIXEL_FORMAT_NV21:
+        return JPEG_DECODED_FORMAT_NV21;
+    case CEDAR_PIXEL_FORMAT_NV12:
+        return JPEG_DECODED_FORMAT_NV12;
+    default:
+        return JPEG_DECODED_FORMAT_UNKNOWN;
+    }
+}
+
+static bool jpeg_native_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
+                               size_t jpeg_size, JpegDecodedFrame *frame,
+                               JpegDecoderTiming *timing)
+{
+    JpegNativeContext *context;
+    CedarVideoStreamDataInfo data;
+    CedarVideoPicture *picture;
+    char *buffer;
+    char *ring_buffer;
+    int buffer_size;
+    int ring_buffer_size;
+    int decode_result;
+    unsigned int attempt;
+
+    if (decoder == NULL || !decoder->native_initialized ||
+        jpeg_data == NULL || jpeg_size == 0U || frame == NULL ||
+        jpeg_size > INT_MAX) {
+        return false;
+    }
+    context = (JpegNativeContext *)decoder->native_context;
+    if (context == NULL || context->decoder == NULL) {
+        return false;
+    }
+    memset(frame, 0, sizeof(*frame));
+    buffer = NULL;
+    ring_buffer = NULL;
+    buffer_size = 0;
+    ring_buffer_size = 0;
+    {
+        uint64_t start_us = jpeg_codec_now_us();
+        int result = context->request_stream_buffer(
+            context->decoder, (int)jpeg_size, &buffer, &buffer_size,
+            &ring_buffer, &ring_buffer_size, 0);
+
+        if (timing != NULL) {
+            timing->decoder_buffer_request_time_us +=
+                jpeg_codec_now_us() - start_us;
+        }
+        if (result != 0 || buffer == NULL || buffer_size < 0 ||
+            ring_buffer_size < 0 || (size_t)buffer_size +
+            (size_t)ring_buffer_size < jpeg_size) {
+            if (context->reset != NULL) {
+                context->reset(context->decoder);
+            }
+            return false;
+        }
+    }
+    {
+        uint64_t start_us = jpeg_codec_now_us();
+        size_t first_size = jpeg_size < (size_t)buffer_size ?
+                            jpeg_size : (size_t)buffer_size;
+
+        memcpy(buffer, jpeg_data, first_size);
+        if (jpeg_size > first_size) {
+            memcpy(ring_buffer, jpeg_data + first_size,
+                   jpeg_size - first_size);
+        }
+        if (timing != NULL) {
+            timing->input_copy_time_us += jpeg_codec_now_us() - start_us;
+        }
+    }
+    memset(&data, 0, sizeof(data));
+    data.pData = buffer;
+    data.nLength = (int)jpeg_size;
+    data.nPts = (int64_t)context->frame_number * 33333LL;
+    data.nPcr = data.nPts;
+    data.bIsFirstPart = 1;
+    data.bIsLastPart = 1;
+    data.nID = (int)(context->frame_number & 0x7fffffffU);
+    data.nStreamIndex = 0;
+    data.bValid = 1;
+    context->frame_number++;
+    {
+        uint64_t start_us = jpeg_codec_now_us();
+
+        if (context->submit_stream_data(context->decoder, &data, 0) != 0) {
+            if (timing != NULL) {
+                timing->decoder_submit_time_us +=
+                    jpeg_codec_now_us() - start_us;
+            }
+            if (context->reset != NULL) {
+                context->reset(context->decoder);
+            }
+            return false;
+        }
+        if (timing != NULL) {
+            timing->decoder_submit_time_us +=
+                jpeg_codec_now_us() - start_us;
+        }
+    }
+    decode_result = CEDAR_VDECODE_RESULT_OK;
+    for (attempt = 0U; attempt < 4U; ++attempt) {
+        uint64_t start_us = jpeg_codec_now_us();
+
+        decode_result = context->decode(context->decoder, 0, 0, 0, data.nPts);
+        if (timing != NULL) {
+            timing->decoder_decode_time_us += jpeg_codec_now_us() - start_us;
+        }
+        if (decode_result == CEDAR_VDECODE_RESULT_FRAME_DECODED ||
+            decode_result == CEDAR_VDECODE_RESULT_KEYFRAME_DECODED) {
+            break;
+        }
+        if (decode_result != CEDAR_VDECODE_RESULT_OK &&
+            decode_result != CEDAR_VDECODE_RESULT_CONTINUE) {
+            break;
+        }
+    }
+    if (decode_result != CEDAR_VDECODE_RESULT_FRAME_DECODED &&
+        decode_result != CEDAR_VDECODE_RESULT_KEYFRAME_DECODED) {
+        if (context->reset != NULL) {
+            context->reset(context->decoder);
+        }
+        return false;
+    }
+    {
+        uint64_t start_us = jpeg_codec_now_us();
+
+        picture = context->request_picture(context->decoder, 0);
+        if (timing != NULL) {
+            timing->decoder_request_picture_time_us +=
+                jpeg_codec_now_us() - start_us;
+        }
+    }
+    if (picture == NULL || picture->pData0 == NULL || picture->nWidth <= 0 ||
+        picture->nHeight <= 0 || picture->nLineStride <= 0) {
+        if (context->reset != NULL) {
+            context->reset(context->decoder);
+        }
+        return false;
+    }
+    frame->format = jpeg_native_pixel_format(picture->ePixelFormat);
+    frame->width = (uint32_t)picture->nWidth;
+    frame->height = (uint32_t)picture->nHeight;
+    frame->stride[0] = (uint32_t)picture->nLineStride;
+    frame->stride[1] = frame->format == JPEG_DECODED_FORMAT_NV12 ||
+                       frame->format == JPEG_DECODED_FORMAT_NV21 ?
+                       frame->stride[0] : frame->stride[0] / 2U;
+    frame->stride[2] = frame->stride[1];
+    frame->left_offset = picture->nLeftOffset > 0 ?
+                         (uint32_t)picture->nLeftOffset : 0U;
+    frame->top_offset = picture->nTopOffset > 0 ?
+                        (uint32_t)picture->nTopOffset : 0U;
+    frame->plane[0] = (const uint8_t *)picture->pData0;
+    frame->plane[1] = (const uint8_t *)picture->pData1;
+    frame->plane[2] = (const uint8_t *)picture->pData2;
+    frame->opaque = picture;
+    context->held_picture = picture;
+    if (frame->format == JPEG_DECODED_FORMAT_UNKNOWN) {
+        (void)context->return_picture(context->decoder, picture);
+        context->held_picture = NULL;
+        memset(frame, 0, sizeof(*frame));
+        return false;
+    }
+    return true;
+}
+
+static bool jpeg_native_return_frame(JpegDecoder *decoder,
+                                     JpegDecodedFrame *frame,
+                                     JpegDecoderTiming *timing)
+{
+    JpegNativeContext *context;
+    int result;
+
+    if (decoder == NULL || frame == NULL || frame->opaque == NULL ||
+        !decoder->native_initialized) {
+        return false;
+    }
+    context = (JpegNativeContext *)decoder->native_context;
+    if (context == NULL || context->return_picture == NULL) {
+        return false;
+    }
+    {
+        uint64_t start_us = jpeg_codec_now_us();
+
+        result = context->return_picture(context->decoder,
+                                          (CedarVideoPicture *)frame->opaque);
+        if (timing != NULL) {
+            timing->decoder_return_picture_time_us +=
+                jpeg_codec_now_us() - start_us;
+        }
+    }
+    if (result != 0) {
+        return false;
+    }
+    context->held_picture = NULL;
+    memset(frame, 0, sizeof(*frame));
+    return true;
+}
+
+static uint8_t jpeg_clamp_u8(int value)
+{
+    if (value < 0) {
+        return 0U;
+    }
+    if (value > 255) {
+        return 255U;
+    }
+    return (uint8_t)value;
+}
+
+static bool jpeg_native_convert_to_rgba(const JpegDecodedFrame *source,
+                                        VideoFrame *destination)
+{
+    uint32_t row;
+
+    if (source == NULL || destination == NULL || destination->pixels == NULL ||
+        source->plane[0] == NULL || source->width < destination->width +
+        source->left_offset || source->height < destination->height +
+        source->top_offset || source->stride[0] == 0U) {
+        return false;
+    }
+    if ((source->format == JPEG_DECODED_FORMAT_YUV420P ||
+         source->format == JPEG_DECODED_FORMAT_YV12) &&
+        (source->plane[1] == NULL || source->plane[2] == NULL)) {
+        return false;
+    }
+    if ((source->format == JPEG_DECODED_FORMAT_NV12 ||
+         source->format == JPEG_DECODED_FORMAT_NV21) &&
+        source->plane[1] == NULL) {
+        return false;
+    }
+    for (row = 0U; row < destination->height; ++row) {
+        uint32_t column;
+        uint32_t source_y = row + source->top_offset;
+        const uint8_t *y_plane = source->plane[0] +
+            (size_t)source_y * source->stride[0] + source->left_offset;
+        uint8_t *output = destination->pixels +
+            (size_t)row * destination->stride;
+
+        for (column = 0U; column < destination->width; ++column) {
+            uint32_t source_x = column + source->left_offset;
+            uint32_t chroma_x = source_x / 2U;
+            uint32_t chroma_y = source_y / 2U;
+            int y = y_plane[column];
+            int u;
+            int v;
+            int c;
+            uint8_t *pixel = output + (size_t)column * VIDEO_FRAME_CHANNELS;
+
+            if (source->format == JPEG_DECODED_FORMAT_YUV420P ||
+                source->format == JPEG_DECODED_FORMAT_YV12) {
+                const uint8_t *plane1 = source->plane[1] +
+                    (size_t)chroma_y * source->stride[1] + chroma_x;
+                const uint8_t *plane2 = source->plane[2] +
+                    (size_t)chroma_y * source->stride[2] + chroma_x;
+
+                if (source->format == JPEG_DECODED_FORMAT_YV12) {
+                    v = *plane1;
+                    u = *plane2;
+                } else {
+                    u = *plane1;
+                    v = *plane2;
+                }
+            } else {
+                const uint8_t *chroma = source->plane[1] +
+                    (size_t)chroma_y * source->stride[1] + chroma_x * 2U;
+
+                if (source->format == JPEG_DECODED_FORMAT_NV21) {
+                    v = chroma[0];
+                    u = chroma[1];
+                } else {
+                    u = chroma[0];
+                    v = chroma[1];
+                }
+            }
+            c = y - 16;
+            if (c < 0) {
+                c = 0;
+            }
+            pixel[0] = jpeg_clamp_u8((298 * c + 409 * (v - 128) + 128) >> 8);
+            pixel[1] = jpeg_clamp_u8((298 * c - 100 * (u - 128) -
+                                       208 * (v - 128) + 128) >> 8);
+            pixel[2] = jpeg_clamp_u8((298 * c + 516 * (u - 128) + 128) >> 8);
+            pixel[3] = 255U;
+        }
+    }
     return true;
 }
 
@@ -325,6 +787,10 @@ int jpeg_decoder_init(JpegDecoder *decoder, uint32_t width)
         return -1;
     }
     decoder->row_capacity = (size_t)width * 3U;
+    if (jpeg_native_decoder_init(decoder, width)) {
+        decoder->initialized = true;
+        return 0;
+    }
     if (jpeg_hardware_decoder_init(decoder)) {
         decoder->initialized = true;
         return 0;
@@ -355,7 +821,9 @@ void jpeg_decoder_close(JpegDecoder *decoder)
     if (decoder == NULL) {
         return;
     }
-    if (decoder->hardware_initialized) {
+    if (decoder->native_initialized) {
+        jpeg_native_decoder_close(decoder);
+    } else if (decoder->hardware_initialized) {
         jpeg_hardware_decoder_close(decoder);
     } else if (decoder->initialized) {
         decoder->api.destroy_decompress(&decoder->cinfo);
@@ -381,6 +849,32 @@ bool jpeg_decoder_decode_timed(JpegDecoder *decoder, const uint8_t *jpeg_data,
     }
     if (jpeg_size > ULONG_MAX) {
         return false;
+    }
+    if (decoder->native_initialized) {
+        JpegDecodedFrame source;
+        bool converted;
+        bool returned;
+        uint64_t convert_start_us;
+
+        if (!jpeg_native_decode(decoder, jpeg_data, jpeg_size, &source,
+                                timing)) {
+            return false;
+        }
+        if (!decoder->native_frame_logged) {
+            LOG_INFO("JPEG native picture: format=%d size=%ux%u stride=%u "
+                     "offset=%u,%u",
+                     (int)source.format, source.width, source.height,
+                     source.stride[0], source.left_offset, source.top_offset);
+            decoder->native_frame_logged = true;
+        }
+        convert_start_us = jpeg_codec_now_us();
+        converted = jpeg_native_convert_to_rgba(&source, destination);
+        if (timing != NULL) {
+            timing->format_convert_time_us +=
+                jpeg_codec_now_us() - convert_start_us;
+        }
+        returned = jpeg_native_return_frame(decoder, &source, timing);
+        return converted && returned;
     }
     if (decoder->hardware_initialized) {
         JpegHardwareApi hardware;

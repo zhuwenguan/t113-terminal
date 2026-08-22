@@ -211,7 +211,9 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                      current.written_frames, last_stats->written_frames) /
                      elapsed_s);
         LOG_INFO("Video profile 1s: capture=%.2fms input_copy=%.2fms "
-                 "decoder_submit=%.2fms decoder_get_frame=%.2fms "
+                 "buffer_request=%.2fms decoder_submit=%.2fms "
+                 "decoder_decode=%.2fms request_picture=%.2fms "
+                 "return_picture=%.2fms decoder_get_frame=%.2fms "
                  "decoder_release=%.2fms format_convert=%.2fms "
                  "hud=%.2fms compose=%.2fms "
                  "jpeg_encode=%.2fms mux_write=%.2fms total_frame=%.2fms "
@@ -230,8 +232,32 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                                                   last_stats->decoded_frames)),
                  video_pipeline_average_ms(
                      video_pipeline_counter_delta(
+                         current.decoder_buffer_request_time_us,
+                         last_stats->decoder_buffer_request_time_us),
+                     video_pipeline_counter_delta(current.decoded_frames,
+                                                  last_stats->decoded_frames)),
+                 video_pipeline_average_ms(
+                     video_pipeline_counter_delta(
                          current.decoder_submit_time_us,
                          last_stats->decoder_submit_time_us),
+                     video_pipeline_counter_delta(current.decoded_frames,
+                                                  last_stats->decoded_frames)),
+                 video_pipeline_average_ms(
+                     video_pipeline_counter_delta(
+                         current.decoder_decode_time_us,
+                         last_stats->decoder_decode_time_us),
+                     video_pipeline_counter_delta(current.decoded_frames,
+                                                  last_stats->decoded_frames)),
+                 video_pipeline_average_ms(
+                     video_pipeline_counter_delta(
+                         current.decoder_request_picture_time_us,
+                         last_stats->decoder_request_picture_time_us),
+                     video_pipeline_counter_delta(current.decoded_frames,
+                                                  last_stats->decoded_frames)),
+                 video_pipeline_average_ms(
+                     video_pipeline_counter_delta(
+                         current.decoder_return_picture_time_us,
+                         last_stats->decoder_return_picture_time_us),
                      video_pipeline_counter_delta(current.decoded_frames,
                                                   last_stats->decoded_frames)),
                  video_pipeline_average_ms(
@@ -405,8 +431,16 @@ static void *video_pipeline_thread(void *context)
                 pipeline->stats.decoded_frames++;
                 pipeline->stats.jpeg_input_copy_time_us +=
                     decoder_timing.input_copy_time_us;
+                pipeline->stats.decoder_buffer_request_time_us +=
+                    decoder_timing.decoder_buffer_request_time_us;
                 pipeline->stats.decoder_submit_time_us +=
                     decoder_timing.decoder_submit_time_us;
+                pipeline->stats.decoder_decode_time_us +=
+                    decoder_timing.decoder_decode_time_us;
+                pipeline->stats.decoder_request_picture_time_us +=
+                    decoder_timing.decoder_request_picture_time_us;
+                pipeline->stats.decoder_return_picture_time_us +=
+                    decoder_timing.decoder_return_picture_time_us;
                 pipeline->stats.decoder_get_frame_time_us +=
                     decoder_timing.decoder_get_frame_time_us;
                 pipeline->stats.decoder_release_time_us +=
@@ -576,7 +610,9 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
              (unsigned long long)stats.decode_errors,
              (unsigned long long)stats.reconnects);
     LOG_INFO("Video profile: decoder_init_total=%.2fms capture=%.2fms "
-             "input_copy=%.2fms decoder_submit=%.2fms "
+             "input_copy=%.2fms buffer_request=%.2fms "
+             "decoder_submit=%.2fms decoder_decode=%.2fms "
+             "request_picture=%.2fms return_picture=%.2fms "
              "decoder_get_frame=%.2fms decoder_release=%.2fms "
              "format_convert=%.2fms "
              "hud=%.2fms compose=%.2fms jpeg_encode=%.2fms "
@@ -587,7 +623,16 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
                                         stats.camera_received_frames),
              video_pipeline_average_ms(stats.jpeg_input_copy_time_us,
                                         stats.decoded_frames),
+             video_pipeline_average_ms(stats.decoder_buffer_request_time_us,
+                                        stats.decoded_frames),
              video_pipeline_average_ms(stats.decoder_submit_time_us,
+                                        stats.decoded_frames),
+             video_pipeline_average_ms(stats.decoder_decode_time_us,
+                                        stats.decoded_frames),
+             video_pipeline_average_ms(
+                 stats.decoder_request_picture_time_us,
+                 stats.decoded_frames),
+             video_pipeline_average_ms(stats.decoder_return_picture_time_us,
                                         stats.decoded_frames),
              video_pipeline_average_ms(stats.decoder_get_frame_time_us,
                                         stats.decoded_frames),

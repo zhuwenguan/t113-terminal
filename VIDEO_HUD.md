@@ -44,7 +44,9 @@ HUD mock：
 ## 模块
 
 - `video_capture`：V4L2 MMAP 三缓冲，只接受 MJPEG。
-- `jpeg_codec`：板端优先使用 `libjpegdecode.so`，开发机使用 libjpeg；帧缓冲预分配，摄像头输入失败可重连。
+- `jpeg_codec`：T113 板端通过 `libjpegdecode.so` 注册 JPEG 插件后，使用
+  `libvdecoder.so` 的常驻解码器；开发机使用 libjpeg；帧缓冲预分配，摄像头
+  输入失败可重连。旧 `libjpegdecode.so` GetFrame 路径保留为兼容回退。
 - `hud_renderer`：1280x720 基准坐标，静态层启动时生成，动态层每帧使用一次 VehicleState snapshot。
 - `video_compositor`：原地 alpha blending，避免每帧复制整张 1280x720 RGBA 图像。
 - `video_recorder`：对最终 HUD 帧编码为 Motion-JPEG MP4，样本索引写入临时 `.idx`，不在内存中无限累积。
@@ -52,17 +54,19 @@ HUD mock：
 ## 当前板端实测
 
 Phase 0 profiling 已加入应用层计数和阶段计时，统计每秒低频输出，并使用
-`v4l2_buffer.sequence` 统计摄像头 sequence gap。T113（1.008 GHz）Release
-实测结果如下：
+`v4l2_buffer.sequence` 统计摄像头 sequence gap。Phase 1 增加了常驻 Cedar
+vdecoder 适配器，并将 buffer request、submit、decode、request picture 和
+return picture 分开计时。T113（1.008 GHz）Release 实测结果如下：
 
 - Mock HUD：约 31.2 FPS，HUD 约 2.1 ms，合成约 16.5 ms。
-- USB MJPEG、无录像：约 9.9 FPS，3 秒收到 24 帧，sequence 丢失 45 帧，解码
-  `GetFrame` 约 65.3 ms，RGB565→RGBA 约 18.5 ms，HUD 约 2.45 ms，合成约
-  17.05 ms，最大 RSS 约 21 MB。
-- USB MJPEG、录像：约 3.77 FPS，JPEG encode 约 192.8 ms，mux/write 约
-  0.49 ms，最大 RSS 约 21 MB。
+- USB MJPEG、无录像（Phase 1，10 秒）：约 12.39 FPS，117 帧成功处理、无
+  decode error，Cedar decode 约 6.43 ms，YUV→RGBA 约 56.39 ms，HUD 约
+  1.64 ms，合成约 16.53 ms，最大 RSS 约 19 MB。
+- USB MJPEG、录像（Phase 1，3 秒）：约 4.11 FPS，JPEG encode 约 185.9 ms，
+  mux/write 约 1.27 ms，最大 RSS 约 19 MB；输出 MP4 已验证可读。
 
-当前 `libjpegdecode.so` 的 `JpegDecoderGetFrame()` 将硬件 decode 和 picture
-acquire 合并在一个接口中，应用暂时只能统计为 `decoder_get_frame`；其后的
-每帧内部 decoder release 也已单独统计。Phase 0 不改变解码器或录像架构，后续
-需要按板端完整 vdecoder ABI 实现常驻 decoder，并继续验证是否真正复用 VE。
+当前无录像路径已经使用常驻 `libvdecoder.so`，因此 decode 和 picture acquire
+已分别计时，且每帧不再创建/销毁 vendor decoder。由于 T113 的公开 Cedar
+头文件与固件 ABI 不同，适配器复现了板端 JPEG wrapper 使用的 `0x101` codec
+值、扩展 VConfig 和插件注册步骤。当前阶段的主要性能瓶颈是软件
+YUV→RGBA 转换；录像模式的主要瓶颈是 JPEG encode，尚未达到 30 FPS。

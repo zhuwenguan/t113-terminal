@@ -75,16 +75,42 @@ typedef struct {
     JpegHardwareFrame hardware_frame;
     bool initialized;
     bool hardware_initialized;
+    void *native_context;
+    bool native_initialized;
+    bool native_frame_logged;
 } JpegDecoder;
 
 typedef struct {
     uint64_t input_copy_time_us;
+    uint64_t decoder_buffer_request_time_us;
     uint64_t decoder_submit_time_us;
+    uint64_t decoder_decode_time_us;
+    uint64_t decoder_request_picture_time_us;
+    uint64_t decoder_return_picture_time_us;
     /* The current vendor GetFrame API combines decode and picture acquire. */
     uint64_t decoder_get_frame_time_us;
     uint64_t decoder_release_time_us;
     uint64_t format_convert_time_us;
 } JpegDecoderTiming;
+
+typedef enum {
+    JPEG_DECODED_FORMAT_UNKNOWN = 0,
+    JPEG_DECODED_FORMAT_YUV420P = 1,
+    JPEG_DECODED_FORMAT_YV12 = 2,
+    JPEG_DECODED_FORMAT_NV21 = 3,
+    JPEG_DECODED_FORMAT_NV12 = 4
+} JpegDecodedPixelFormat;
+
+typedef struct {
+    JpegDecodedPixelFormat format;
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride[3];
+    uint32_t left_offset;
+    uint32_t top_offset;
+    const uint8_t *plane[3];
+    void *opaque;
+} JpegDecodedFrame;
 
 typedef struct {
     JpegCodecApi api;

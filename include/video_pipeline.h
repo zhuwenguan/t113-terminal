@@ -49,7 +49,11 @@ typedef struct {
     uint64_t capture_time_us;
     uint64_t decoder_init_time_us;
     uint64_t jpeg_input_copy_time_us;
+    uint64_t decoder_buffer_request_time_us;
     uint64_t decoder_submit_time_us;
+    uint64_t decoder_decode_time_us;
+    uint64_t decoder_request_picture_time_us;
+    uint64_t decoder_return_picture_time_us;
     uint64_t decoder_get_frame_time_us;
     uint64_t decoder_release_time_us;
     uint64_t format_convert_time_us;
