@@ -405,7 +405,11 @@ static bool run_bitblt(int g2d_fd, g2d_fmt_enh source_format,
     int result;
 
     memset(&blt, 0, sizeof(blt));
-    blt.flag_h = G2D_BLT_COPYPEN;
+    /* The RCQ driver routes low flags through its RGB-only mixer path.
+     * G2D_ROT_0 selects the direct BITBLT path, which also handles format
+     * conversion. */
+    blt.flag_h = source_format == destination_format ? G2D_BLT_COPYPEN :
+                  G2D_ROT_0;
     set_image_defaults(&blt.src_image_h, source_fd, source_format, width,
                        height);
     set_image_defaults(&blt.dst_image_h, destination_fd, destination_format,
