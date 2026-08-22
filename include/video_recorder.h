@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #include "jpeg_codec.h"
+#include "video_encoder.h"
 #include "video_frame.h"
 
 #define VIDEO_RECORDER_DEFAULT_FPS 30U
@@ -24,8 +25,13 @@ typedef struct {
     uint64_t encode_time_us;
     uint64_t mux_write_time_us;
     uint64_t total_time_us;
+    uint64_t encoder_submit_time_us;
+    uint64_t encoder_hardware_time_us;
+    uint64_t encoder_acquire_time_us;
+    uint64_t encoder_release_time_us;
     size_t encoded_size;
     bool encoded;
+    bool hardware_encoded;
     bool written;
 } VideoRecorderFrameTiming;
 
@@ -41,6 +47,9 @@ typedef struct {
     uint32_t height;
     uint32_t fps;
     JpegEncoder encoder;
+    VideoEncoder hardware_encoder;
+    bool hardware_encoder_ready;
+    bool software_encoder_ready;
     VideoRecorderStats stats;
     bool initialized;
 } VideoRecorder;
@@ -50,8 +59,12 @@ int video_recorder_init(VideoRecorder *recorder, const char *path,
 bool video_recorder_write_frame_timed(VideoRecorder *recorder,
                                       const VideoFrame *frame,
                                       VideoRecorderFrameTiming *timing);
+bool video_recorder_write_native_frame_timed(VideoRecorder *recorder,
+                                             const VideoYuvFrame *frame,
+                                             VideoRecorderFrameTiming *timing);
 bool video_recorder_write_frame(VideoRecorder *recorder,
                                 const VideoFrame *frame);
+bool video_recorder_supports_native_yuv(const VideoRecorder *recorder);
 int video_recorder_finalize(VideoRecorder *recorder);
 void video_recorder_close(VideoRecorder *recorder);
 bool video_recorder_is_recording(const VideoRecorder *recorder);

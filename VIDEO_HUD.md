@@ -50,7 +50,12 @@ HUD mock：
 - `hud_renderer`：1280x720 基准坐标，静态层启动时生成，动态层每帧使用一次 VehicleState snapshot。
 - `video_compositor`：RGBA mock/兼容路径原地 alpha blending；T113 原生路径
   直接在 Cedar YUV picture 上叠加 HUD，避免解码后全帧 YUV→RGBA。
-- `video_recorder`：对最终 HUD 帧编码为 Motion-JPEG MP4，样本索引写入临时 `.idx`，不在内存中无限累积。
+- `video_encoder`：通过板端 `libvencoder.so` 的 Cedar API 创建一个常驻
+  JPEG encoder，复用一个 YUV420P 输入缓存和一个 JPEG 输出缓存；分段统计
+  submit、VE encode、bitstream acquire/release 和输出尺寸。
+- `video_recorder`：优先将最终 native YUV HUD 帧交给硬件 encoder，写入
+  Motion-JPEG MP4；硬件不可用时使用原有软件 JPEG 回退。样本索引写入临时
+  `.idx`，不在内存中无限累积。
 
 ## 当前板端实测
 
@@ -67,10 +72,18 @@ return picture 分开计时。Phase 2 保留 native YUV picture 到 HUD 合成�
 - USB MJPEG、录像（Phase 2，3 秒）：约 3.66 FPS，录像边界 RGBA 转换约
   63.4 ms，JPEG encode 约 180.3 ms，mux/write 约 1.09 ms，最大 RSS 约
   19.7 MB；输出 MP4 已验证可读。
+- USB MJPEG、HUD 录像（Phase 4，Release，约 5 秒）：61 帧成功编码和写入，
+  约 13.67 FPS，无 decode error；Cedar decode 约 6.58 ms，HUD 约 1.67 ms，
+  CPU YUV 合成约 58.99 ms，硬件 JPEG 总 encode 约 6.14 ms，其中 submit
+  约 1.98 ms、VE encode 约 3.98 ms、bitstream acquire/release 约
+  0.15/0.02 ms，mux/write 约 0.64 ms。JPEG 平均约 101.2 KB、最大约
+  106.3 KB，最大 RSS 约 15.98 MB；独立采样约 85% 单核（双核总量约 43%）。
 
 当前无录像路径已经使用常驻 `libvdecoder.so`，因此 decode 和 picture acquire
 已分别计时，且每帧不再创建/销毁 vendor decoder。由于 T113 的公开 Cedar
 头文件与固件 ABI 不同，适配器复现了板端 JPEG wrapper 使用的 `0x101` codec
 值、扩展 VConfig 和插件注册步骤。Phase 2 的临时 CPU YUV 合成约 58 ms，
-下一阶段应切换到 T113 G2D；录像模式还受到软件 JPEG encode 约 180 ms 的限制，
-待后续硬件 JPEG encoder 阶段处理。
+Phase 4 已移除录像模式的软件 JPEG encode 约 180 ms 瓶颈，当前主要瓶颈仍是
+CPU YUV HUD 合成。G2D 尚未重新接入：板端没有可核对的 KickPi kernel/BSP
+G2D UAPI 源码，按最接近的厂商头文件调用曾触发 `dma_buf_get failed` 和
+kernel Oops，因此该阶段保持隔离并等待匹配的 BSP UAPI。

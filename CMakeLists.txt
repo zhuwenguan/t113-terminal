@@ -49,6 +49,7 @@ add_executable(t113_terminal
     src/hmi.c
     src/video_frame.c
     src/jpeg_codec.c
+    src/video_encoder.c
     src/video_capture.c
     src/hud_renderer.c
     src/video_compositor.c

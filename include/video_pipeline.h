@@ -58,6 +58,12 @@ typedef struct {
     uint64_t decoder_release_time_us;
     uint64_t format_convert_time_us;
     uint64_t jpeg_encode_time_us;
+    uint64_t encoder_submit_time_us;
+    uint64_t encoder_hardware_time_us;
+    uint64_t encoder_acquire_time_us;
+    uint64_t encoder_release_time_us;
+    uint64_t encoder_output_bytes;
+    uint64_t encoder_output_max_bytes;
     uint64_t mux_write_time_us;
     uint64_t total_frame_time_us;
 } VideoPipelineStats;

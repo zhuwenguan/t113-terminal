@@ -103,6 +103,7 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
     uint64_t render_start = video_pipeline_now_us();
     uint64_t stage_start;
     bool need_rgba_output;
+    bool native_record_path;
     bool state_available = video_pipeline_get_state(pipeline, &state);
 
     (void)state_available;
@@ -128,9 +129,13 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
     }
     pipeline->stats.compose_time_us += video_pipeline_now_us() - stage_start;
     pipeline->camera_frame.timestamp_us = timestamp_us;
+    native_record_path = native_camera != NULL && pipeline->recorder_ready &&
+                         video_recorder_supports_native_yuv(
+                             &pipeline->recorder);
     need_rgba_output = native_camera != NULL &&
         ((pipeline->config.single_frame_path != NULL &&
-          pipeline->stats.rendered_frames == 0U) || pipeline->recorder_ready);
+          pipeline->stats.rendered_frames == 0U) ||
+         (pipeline->recorder_ready && !native_record_path));
     if (need_rgba_output) {
         stage_start = video_pipeline_now_us();
         if (!jpeg_decoded_frame_to_rgba(native_camera, &pipeline->camera_frame)) {
@@ -150,13 +155,34 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
                   pipeline->config.single_frame_path, strerror(errno));
     }
     if (pipeline->recorder_ready &&
-        !video_recorder_write_frame_timed(&pipeline->recorder,
-                                          &pipeline->camera_frame,
-                                          &recorder_timing)) {
+        ((native_record_path &&
+          !video_recorder_write_native_frame_timed(
+              &pipeline->recorder, native_camera, &recorder_timing)) ||
+         (!native_record_path &&
+          !video_recorder_write_frame_timed(&pipeline->recorder,
+                                            &pipeline->camera_frame,
+                                            &recorder_timing)))) {
         video_pipeline_note_application_drop(pipeline);
     }
     if (pipeline->recorder_ready) {
         pipeline->stats.jpeg_encode_time_us += recorder_timing.encode_time_us;
+        pipeline->stats.encoder_submit_time_us +=
+            recorder_timing.encoder_submit_time_us;
+        pipeline->stats.encoder_hardware_time_us +=
+            recorder_timing.encoder_hardware_time_us;
+        pipeline->stats.encoder_acquire_time_us +=
+            recorder_timing.encoder_acquire_time_us;
+        pipeline->stats.encoder_release_time_us +=
+            recorder_timing.encoder_release_time_us;
+        if (recorder_timing.encoded) {
+            pipeline->stats.encoder_output_bytes +=
+                recorder_timing.encoded_size;
+            if (recorder_timing.encoded_size >
+                pipeline->stats.encoder_output_max_bytes) {
+                pipeline->stats.encoder_output_max_bytes =
+                    recorder_timing.encoded_size;
+            }
+        }
         pipeline->stats.mux_write_time_us += recorder_timing.mux_write_time_us;
         if (recorder_timing.encoded) {
             pipeline->stats.encoded_frames++;
@@ -237,7 +263,10 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                  "return_picture=%.2fms decoder_get_frame=%.2fms "
                  "decoder_release=%.2fms format_convert=%.2fms "
                  "hud=%.2fms compose=%.2fms "
-                 "jpeg_encode=%.2fms mux_write=%.2fms total_frame=%.2fms "
+                 "jpeg_encode=%.2fms encoder_submit=%.2fms "
+                 "encoder_hw=%.2fms encoder_acquire=%.2fms "
+                 "encoder_release=%.2fms mux_write=%.2fms total_frame=%.2fms "
+                 "encoder_size=%.1fKB "
                  "decoder_init_total=%.2fms",
                  video_pipeline_average_ms(
                      video_pipeline_counter_delta(current.capture_time_us,
@@ -315,6 +344,30 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                      video_pipeline_counter_delta(current.encoded_frames,
                                                   last_stats->encoded_frames)),
                  video_pipeline_average_ms(
+                     video_pipeline_counter_delta(
+                         current.encoder_submit_time_us,
+                         last_stats->encoder_submit_time_us),
+                     video_pipeline_counter_delta(current.encoded_frames,
+                                                  last_stats->encoded_frames)),
+                 video_pipeline_average_ms(
+                     video_pipeline_counter_delta(
+                         current.encoder_hardware_time_us,
+                         last_stats->encoder_hardware_time_us),
+                     video_pipeline_counter_delta(current.encoded_frames,
+                                                  last_stats->encoded_frames)),
+                 video_pipeline_average_ms(
+                     video_pipeline_counter_delta(
+                         current.encoder_acquire_time_us,
+                         last_stats->encoder_acquire_time_us),
+                     video_pipeline_counter_delta(current.encoded_frames,
+                                                  last_stats->encoded_frames)),
+                 video_pipeline_average_ms(
+                     video_pipeline_counter_delta(
+                         current.encoder_release_time_us,
+                         last_stats->encoder_release_time_us),
+                     video_pipeline_counter_delta(current.encoded_frames,
+                                                  last_stats->encoded_frames)),
+                 video_pipeline_average_ms(
                      video_pipeline_counter_delta(current.mux_write_time_us,
                                                   last_stats->mux_write_time_us),
                      video_pipeline_counter_delta(current.written_frames,
@@ -324,6 +377,14 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                                                   last_stats->total_frame_time_us),
                      video_pipeline_counter_delta(current.processed_frames,
                                                   last_stats->processed_frames)),
+                 video_pipeline_counter_delta(current.encoded_frames,
+                                              last_stats->encoded_frames) > 0U ?
+                 (double)video_pipeline_counter_delta(
+                     current.encoder_output_bytes,
+                     last_stats->encoder_output_bytes) /
+                     (double)video_pipeline_counter_delta(
+                         current.encoded_frames,
+                         last_stats->encoded_frames) / 1024.0 : 0.0,
                  (double)video_pipeline_counter_delta(
                      current.decoder_init_time_us,
                      last_stats->decoder_init_time_us) / 1000.0);
@@ -662,7 +723,10 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
              "decoder_get_frame=%.2fms decoder_release=%.2fms "
              "format_convert=%.2fms "
              "hud=%.2fms compose=%.2fms jpeg_encode=%.2fms "
+             "encoder_submit=%.2fms encoder_hw=%.2fms "
+             "encoder_acquire=%.2fms encoder_release=%.2fms "
              "mux_write=%.2fms total_frame=%.2fms "
+             "encoder_size_avg=%.1fKB encoder_size_max=%.1fKB "
              "frame_buffers=%lluKB max_rss=%ldKB",
              (double)stats.decoder_init_time_us / 1000.0,
              video_pipeline_average_ms(stats.capture_time_us,
@@ -692,10 +756,22 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
                                         stats.processed_frames),
              video_pipeline_average_ms(stats.jpeg_encode_time_us,
                                         stats.encoded_frames),
+             video_pipeline_average_ms(stats.encoder_submit_time_us,
+                                        stats.encoded_frames),
+             video_pipeline_average_ms(stats.encoder_hardware_time_us,
+                                        stats.encoded_frames),
+             video_pipeline_average_ms(stats.encoder_acquire_time_us,
+                                        stats.encoded_frames),
+             video_pipeline_average_ms(stats.encoder_release_time_us,
+                                        stats.encoded_frames),
              video_pipeline_average_ms(stats.mux_write_time_us,
                                         stats.written_frames),
              video_pipeline_average_ms(stats.total_frame_time_us,
                                         stats.processed_frames),
+             stats.encoded_frames > 0U ?
+             (double)stats.encoder_output_bytes /
+                 (double)stats.encoded_frames / 1024.0 : 0.0,
+             (double)stats.encoder_output_max_bytes / 1024.0,
              (unsigned long long)(stats.memory_bytes / 1024ULL),
              usage.ru_maxrss);
 }
