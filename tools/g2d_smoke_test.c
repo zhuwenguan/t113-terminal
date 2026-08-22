@@ -427,8 +427,21 @@ static bool run_bitblt(int g2d_fd, g2d_fmt_enh source_format,
     return true;
 }
 
-static bool run_blend(int g2d_fd, g2d_fmt_enh destination_format,
-                      int source_fd, int destination_fd,
+static void print_image_summary(const char *name, const g2d_image_enh *image)
+{
+    printf("  %s: fd=%d phy=%u format=0x%x size=%ux%u "
+           "align=[%u,%u,%u] clip=[%d,%d,%d,%d] alpha=%u mode=%d "
+           "bbuff=%d gamut=%d range=%d\n",
+           name, image->fd, image->use_phy_addr, image->format,
+           image->width, image->height, image->align[0], image->align[1],
+           image->align[2], image->clip_rect.x, image->clip_rect.y,
+           image->clip_rect.w, image->clip_rect.h, image->alpha, image->mode,
+           image->bbuff, image->gamut, image->color_range);
+}
+
+static bool run_blend(int g2d_fd, g2d_fmt_enh background_format,
+                      int background_fd, int overlay_fd,
+                      g2d_fmt_enh destination_format, int destination_fd,
                       unsigned int width, unsigned int height,
                       unsigned int iteration)
 {
@@ -437,18 +450,33 @@ static bool run_blend(int g2d_fd, g2d_fmt_enh destination_format,
 
     memset(&blend, 0, sizeof(blend));
     blend.bld_cmd = G2D_BLD_SRCOVER;
+    set_image_defaults(&blend.src_image[0], background_fd, background_format,
+                       width, height);
+    set_image_defaults(&blend.src_image[1], overlay_fd, G2D_FORMAT_ARGB8888,
+                       width, height);
     set_image_defaults(&blend.dst_image, destination_fd, destination_format,
                        width, height);
-    set_image_defaults(&blend.src_image[0], source_fd, G2D_FORMAT_ARGB8888,
-                       width, height);
+    if (iteration == 1U) {
+        printf("BLD_H parameters: cmd=0x%x sizeof(g2d_bld)=%zu "
+               "sizeof(g2d_image_enh)=%zu\n",
+               G2D_CMD_BLD_H, sizeof(g2d_bld), sizeof(g2d_image_enh));
+        print_image_summary("src_image[0] background", &blend.src_image[0]);
+        print_image_summary("src_image[1] overlay", &blend.src_image[1]);
+        print_image_summary("src_image[2] unused", &blend.src_image[2]);
+        print_image_summary("src_image[3] unused", &blend.src_image[3]);
+        print_image_summary("dst_image", &blend.dst_image);
+    }
     errno = 0;
     result = ioctl(g2d_fd, G2D_CMD_BLD_H, &blend);
     if (result < 0) {
         fprintf(stderr,
-                "BLD_H failed at iteration %u: cmd=0x%x src_fd=%d "
-                "dst_fd=%d dst_format=0x%x errno=%d (%s)\n",
-                iteration, G2D_CMD_BLD_H, source_fd, destination_fd,
-                destination_format, errno, strerror(errno));
+                "BLD_H failed at iteration %u: cmd=0x%x src0_fd=%d "
+                "src1_fd=%d src2_fd=%d src3_fd=%d dst_fd=%d "
+                "dst_format=0x%x errno=%d (%s)\n",
+                iteration, G2D_CMD_BLD_H, blend.src_image[0].fd,
+                blend.src_image[1].fd, blend.src_image[2].fd,
+                blend.src_image[3].fd, blend.dst_image.fd, destination_format,
+                errno, strerror(errno));
         return false;
     }
     return true;
@@ -481,17 +509,21 @@ int main(int argc, char **argv)
     SmokeOptions options;
     IonApi ion;
     IonBuffer source;
+    IonBuffer overlay;
     IonBuffer destination;
     g2d_fmt_enh source_format = G2D_FORMAT_ARGB8888;
+    g2d_fmt_enh overlay_format = G2D_FORMAT_ARGB8888;
     g2d_fmt_enh destination_format = G2D_FORMAT_ARGB8888;
     int g2d_fd = -1;
     bool ion_opened = false;
     bool success = false;
     unsigned int iteration;
     size_t source_size;
+    size_t overlay_size;
     size_t destination_size;
 
     ion_buffer_reset(&source);
+    ion_buffer_reset(&overlay);
     ion_buffer_reset(&destination);
 
     if (!parse_options(argc, argv, &options)) {
@@ -506,12 +538,14 @@ int main(int argc, char **argv)
         destination_format = G2D_FORMAT_YUV420_PLANAR;
         break;
     case SMOKE_OPERATION_YUV_BLEND:
+        source_format = G2D_FORMAT_YUV420_PLANAR;
         destination_format = G2D_FORMAT_YUV420_PLANAR;
         break;
     default:
         break;
     }
     source_size = image_size_for_format(source_format, width, height);
+    overlay_size = image_size_for_format(overlay_format, width, height);
     destination_size = image_size_for_format(destination_format, width, height);
     printf("g2d smoke: operation=%s %ux%u, iterations=%u\n",
            operation_name(options.operation), width, height,
@@ -535,25 +569,28 @@ int main(int argc, char **argv)
     ion_opened = true;
 
     if (!ion_buffer_alloc(&ion, &source, source_size) ||
+        ((options.operation == SMOKE_OPERATION_BLEND ||
+          options.operation == SMOKE_OPERATION_YUV_BLEND) &&
+         !ion_buffer_alloc(&ion, &overlay, overlay_size)) ||
         !ion_buffer_alloc(&ion, &destination, destination_size)) {
         fprintf(stderr, "libawion allocation failed\n");
         goto cleanup;
     }
 
-    if (source_format == G2D_FORMAT_YUV420_PLANAR) {
+    if (options.operation == SMOKE_OPERATION_YUV_BLEND) {
         fill_yuv420_pattern((uint8_t *)source.memory, width, height);
-    } else if (options.operation == SMOKE_OPERATION_BLEND ||
-               options.operation == SMOKE_OPERATION_YUV_BLEND) {
-        fill_blend_foreground((uint32_t *)source.memory, width, height);
+        fill_blend_foreground((uint32_t *)overlay.memory, width, height);
+    } else if (options.operation == SMOKE_OPERATION_BLEND) {
+        fill_blend_background((uint32_t *)source.memory, width, height);
+        fill_blend_foreground((uint32_t *)overlay.memory, width, height);
+    } else if (source_format == G2D_FORMAT_YUV420_PLANAR) {
+        fill_yuv420_pattern((uint8_t *)source.memory, width, height);
     } else {
         fill_pattern((uint32_t *)source.memory, width, height);
     }
-    if (options.operation == SMOKE_OPERATION_BLEND) {
-        fill_blend_background((uint32_t *)destination.memory, width, height);
-    } else {
-        memset(destination.memory, 0, destination_size);
-    }
+    memset(destination.memory, 0, destination_size);
     flush_buffer(&ion, &source);
+    flush_buffer(&ion, &overlay);
     flush_buffer(&ion, &destination);
 
     g2d_fd = open(G2D_DEVICE, O_RDWR | O_CLOEXEC);
@@ -569,7 +606,8 @@ int main(int argc, char **argv)
 
         if (options.operation == SMOKE_OPERATION_BLEND ||
             options.operation == SMOKE_OPERATION_YUV_BLEND) {
-            operation_ok = run_blend(g2d_fd, destination_format, source.fd,
+            operation_ok = run_blend(g2d_fd, source_format, source.fd,
+                                     overlay.fd, destination_format,
                                      destination.fd, width, height,
                                      iteration + 1U);
         } else {
@@ -618,6 +656,7 @@ cleanup:
         close(g2d_fd);
     }
     ion_buffer_free(&ion, &destination);
+    ion_buffer_free(&ion, &overlay);
     ion_buffer_free(&ion, &source);
     if (ion_opened) {
         ion.close();
