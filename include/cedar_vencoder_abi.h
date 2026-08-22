@@ -1,6 +1,7 @@
 #ifndef T113_CEDAR_VENCODER_ABI_H
 #define T113_CEDAR_VENCODER_ABI_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /*
@@ -23,6 +24,69 @@ typedef enum {
     CEDAR_VENC_PIXEL_YUV420P = 2,
     CEDAR_VENC_PIXEL_YVU420P = 3
 } CedarVencPixelFormat;
+
+/*
+ * Overlay ABI from the Allwinner Cedar vencoder.h family.  Reference source:
+ * https://github.com/Allwinner-Homlet/H6-CedarC/blob/master/include/vencoder.h
+ * The board's
+ * libvenc_jpeg.so independently confirms VENC_IndexParamSetOverlay (0x404),
+ * the 64-block limit, the ARGB type field, and the overlay header fields in
+ * its JpegSetParameter implementation.  Keep these declarations separate
+ * from the production encoder until the board smoke test validates them.
+ */
+#define CEDAR_VENC_MAX_OVERLAY_SIZE 64U
+#define CEDAR_VENC_INDEX_PARAM_SET_OVERLAY 0x404
+
+typedef enum {
+    CEDAR_VENC_OVERLAY_ARGB_MIN = -1,
+    CEDAR_VENC_OVERLAY_ARGB8888 = 0,
+    CEDAR_VENC_OVERLAY_ARGB4444 = 1,
+    CEDAR_VENC_OVERLAY_ARGB1555 = 2,
+    CEDAR_VENC_OVERLAY_ARGB_MAX = 3
+} CedarVencOverlayArgbType;
+
+typedef enum {
+    CEDAR_VENC_NORMAL_OVERLAY = 0,
+    CEDAR_VENC_COVER_OVERLAY = 1,
+    CEDAR_VENC_LUMA_REVERSE_OVERLAY = 2
+} CedarVencOverlayType;
+
+typedef struct {
+    uint8_t use_cover_yuv_flag;
+    uint8_t cover_y;
+    uint8_t cover_u;
+    uint8_t cover_v;
+} CedarVencOverlayCoverYuv;
+
+typedef struct {
+    uint16_t start_mb_x;
+    uint16_t end_mb_x;
+    uint16_t start_mb_y;
+    uint16_t end_mb_y;
+    uint8_t extra_alpha_flag;
+    uint8_t extra_alpha;
+    CedarVencOverlayCoverYuv cover_yuv;
+    CedarVencOverlayType overlay_type;
+    uint8_t *overlay_blk_addr;
+    uint32_t bitmap_size;
+} CedarVencOverlayHeader;
+
+typedef struct {
+    uint8_t blk_num;
+    CedarVencOverlayArgbType argb_type;
+    CedarVencOverlayHeader overlay_header_list[CEDAR_VENC_MAX_OVERLAY_SIZE];
+} CedarVencOverlayInfo;
+
+#if UINTPTR_MAX == 0xffffffffU
+_Static_assert(offsetof(CedarVencOverlayHeader, overlay_blk_addr) == 20U,
+               "unexpected Cedar overlay header pointer offset");
+_Static_assert(offsetof(CedarVencOverlayHeader, bitmap_size) == 24U,
+               "unexpected Cedar overlay header bitmap offset");
+_Static_assert(sizeof(CedarVencOverlayHeader) == 28U,
+               "unexpected Cedar overlay header size");
+_Static_assert(offsetof(CedarVencOverlayInfo, overlay_header_list) == 8U,
+               "unexpected Cedar overlay info header offset");
+#endif
 
 typedef struct {
     int nLeft;
@@ -132,5 +196,20 @@ typedef int (*CedarFreeOneBitstreamFrame)(CedarVideoEncoder *encoder,
                                           CedarVencOutputBuffer *buffer);
 typedef int (*CedarVideoEncSetParameter)(CedarVideoEncoder *encoder,
                                          int index, void *value);
+
+/* Short names used by standalone ABI probes; production names stay stable. */
+typedef CedarVideoEncCreate CedarVencCreate;
+typedef CedarVideoEncDestroy CedarVencDestroy;
+typedef CedarVideoEncInit CedarVencInit;
+typedef CedarAllocInputBuffer CedarVencAllocInputBuffer;
+typedef CedarGetOneAllocInputBuffer CedarVencGetInputBuffer;
+typedef CedarFlushCacheAllocInputBuffer CedarVencFlushInputBuffer;
+typedef CedarReturnOneAllocInputBuffer CedarVencReturnInputBuffer;
+typedef CedarAddOneInputBuffer CedarVencAddInputBuffer;
+typedef CedarVideoEncodeOneFrame CedarVencEncode;
+typedef CedarAlreadyUsedInputBuffer CedarVencUsedInputBuffer;
+typedef CedarGetOneBitstreamFrame CedarVencGetOutputBuffer;
+typedef CedarFreeOneBitstreamFrame CedarVencFreeOutputBuffer;
+typedef CedarVideoEncSetParameter CedarVencSetParameter;
 
 #endif

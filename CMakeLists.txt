@@ -9,8 +9,16 @@ add_executable(g2d_smoke_test
     tools/g2d_smoke_test.c
 )
 
+add_executable(vencoder_overlay_test
+    tools/vencoder_overlay_test.c
+)
+
 target_include_directories(g2d_smoke_test PRIVATE
     ${CMAKE_SOURCE_DIR}
+)
+
+target_include_directories(vencoder_overlay_test PRIVATE
+    include
 )
 
 target_compile_options(g2d_smoke_test PRIVATE
@@ -19,7 +27,17 @@ target_compile_options(g2d_smoke_test PRIVATE
     -Wpedantic
 )
 
+target_compile_options(vencoder_overlay_test PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
 target_link_libraries(g2d_smoke_test PRIVATE
+    ${CMAKE_DL_LIBS}
+)
+
+target_link_libraries(vencoder_overlay_test PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
