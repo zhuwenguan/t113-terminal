@@ -25,6 +25,8 @@ typedef enum {
     SMOKE_OPERATION_COPY = 0,
     SMOKE_OPERATION_YUV_TO_ARGB,
     SMOKE_OPERATION_ARGB_TO_YUV,
+    SMOKE_OPERATION_ARGB_TO_NV12,
+    SMOKE_OPERATION_ARGB_TO_NV21,
     SMOKE_OPERATION_BLEND,
     SMOKE_OPERATION_YUV_BLEND
 } SmokeOperation;
@@ -117,7 +119,8 @@ static void print_usage(const char *program)
 {
     printf("Usage: %s [--operation OP] [--iterations N] [--output FILE]\n",
            program);
-    printf("  OP: copy, yuv-to-argb, argb-to-yuv, blend, yuv-blend.\n");
+    printf("  OP: copy, yuv-to-argb, argb-to-yuv, argb-to-nv12, "
+           "argb-to-nv21, blend, yuv-blend.\n");
     printf("  copy runs ARGB8888 dma-buf -> dma-buf G2D BITBLT_H.\n");
     printf("  Defaults: 1280x720, %u iterations.\n", DEFAULT_ITERATIONS);
 }
@@ -131,6 +134,10 @@ static const char *operation_name(SmokeOperation operation)
         return "yuv-to-argb";
     case SMOKE_OPERATION_ARGB_TO_YUV:
         return "argb-to-yuv";
+    case SMOKE_OPERATION_ARGB_TO_NV12:
+        return "argb-to-nv12";
+    case SMOKE_OPERATION_ARGB_TO_NV21:
+        return "argb-to-nv21";
     case SMOKE_OPERATION_BLEND:
         return "blend";
     case SMOKE_OPERATION_YUV_BLEND:
@@ -148,6 +155,10 @@ static bool parse_operation(const char *value, SmokeOperation *operation)
         *operation = SMOKE_OPERATION_YUV_TO_ARGB;
     } else if (strcmp(value, "argb-to-yuv") == 0) {
         *operation = SMOKE_OPERATION_ARGB_TO_YUV;
+    } else if (strcmp(value, "argb-to-nv12") == 0) {
+        *operation = SMOKE_OPERATION_ARGB_TO_NV12;
+    } else if (strcmp(value, "argb-to-nv21") == 0) {
+        *operation = SMOKE_OPERATION_ARGB_TO_NV21;
     } else if (strcmp(value, "blend") == 0) {
         *operation = SMOKE_OPERATION_BLEND;
     } else if (strcmp(value, "yuv-blend") == 0) {
@@ -536,6 +547,12 @@ int main(int argc, char **argv)
         break;
     case SMOKE_OPERATION_ARGB_TO_YUV:
         destination_format = G2D_FORMAT_YUV420_PLANAR;
+        break;
+    case SMOKE_OPERATION_ARGB_TO_NV12:
+        destination_format = G2D_FORMAT_YUV420UVC_U1V1U0V0;
+        break;
+    case SMOKE_OPERATION_ARGB_TO_NV21:
+        destination_format = G2D_FORMAT_YUV420UVC_V1U1V0U0;
         break;
     case SMOKE_OPERATION_YUV_BLEND:
         source_format = G2D_FORMAT_YUV420_PLANAR;
