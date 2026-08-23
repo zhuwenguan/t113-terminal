@@ -205,3 +205,67 @@ dmesg 未见 Oops、G2D timeout、L2 PageTable Invalid、VE hang 或 D-state；
 因此当前结论是“生产链保持未切换；copy baseline 已精确拆分，但 Cedar input
 没有安全可用 share fd，zero-copy 被明确阻塞”。该诊断工具未接入生产视频线程；
 在未重启板端前不要重复启动它，因为每次退出会继续留下同类 Cedar attachment。
+
+## Direct HUD ION 验证（本轮）
+
+本轮新增 `HudSurface` caller-provided surface 接口。原有 heap RGBA renderer
+接口保持兼容；direct 接口按 `pixels`、`width`、`height`、`stride_bytes` 和
+`pixel_format` 写入调用者提供的 ARGB8888 surface。T113 ARGB8888 的内存字节序
+按 `B,G,R,A` 写入，原有 CPU/compositor RGBA 路径仍按 `R,G,B,A` 写入。renderer
+不再假定紧密 stride，也不拥有外部 surface 的生命周期。
+
+`hud_ion_test` 的 Phase A/B 都只在初始化时分配一次 HUD ION buffer：
+
+```text
+format  ARGB8888
+size    3,686,400 bytes
+stride  5,120 bytes
+owner   ION test harness；renderer 只借用 mmap view
+```
+
+Phase A 1000/5000 帧和 Phase B 100/1000/5000 帧均通过；Phase B 继续使用安全的
+YUV420P -> ARGB `G2D_BLT_NONE_H` 和 ARGB camera + ARGB HUD -> final ARGB
+`G2D_BLD_H`。代表性长测结果：
+
+| 测试 | HUD clear avg/P95/max | HUD draw avg/P95/max | cache sync avg/P95/max | HUD total / 总帧 avg |
+| --- | ---: | ---: | ---: | ---: |
+| A / 5000 | 1.485 / 1.573 / 2.075 ms | 0.838 / 0.989 / 1.513 ms | 0.435 / 0.466 / 0.786 ms | 2.769 ms |
+| B / 5000 | 1.484 / 1.526 / 2.628 ms | 0.862 / 1.005 / 1.958 ms | 0.434 / 0.467 / 1.142 ms | 2.780 / 15.491 ms |
+
+Phase B 的 G2D YUV->ARGB 平均 4.705 ms、BLD_H 平均 7.985 ms，P95 分别为
+4.753 ms 和 8.061 ms。HUD checksum 在动态帧间变化，HUD 与 BLD 输出样本均已
+生成；实际 JPEG 抽样可解码并显示动态 HUD。Phase A/B 循环内 dma-buf count、
+bytes、fd 和 RSS 均无增长，shutdown 相对测试基线无新增 dma-buf。
+
+## F 链 Direct HUD 结果
+
+`video_argb_pipeline_test --mode F --handoff copy` 已改为复用同一块持久 HUD
+ION buffer，完全删除普通 CPU HUD buffer 到 ION HUD buffer 的全帧 upload/copy。
+本次只保留 Cedar final ARGB CPU memcpy；未修改生产 `video_pipeline`、
+`video_compositor`、`video_recorder`，也未运行 Cedar zero-copy、overlay 或任何
+G2D YUV destination 路径。
+
+F/10000（包含 frame 1000、10000 的低频 JPEG 抽样 checkpoint）结果：
+
+| 阶段 | avg | P95 | max |
+| --- | ---: | ---: | ---: |
+| HUD clear | 1.491 ms | 1.541 ms | 2.032 ms |
+| HUD draw | 0.961 ms | 1.106 ms | 1.987 ms |
+| HUD cache sync | 0.436 ms | 0.473 ms | 0.772 ms |
+| HUD total | 2.894 ms | 3.055 ms | 4.472 ms |
+| YUV->ARGB | 4.785 ms | 4.831 ms | 11.902 ms |
+| BLD_H | 7.396 ms | 7.461 ms | 14.746 ms |
+| Cedar handoff total | 5.258 ms | 5.446 ms | 8.429 ms |
+| Cedar JPEG encode | 4.489 ms | 4.516 ms | 5.797 ms |
+| total frame | 25.450 ms | 25.691 ms | 137.451 ms |
+
+F/10000 wall time 为 254.92 s，理论 39.23 FPS，CPU 132252 ms / 51.9%。
+总帧 max 和 `other_unaccounted` max 来自低频全帧 checksum/JPEG 样本，不代表
+稳态帧；稳态 P95 为 25.691 ms。命名阶段平均值与总帧平均值的差异主要来自
+低频诊断成本。
+
+F 运行期间 dma-buf count/bytes 和 fd 保持稳定，RSS 斜率为 +20 kB；direct HUD
+ION buffer 在启动分配一次、退出释放一次，没有新增循环泄漏。dmesg 未发现
+Oops、G2D timeout、PageTable Invalid、VE hang 或 D-state。退出后的固定
+`+12,443,648 bytes / 4 buffers` 与已知 Cedar/ION teardown 残留一致，本轮未
+修改或扩大该问题。

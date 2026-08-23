@@ -92,8 +92,10 @@ typedef struct {
 typedef uint32_t (*PipelineIonVir2PhyFn)(void *memory);
 
 typedef enum {
-    PIPELINE_STAGE_HUD_RENDER_CORE = 0,
-    PIPELINE_STAGE_HUD_UPLOAD,
+    PIPELINE_STAGE_HUD_CLEAR = 0,
+    PIPELINE_STAGE_HUD_DRAW,
+    PIPELINE_STAGE_HUD_CACHE_SYNC,
+    PIPELINE_STAGE_HUD_TOTAL,
     PIPELINE_STAGE_G2D_YUV_TO_ARGB,
     PIPELINE_STAGE_G2D_BLEND,
     PIPELINE_STAGE_CEDAR_INPUT_ACQUIRE,
@@ -123,11 +125,11 @@ typedef struct {
 } PipelineTiming;
 
 static const char *const pipeline_stage_names[PIPELINE_STAGE_COUNT] = {
-    "hud_render_core", "hud_upload", "g2d_yuv_to_argb", "g2d_blend",
-    "cedar_input_acquire", "argb_memcpy", "cedar_cache_flush",
-    "cedar_input_prepare", "other_handoff", "handoff_total",
-    "cedar_submit", "cedar_hw_encode", "cedar_acquire_release",
-    "jpeg_write", "other_unaccounted", "total_frame"
+    "hud_clear", "hud_draw", "hud_cache_sync", "hud_total",
+    "g2d_yuv_to_argb", "g2d_blend", "cedar_input_acquire", "argb_memcpy",
+    "cedar_cache_flush", "cedar_input_prepare", "other_handoff",
+    "handoff_total", "cedar_submit", "cedar_hw_encode",
+    "cedar_acquire_release", "jpeg_write", "other_unaccounted", "total_frame"
 };
 
 static uint64_t pipeline_now_us(void)
@@ -396,29 +398,6 @@ static void pipeline_set_mock_state(VehicleState *state, unsigned int frame)
     state->throttle_percent = 34.0 + (double)(frame % 40U) * 0.5;
     state->brake_percent = frame % 75U < 8U ? 18.0 : 0.0;
     state->drive_state = VEHICLE_DRIVE_STATE_DRIVE;
-}
-
-static void pipeline_copy_hud_to_argb(const HudLayer *layer,
-                                      IonBuffer *destination)
-{
-    uint32_t row;
-
-    for (row = 0U; row < layer->height; ++row) {
-        const uint8_t *source = layer->pixels +
-                                (size_t)row * layer->stride;
-        uint8_t *target = (uint8_t *)destination->memory +
-                          (size_t)row * PIPELINE_STRIDE;
-        uint32_t column;
-
-        for (column = 0U; column < layer->width; ++column) {
-            target[0] = source[2];
-            target[1] = source[1];
-            target[2] = source[0];
-            target[3] = source[3];
-            source += VIDEO_FRAME_CHANNELS;
-            target += PIPELINE_BPP;
-        }
-    }
 }
 
 static bool pipeline_buffer_alloc(const IonApi *ion, PipelineBuffer *buffer,
@@ -756,14 +735,17 @@ static void pipeline_timing_record(PipelineTiming *stats,
 static void pipeline_print_timing(PipelineMode mode, unsigned int frame,
                                   const PipelineFrameTiming *timing)
 {
-    printf("[%s] frame=%u hud=%.2fms hud_upload=%.2fms yuv_to_argb=%.2fms "
+    printf("[%s] frame=%u hud_clear=%.2fms hud_draw=%.2fms "
+           "hud_sync=%.2fms hud_total=%.2fms yuv_to_argb=%.2fms "
            "BLD_H=%.2fms acquire=%.2fms memcpy=%.2fms flush=%.2fms "
            "prepare=%.2fms handoff=%.2fms submit=%.2fms encode=%.2fms "
            "acquire_release=%.2fms jpeg_write=%.2fms other=%.2fms "
            "total=%.2fms JPEG=%u\n",
            pipeline_mode_name(mode), frame,
-           timing->values[PIPELINE_STAGE_HUD_RENDER_CORE] / 1000.0,
-           timing->values[PIPELINE_STAGE_HUD_UPLOAD] / 1000.0,
+           timing->values[PIPELINE_STAGE_HUD_CLEAR] / 1000.0,
+           timing->values[PIPELINE_STAGE_HUD_DRAW] / 1000.0,
+           timing->values[PIPELINE_STAGE_HUD_CACHE_SYNC] / 1000.0,
+           timing->values[PIPELINE_STAGE_HUD_TOTAL] / 1000.0,
            timing->values[PIPELINE_STAGE_G2D_YUV_TO_ARGB] / 1000.0,
            timing->values[PIPELINE_STAGE_G2D_BLEND] / 1000.0,
            timing->values[PIPELINE_STAGE_CEDAR_INPUT_ACQUIRE] / 1000.0,
@@ -1011,6 +993,7 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
     CedarVencAllocateBufferParam buffer_param;
     HudRenderer hud_renderer;
     const HudLayer *dynamic_layer;
+    HudSurface hud_surface;
     IonApi ion;
     PipelineBuffer camera;
     PipelineBuffer hud;
@@ -1039,6 +1022,7 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
 
     memset(&encoder_api, 0, sizeof(encoder_api));
     memset(&hud_renderer, 0, sizeof(hud_renderer));
+    memset(&hud_surface, 0, sizeof(hud_surface));
     memset(&ion, 0, sizeof(ion));
     memset(&camera, 0, sizeof(camera));
     memset(&hud, 0, sizeof(hud));
@@ -1138,15 +1122,23 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
         flush_buffer(&ion, &final_argb.ion);
     }
 
-    if (hud_renderer_init(&hud_renderer, 1280U, 720U) != 0) {
-        fprintf(stderr, "hud_renderer_init failed\n");
+    hud_surface.pixels = (uint8_t *)hud.ion.memory;
+    hud_surface.width = PIPELINE_WIDTH;
+    hud_surface.height = PIPELINE_HEIGHT;
+    hud_surface.stride_bytes = PIPELINE_STRIDE;
+    hud_surface.pixel_format = HUD_PIXEL_FORMAT_ARGB8888;
+    if (hud_renderer_init_external(&hud_renderer, PIPELINE_WIDTH,
+                                   PIPELINE_HEIGHT) != 0) {
+        fprintf(stderr, "hud_renderer_init_external failed\n");
         goto cleanup;
     }
-    dynamic_layer = hud_renderer_render_dynamic(&hud_renderer, NULL, true);
+    dynamic_layer = hud_renderer_render_dynamic_to_surface(
+        &hud_renderer, NULL, true, &hud_surface, NULL);
     if (dynamic_layer == NULL) {
         fprintf(stderr, "initial HUD render failed\n");
         goto cleanup;
     }
+    flush_buffer(&ion, &hud.ion);
     printf("persistent buffers ready mode=%s camera_fd=%d hud_fd=%d "
            "intermediate_fd=%d final_fd=%d\n", pipeline_mode_name(options->mode),
            camera.ion.fd, hud.ion.fd, intermediate.ion.fd,
@@ -1191,6 +1183,7 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
     for (frame = 0U; frame < options->frames; ++frame) {
         VehicleState state;
         PipelineFrameTiming timing;
+        HudRenderTiming hud_timing;
         CedarVencInputBuffer direct_input;
         uint64_t frame_start = pipeline_now_us();
         uint64_t stage;
@@ -1200,21 +1193,24 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
         bool direct_input_acquired = false;
 
         memset(&timing, 0, sizeof(timing));
+        memset(&hud_timing, 0, sizeof(hud_timing));
         memset(&direct_input, 0, sizeof(direct_input));
         pipeline_set_mock_state(&state, frame);
-        stage = pipeline_now_us();
-        dynamic_layer = hud_renderer_render_dynamic(&hud_renderer, &state, true);
-        timing.values[PIPELINE_STAGE_HUD_RENDER_CORE] =
-            pipeline_now_us() - stage;
+        dynamic_layer = hud_renderer_render_dynamic_to_surface(
+            &hud_renderer, &state, true, &hud_surface, &hud_timing);
         if (dynamic_layer == NULL) {
             fprintf(stderr, "HUD render failed at frame %u\n", frame + 1U);
             goto cleanup;
         }
+        timing.values[PIPELINE_STAGE_HUD_CLEAR] = hud_timing.clear_time_us;
+        timing.values[PIPELINE_STAGE_HUD_DRAW] = hud_timing.draw_time_us;
         stage = pipeline_now_us();
-        pipeline_copy_hud_to_argb(dynamic_layer, &hud.ion);
         flush_buffer(&ion, &hud.ion);
-        timing.values[PIPELINE_STAGE_HUD_UPLOAD] =
+        timing.values[PIPELINE_STAGE_HUD_CACHE_SYNC] =
             pipeline_now_us() - stage;
+        timing.values[PIPELINE_STAGE_HUD_TOTAL] =
+            hud_timing.total_time_us +
+            timing.values[PIPELINE_STAGE_HUD_CACHE_SYNC];
         if (full_diagnostics) {
             hud_checksum = checksum32((const uint8_t *)hud.ion.memory,
                                        hud.ion.size);
@@ -1290,6 +1286,10 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
 
             for (named_stage = 0;
                  named_stage < PIPELINE_STAGE_OTHER_UNACCOUNTED; ++named_stage) {
+                if (named_stage == PIPELINE_STAGE_HUD_TOTAL ||
+                    named_stage == PIPELINE_STAGE_HANDOFF_TOTAL) {
+                    continue;
+                }
                 named_sum += timing.values[named_stage];
             }
             timing.values[PIPELINE_STAGE_OTHER_UNACCOUNTED] =
