@@ -119,6 +119,7 @@ static void ion_unload(IonApi *api)
     memset(api, 0, sizeof(*api));
 }
 
+#ifndef G2D_SMOKE_TEST_NO_MAIN
 static void print_usage(const char *program)
 {
     printf("Usage: %s [--operation OP] [--iterations N] [--monitor-interval N] "
@@ -240,6 +241,7 @@ static bool parse_options(int argc, char **argv, SmokeOptions *options)
     }
     return true;
 }
+#endif
 
 static void fill_pattern(uint32_t *pixels, unsigned int width,
                          unsigned int height)
@@ -284,6 +286,7 @@ static void fill_yuv420_pattern(uint8_t *pixels, unsigned int width,
     }
 }
 
+#ifndef G2D_SMOKE_TEST_NO_MAIN
 static void fill_blend_foreground(uint32_t *pixels, unsigned int width,
                                   unsigned int height)
 {
@@ -313,6 +316,7 @@ static void fill_blend_background(uint32_t *pixels, unsigned int width,
         }
     }
 }
+#endif
 
 static uint32_t checksum32(const uint8_t *data, size_t size)
 {
@@ -326,6 +330,7 @@ static uint32_t checksum32(const uint8_t *data, size_t size)
     return checksum;
 }
 
+#ifndef G2D_SMOKE_TEST_NO_MAIN
 static bool verify_copy(const uint8_t *source, const uint8_t *destination,
                         size_t size)
 {
@@ -342,6 +347,7 @@ static bool verify_copy(const uint8_t *source, const uint8_t *destination,
     }
     return true;
 }
+#endif
 
 static void set_image_defaults(g2d_image_enh *image, int buffer_fd,
                                g2d_fmt_enh format, unsigned int width,
@@ -520,6 +526,7 @@ static bool run_blend(int g2d_fd, g2d_fmt_enh background_format,
     return true;
 }
 
+#ifndef G2D_SMOKE_TEST_NO_MAIN
 static bool write_output(const char *path, const uint8_t *data, size_t size)
 {
     FILE *file;
@@ -539,7 +546,9 @@ static bool write_output(const char *path, const uint8_t *data, size_t size)
     }
     return true;
 }
+#endif
 
+#ifndef G2D_SMOKE_TEST_NO_MAIN
 int main(int argc, char **argv)
 {
     const unsigned int width = DEFAULT_WIDTH;
@@ -740,3 +749,4 @@ cleanup:
     ion_unload(&ion);
     return success ? EXIT_SUCCESS : EXIT_FAILURE;
 }
+#endif

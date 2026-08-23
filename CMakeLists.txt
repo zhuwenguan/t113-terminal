@@ -17,6 +17,11 @@ add_executable(vencoder_rgb_test
     tools/vencoder_rgb_test.c
 )
 
+add_executable(video_argb_pipeline_test
+    tools/video_argb_pipeline_test.c
+    src/hud_renderer.c
+)
+
 target_include_directories(g2d_smoke_test PRIVATE
     ${CMAKE_SOURCE_DIR}
 )
@@ -26,6 +31,11 @@ target_include_directories(vencoder_overlay_test PRIVATE
 )
 
 target_include_directories(vencoder_rgb_test PRIVATE
+    include
+)
+
+target_include_directories(video_argb_pipeline_test PRIVATE
+    ${CMAKE_SOURCE_DIR}
     include
 )
 
@@ -47,6 +57,12 @@ target_compile_options(vencoder_rgb_test PRIVATE
     -Wpedantic
 )
 
+target_compile_options(video_argb_pipeline_test PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
 target_link_libraries(g2d_smoke_test PRIVATE
     ${CMAKE_DL_LIBS}
 )
@@ -57,6 +73,11 @@ target_link_libraries(vencoder_overlay_test PRIVATE
 
 target_link_libraries(vencoder_rgb_test PRIVATE
     ${CMAKE_DL_LIBS}
+)
+
+target_link_libraries(video_argb_pipeline_test PRIVATE
+    ${CMAKE_DL_LIBS}
+    m
 )
 
 find_path(T113_JPEG_INCLUDE_DIR jpeglib.h
