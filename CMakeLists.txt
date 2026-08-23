@@ -22,6 +22,11 @@ add_executable(video_argb_pipeline_test
     src/hud_renderer.c
 )
 
+add_executable(hud_ion_test
+    tools/hud_ion_test.c
+    src/hud_renderer.c
+)
+
 target_include_directories(g2d_smoke_test PRIVATE
     ${CMAKE_SOURCE_DIR}
 )
@@ -35,6 +40,11 @@ target_include_directories(vencoder_rgb_test PRIVATE
 )
 
 target_include_directories(video_argb_pipeline_test PRIVATE
+    ${CMAKE_SOURCE_DIR}
+    include
+)
+
+target_include_directories(hud_ion_test PRIVATE
     ${CMAKE_SOURCE_DIR}
     include
 )
@@ -63,6 +73,12 @@ target_compile_options(video_argb_pipeline_test PRIVATE
     -Wpedantic
 )
 
+target_compile_options(hud_ion_test PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
 target_link_libraries(g2d_smoke_test PRIVATE
     ${CMAKE_DL_LIBS}
 )
@@ -76,6 +92,11 @@ target_link_libraries(vencoder_rgb_test PRIVATE
 )
 
 target_link_libraries(video_argb_pipeline_test PRIVATE
+    ${CMAKE_DL_LIBS}
+    m
+)
+
+target_link_libraries(hud_ion_test PRIVATE
     ${CMAKE_DL_LIBS}
     m
 )

@@ -243,6 +243,7 @@ static bool parse_options(int argc, char **argv, SmokeOptions *options)
 }
 #endif
 
+#ifndef G2D_SMOKE_TEST_NO_UNUSED_HELPERS
 static void fill_pattern(uint32_t *pixels, unsigned int width,
                          unsigned int height)
 {
@@ -263,6 +264,7 @@ static void fill_pattern(uint32_t *pixels, unsigned int width,
         }
     }
 }
+#endif
 
 static void fill_yuv420_pattern(uint8_t *pixels, unsigned int width,
                                 unsigned int height)
@@ -318,6 +320,7 @@ static void fill_blend_background(uint32_t *pixels, unsigned int width,
 }
 #endif
 
+#ifndef G2D_SMOKE_TEST_NO_UNUSED_HELPERS
 static uint32_t checksum32(const uint8_t *data, size_t size)
 {
     size_t index;
@@ -329,6 +332,7 @@ static uint32_t checksum32(const uint8_t *data, size_t size)
     }
     return checksum;
 }
+#endif
 
 #ifndef G2D_SMOKE_TEST_NO_MAIN
 static bool verify_copy(const uint8_t *source, const uint8_t *destination,
