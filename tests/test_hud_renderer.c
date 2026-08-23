@@ -169,10 +169,64 @@ static void test_yuv_compose_with_stride_and_crop(void)
     free(static_layer.pixels);
 }
 
+static void test_render_to_external_argb_surface(void)
+{
+    const uint32_t width = 640U;
+    const uint32_t height = 360U;
+    const uint32_t stride = width * VIDEO_FRAME_CHANNELS + 16U;
+    HudRenderer renderer;
+    HudSurface surface;
+    HudRenderTiming timing;
+    VehicleState state;
+    const HudLayer *layer;
+    uint8_t *pixels;
+    size_t index;
+    bool saw_red = false;
+
+    memset(&renderer, 0, sizeof(renderer));
+    memset(&surface, 0, sizeof(surface));
+    memset(&timing, 0, sizeof(timing));
+    memset(&state, 0, sizeof(state));
+    pixels = calloc(1U, (size_t)stride * height);
+    assert(pixels != NULL);
+    surface.pixels = pixels;
+    surface.width = width;
+    surface.height = height;
+    surface.stride_bytes = stride;
+    surface.pixel_format = HUD_PIXEL_FORMAT_ARGB8888;
+    state.valid_mask = VEHICLE_STATE_VALID_SPEED_KMH |
+                       VEHICLE_STATE_VALID_MOTOR_RPM;
+    state.speed_kmh = 88.0;
+    state.motor_rpm = 6400.0;
+    state.lap_valid = true;
+    state.lap_number = 7U;
+    assert(hud_renderer_init_external(&renderer, width, height) == 0);
+    assert(hud_renderer_render_dynamic(&renderer, &state, true) == NULL);
+    layer = hud_renderer_render_dynamic_to_surface(&renderer, &state, true,
+                                                   &surface, &timing);
+    assert(layer != NULL);
+    assert(layer->pixels == pixels);
+    assert(layer->width == width && layer->height == height);
+    assert(layer->stride == stride);
+    assert(layer->pixel_format == HUD_PIXEL_FORMAT_ARGB8888);
+    assert(timing.total_time_us >= timing.clear_time_us);
+    assert(timing.total_time_us >= timing.draw_time_us);
+    for (index = 0U; index + 3U < (size_t)stride * height; index += 4U) {
+        if (pixels[index + 2U] > pixels[index] && pixels[index + 3U] != 0U) {
+            saw_red = true;
+            break;
+        }
+    }
+    assert(saw_red);
+    hud_renderer_close(&renderer);
+    free(pixels);
+}
+
 int main(void)
 {
     test_render_at_size(HUD_BASE_WIDTH, HUD_BASE_HEIGHT);
     test_render_at_size(640U, 360U);
     test_yuv_compose_with_stride_and_crop();
+    test_render_to_external_argb_surface();
     return 0;
 }

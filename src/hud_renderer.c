@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct {
     uint8_t r;
@@ -87,6 +88,17 @@ static int hud_font_scale(const HudRenderer *renderer, int scale)
     return result < 1 ? 1 : result;
 }
 
+static uint64_t hud_renderer_now_us(void)
+{
+    struct timespec timestamp;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &timestamp) != 0) {
+        return 0U;
+    }
+    return (uint64_t)timestamp.tv_sec * 1000000U +
+           (uint64_t)timestamp.tv_nsec / 1000U;
+}
+
 static void hud_layer_clear(HudLayer *layer)
 {
     if (layer != NULL && layer->pixels != NULL) {
@@ -164,9 +176,16 @@ static void hud_pixel(HudLayer *layer, int x, int y, HudColor color)
     }
     pixel = layer->pixels + (size_t)y * layer->stride +
             (size_t)x * VIDEO_FRAME_CHANNELS;
-    pixel[0] = color.r;
-    pixel[1] = color.g;
-    pixel[2] = color.b;
+    if (layer->pixel_format == HUD_PIXEL_FORMAT_ARGB8888) {
+        /* The T113 G2D ARGB8888 dma-buf is little-endian B,G,R,A. */
+        pixel[0] = color.b;
+        pixel[1] = color.g;
+        pixel[2] = color.r;
+    } else {
+        pixel[0] = color.r;
+        pixel[1] = color.g;
+        pixel[2] = color.b;
+    }
     pixel[3] = color.a;
 }
 
@@ -612,7 +631,59 @@ static void hud_render_dynamic_values(HudRenderer *renderer, HudLayer *layer,
                       valid);
 }
 
-int hud_renderer_init(HudRenderer *renderer, uint32_t width, uint32_t height)
+static bool hud_surface_valid(const HudRenderer *renderer,
+                              const HudSurface *surface)
+{
+    return renderer != NULL && surface != NULL && surface->pixels != NULL &&
+           surface->width == renderer->width &&
+           surface->height == renderer->height &&
+           surface->stride_bytes >= surface->width * VIDEO_FRAME_CHANNELS &&
+           (surface->pixel_format == HUD_PIXEL_FORMAT_RGBA8888 ||
+            surface->pixel_format == HUD_PIXEL_FORMAT_ARGB8888);
+}
+
+static void hud_layer_set_surface(HudLayer *layer, const HudSurface *surface)
+{
+    memset(layer, 0, sizeof(*layer));
+    layer->width = surface->width;
+    layer->height = surface->height;
+    layer->stride = surface->stride_bytes;
+    layer->pixels = surface->pixels;
+    layer->pixel_format = surface->pixel_format;
+}
+
+static const HudLayer *hud_renderer_render_dynamic_layer(
+    HudRenderer *renderer, HudLayer *layer, const VehicleState *state,
+    bool recording, HudRenderTiming *timing)
+{
+    uint64_t total_start;
+    uint64_t stage_start;
+
+    if (timing != NULL) {
+        memset(timing, 0, sizeof(*timing));
+    }
+    total_start = hud_renderer_now_us();
+    stage_start = hud_renderer_now_us();
+    hud_layer_clear(layer);
+    if (timing != NULL) {
+        timing->clear_time_us = hud_renderer_now_us() - stage_start;
+    }
+    stage_start = hud_renderer_now_us();
+    hud_render_dynamic_values(renderer, layer, state);
+    if (recording) {
+        hud_draw_circle(renderer, layer, 182, 28, 6, hud_red);
+        hud_value(renderer, layer, 194, 21, "REC", hud_red);
+    }
+    hud_layer_set_dynamic_regions(renderer, layer);
+    if (timing != NULL) {
+        timing->draw_time_us = hud_renderer_now_us() - stage_start;
+        timing->total_time_us = hud_renderer_now_us() - total_start;
+    }
+    return layer;
+}
+
+static int hud_renderer_init_common(HudRenderer *renderer, uint32_t width,
+                                    uint32_t height, bool allocate_layers)
 {
     size_t bytes;
 
@@ -629,13 +700,6 @@ int hud_renderer_init(HudRenderer *renderer, uint32_t width, uint32_t height)
         return -1;
     }
     bytes = (size_t)width * height * VIDEO_FRAME_CHANNELS;
-    renderer->static_layer.pixels = calloc(1U, bytes);
-    renderer->dynamic_layer.pixels = calloc(1U, bytes);
-    if (renderer->static_layer.pixels == NULL ||
-        renderer->dynamic_layer.pixels == NULL) {
-        hud_renderer_close(renderer);
-        return -1;
-    }
     renderer->width = width;
     renderer->height = height;
     renderer->scale_x = (double)width / HUD_BASE_WIDTH;
@@ -643,12 +707,35 @@ int hud_renderer_init(HudRenderer *renderer, uint32_t width, uint32_t height)
     renderer->static_layer.width = width;
     renderer->static_layer.height = height;
     renderer->static_layer.stride = width * VIDEO_FRAME_CHANNELS;
+    renderer->static_layer.pixel_format = HUD_PIXEL_FORMAT_RGBA8888;
     renderer->dynamic_layer.width = width;
     renderer->dynamic_layer.height = height;
     renderer->dynamic_layer.stride = width * VIDEO_FRAME_CHANNELS;
+    renderer->dynamic_layer.pixel_format = HUD_PIXEL_FORMAT_RGBA8888;
+    renderer->dynamic_surface_only = !allocate_layers;
     renderer->initialized = true;
-    hud_render_static(renderer);
+    if (allocate_layers) {
+        renderer->static_layer.pixels = calloc(1U, bytes);
+        renderer->dynamic_layer.pixels = calloc(1U, bytes);
+        if (renderer->static_layer.pixels == NULL ||
+            renderer->dynamic_layer.pixels == NULL) {
+            hud_renderer_close(renderer);
+            return -1;
+        }
+        hud_render_static(renderer);
+    }
     return 0;
+}
+
+int hud_renderer_init(HudRenderer *renderer, uint32_t width, uint32_t height)
+{
+    return hud_renderer_init_common(renderer, width, height, true);
+}
+
+int hud_renderer_init_external(HudRenderer *renderer, uint32_t width,
+                               uint32_t height)
+{
+    return hud_renderer_init_common(renderer, width, height, false);
 }
 
 void hud_renderer_close(HudRenderer *renderer)
@@ -671,16 +758,24 @@ const HudLayer *hud_renderer_render_dynamic(HudRenderer *renderer,
                                              const VehicleState *state,
                                              bool recording)
 {
-    if (renderer == NULL || !renderer->initialized) {
+    if (renderer == NULL || !renderer->initialized ||
+        renderer->dynamic_surface_only || renderer->dynamic_layer.pixels == NULL) {
         return NULL;
     }
-    hud_layer_clear(&renderer->dynamic_layer);
-    hud_render_dynamic_values(renderer, &renderer->dynamic_layer, state);
-    if (recording) {
-        hud_draw_circle(renderer, &renderer->dynamic_layer, 182, 28, 6,
-                        hud_red);
-        hud_value(renderer, &renderer->dynamic_layer, 194, 21, "REC", hud_red);
+    return hud_renderer_render_dynamic_layer(renderer, &renderer->dynamic_layer,
+                                              state, recording, NULL);
+}
+
+const HudLayer *hud_renderer_render_dynamic_to_surface(
+    HudRenderer *renderer, const VehicleState *state, bool recording,
+    const HudSurface *surface, HudRenderTiming *timing)
+{
+    if (renderer == NULL || !renderer->initialized ||
+        !hud_surface_valid(renderer, surface)) {
+        return NULL;
     }
-    hud_layer_set_dynamic_regions(renderer, &renderer->dynamic_layer);
-    return &renderer->dynamic_layer;
+    hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
+    return hud_renderer_render_dynamic_layer(renderer,
+                                              &renderer->external_dynamic_layer,
+                                              state, recording, timing);
 }
