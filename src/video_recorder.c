@@ -381,11 +381,15 @@ static bool video_recorder_write_ftyp(FILE *file)
     return fwrite(ftyp, 1U, sizeof(ftyp), file) == sizeof(ftyp);
 }
 
-static bool video_recorder_write_u32_at(FILE *file, uint64_t offset,
-                                         uint32_t value)
+static bool video_recorder_write_u64_at(FILE *file, uint64_t offset,
+                                        uint64_t value)
 {
-    uint8_t bytes[4] = { (uint8_t)(value >> 24), (uint8_t)(value >> 16),
-                         (uint8_t)(value >> 8), (uint8_t)value };
+    uint8_t bytes[8] = {
+        (uint8_t)(value >> 56), (uint8_t)(value >> 48),
+        (uint8_t)(value >> 40), (uint8_t)(value >> 32),
+        (uint8_t)(value >> 24), (uint8_t)(value >> 16),
+        (uint8_t)(value >> 8), (uint8_t)value
+    };
 
     if (fseeko(file, (off_t)offset, SEEK_SET) != 0 ||
         fwrite(bytes, 1U, sizeof(bytes), file) != sizeof(bytes)) {
@@ -409,7 +413,10 @@ static void video_recorder_close_mux_files(VideoRecorder *recorder)
 
 static int video_recorder_mux_open(VideoRecorder *recorder)
 {
-    uint8_t mdat_header[8] = { 0U, 0U, 0U, 0U, 'm','d','a','t' };
+    uint8_t mdat_header[16] = {
+        0U, 0U, 0U, 1U, 'm','d','a','t',
+        0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
+    };
 
     recorder->file = fopen(recorder->path, "wb+");
     if (recorder->file == NULL) {
@@ -423,7 +430,7 @@ static int video_recorder_mux_open(VideoRecorder *recorder)
         video_recorder_close_mux_files(recorder);
         return -1;
     }
-    recorder->mdat_size_offset = 24U;
+    recorder->mdat_size_offset = 32U;
     return 0;
 }
 
@@ -540,9 +547,9 @@ static int video_recorder_mux_finalize(VideoRecorder *recorder)
             goto done;
         }
     }
-    if (recorder->media_bytes > UINT32_MAX - 8U ||
-        !video_recorder_write_u32_at(recorder->file, recorder->mdat_size_offset,
-                                     (uint32_t)(recorder->media_bytes + 8U)) ||
+    if (recorder->media_bytes > UINT64_MAX - 16U ||
+        !video_recorder_write_u64_at(recorder->file, recorder->mdat_size_offset,
+                                     recorder->media_bytes + 16U) ||
         fseeko(recorder->file, 0, SEEK_END) != 0 ||
         !mp4_build_movie(&movie, recorder, samples) ||
         fwrite(movie.data, 1U, movie.size, recorder->file) != movie.size ||

@@ -14,6 +14,11 @@ static uint32_t read_be32(const uint8_t *value)
            ((uint32_t)value[2] << 8) | value[3];
 }
 
+static uint64_t read_be64(const uint8_t *value)
+{
+    return ((uint64_t)read_be32(value) << 32) | read_be32(value + 4U);
+}
+
 int main(void)
 {
     char path[160];
@@ -63,6 +68,10 @@ int main(void)
     size = fread(data, 1U, sizeof(data), file);
     assert(!ferror(file));
     assert(fclose(file) == 0);
+    assert(size > 40U);
+    assert(read_be32(data + 24U) == 1U);
+    assert(memcmp(data + 28U, "mdat", 4U) == 0);
+    assert(read_be64(data + 32U) > 16U);
     for (index = 4U; index + 36U <= size; ++index) {
         size_t entry;
 
