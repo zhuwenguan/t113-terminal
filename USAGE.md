@@ -147,3 +147,24 @@ ip link show awlink0
 ip link show awlink1
 ps | grep t113_terminal
 ```
+
+## 车载视频录像
+
+生产录像默认使用 `auto` compositor：优先初始化 G2D ARGB 链，初始化失败时
+回退原 CPU YUV compositor。可用以下参数强制 A/B 模式：
+
+```bash
+./build/t113_terminal --video-only --video-compositor g2d \
+  --video-record /mnt/UDISK/onboard_g2d.mp4 --video-seconds 60
+./build/t113_terminal --video-only --video-compositor cpu \
+  --video-record /mnt/UDISK/onboard_cpu.mp4 --video-seconds 60
+```
+
+`g2d` 强制模式初始化失败时只停用视频模块，CAN、LapPro、VehicleState 和
+logger 仍可继续运行。运行中 G2D ioctl fatal failure 会立即熔断 G2D，停止继续
+提交硬件任务；录像模式会安全停止视频线程，非录像的 `auto` 模式可切换 CPU
+compositor。
+
+生产链每秒输出 FPS、计数和阶段平均值，每 10 秒输出 RSS、CmaFree、dma-buf、
+fd、ION 快照，结束时输出各阶段 avg/P95/P99/max、33.3/50/100 ms 超预算比例及
+资源斜率。V4L2 输入丢帧来自 `v4l2_buffer.sequence` gap，不与应用处理失败混算。

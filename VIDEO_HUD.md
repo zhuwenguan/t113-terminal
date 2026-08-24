@@ -269,3 +269,51 @@ ION buffer 在启动分配一次、退出释放一次，没有新增循环泄漏
 Oops、G2D timeout、PageTable Invalid、VE hang 或 D-state。退出后的固定
 `+12,443,648 bytes / 4 buffers` 与已知 Cedar/ION teardown 残留一致，本轮未
 修改或扩大该问题。
+
+## 生产 G2D ARGB 链接入
+
+生产 `video_pipeline` 现支持 `auto`、`g2d`、`cpu` 三种 compositor 模式。
+`auto` 默认优先 G2D，初始化失败回退原 CPU YUV HUD 链；`g2d` 和 `cpu` 用于
+真实摄像头 A/B。生产 G2D 路径保持单线程串行：
+
+```text
+V4L2 MJPEG -> persistent Cedar decode -> YUV420P
+ -> persistent ION YUV staging -> G2D BITBLT_H/NONE_H -> ARGB camera
+VehicleState single snapshot -> complete HUD direct to persistent ION ARGB
+ARGB camera(src0) + HUD(src1) -> G2D BLD_H -> persistent final ARGB
+ -> CPU memcpy/cache handoff -> persistent Cedar ARGB8888 JPEG
+ -> timestamp-aware Motion-JPEG MP4
+```
+
+板端 decoder 的当前 `CedarVideoPicture` ABI 不提供经确认的 dma-buf fd，因此
+生产 compositor 使用一块额外的持久 ION YUV staging buffer，并执行 stride-aware
+CPU copy；不使用猜测的 decoder physical address。所有 YUV/ARGB 大 buffer 都只
+在 pipeline 初始化时分配。没有恢复普通 CPU HUD framebuffer 到 ION 的全帧
+upload；完整静态和动态 HUD 每帧直接绘入同一 ION ARGB surface。
+
+G2D format conversion 固定使用 `G2D_BLT_NONE_H`，blend 固定使用 camera/background
+作为 `src_image[0]`、HUD/overlay 作为 `src_image[1]`。代码没有 ARGB 到 YUV/NV12/
+NV21 destination、Cedar overlay 或 G2D 到 Cedar zero-copy 路径。任一 G2D ioctl
+失败都会将 G2D 标记为 unhealthy、关闭 G2D fd 并禁止后续提交；录像中的 fatal
+failure 只停止视频模块，不结束车辆数据主程序。
+
+MP4 sample duration 由相邻帧 monotonic timestamp 生成并压缩为 `stts` runs，实际
+处理低于 30 FPS 或发生 frame gap 时不会再按固定 30 FPS 快放。对应主机回归测试
+为 `video_recorder_variable_timestamps`。
+
+板端分阶段验证命令：
+
+```sh
+/mnt/UDISK/t113_terminal --video-only --video-compositor g2d \
+  --video-record /mnt/UDISK/onboard_10s.mp4 --video-seconds 10
+/mnt/UDISK/t113_terminal --video-only --video-compositor g2d \
+  --video-record /mnt/UDISK/onboard_60s.mp4 --video-seconds 60
+/mnt/UDISK/t113_terminal --video-only --video-compositor g2d \
+  --video-record /mnt/UDISK/onboard_5m.mp4 --video-seconds 300
+/mnt/UDISK/t113_terminal --video-only --video-compositor g2d \
+  --video-record /mnt/UDISK/onboard_15m.mp4 --video-seconds 900
+```
+
+每阶段结束后检查 MP4、HUD/VehicleState 动态变化、播放时长、`dmesg`，并保存末尾
+的 latency、frame budget、sequence lost、resource slope 和 CPU 汇总。主机 mock
+只用于回归，不能作为真实 USB 摄像头性能结论。
