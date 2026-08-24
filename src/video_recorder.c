@@ -1096,7 +1096,6 @@ void video_recorder_close(VideoRecorder *recorder)
         return;
     }
     (void)video_recorder_finalize(recorder);
-    video_recorder_close_mux_files(recorder);
     jpeg_encoder_close(&recorder->encoder);
     video_encoder_close(&recorder->hardware_encoder);
     video_recorder_destroy_sync(recorder);
