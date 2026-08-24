@@ -353,6 +353,29 @@ if (BUILD_TESTING)
     add_test(NAME hud_renderer_layout_and_invalid_state
              COMMAND test_hud_renderer)
 
+    add_executable(test_video_recorder_timestamps
+        tests/test_video_recorder_timestamps.c
+        src/video_recorder.c
+        src/video_encoder.c
+        src/jpeg_codec.c
+        src/video_frame.c
+        src/console_log.c
+    )
+    target_include_directories(test_video_recorder_timestamps PRIVATE
+        include
+        ${T113_JPEG_INCLUDE_DIR}
+    )
+    target_compile_options(test_video_recorder_timestamps PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_video_recorder_timestamps PRIVATE
+        ${CMAKE_DL_LIBS}
+    )
+    add_test(NAME video_recorder_variable_timestamps
+             COMMAND test_video_recorder_timestamps)
+
     add_executable(test_jpeg_codec
         tests/test_jpeg_codec.c
         src/jpeg_codec.c
