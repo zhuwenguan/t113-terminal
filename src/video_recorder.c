@@ -1073,6 +1073,8 @@ bool video_recorder_write_frame(VideoRecorder *recorder,
 
 int video_recorder_finalize(VideoRecorder *recorder)
 {
+    bool joined_here = false;
+
     if (recorder == NULL || !recorder->writer_thread_started) {
         return 0;
     }
@@ -1080,8 +1082,9 @@ int video_recorder_finalize(VideoRecorder *recorder)
         encoded_frame_queue_close(&recorder->writer_queue);
         pthread_join(recorder->writer_thread, NULL);
         recorder->writer_joined = true;
+        joined_here = true;
     }
-    if (recorder->writer_result < 0) {
+    if (joined_here && recorder->writer_result < 0) {
         LOG_ERROR("Video recorder: failed to finalize %s", recorder->path);
     }
     return recorder->writer_result;
