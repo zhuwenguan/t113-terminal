@@ -152,13 +152,13 @@ static void hud_layer_set_dynamic_regions(const HudRenderer *renderer,
 {
     static const HudRegion regions[] = {
         { 20U, 10U, 240U, 40U },
-        { 35U, 95U, 225U, 275U },
+        { 35U, 95U, 265U, 275U },
         { 1105U, 55U, 140U, 100U },
-        { 1100U, 250U, 125U, 210U },
+        { 1035U, 250U, 190U, 210U },
         { 1100U, 465U, 110U, 30U },
-        { 120U, 548U, 220U, 95U },
-        { 520U, 550U, 230U, 90U },
-        { 860U, 550U, 350U, 70U }
+        { 120U, 548U, 255U, 95U },
+        { 520U, 550U, 290U, 90U },
+        { 860U, 550U, 370U, 70U }
     };
 
     hud_layer_set_regions_from_base(renderer, layer, regions,
@@ -742,7 +742,20 @@ int hud_renderer_init(HudRenderer *renderer, uint32_t width, uint32_t height)
 int hud_renderer_init_external(HudRenderer *renderer, uint32_t width,
                                uint32_t height)
 {
-    return hud_renderer_init_common(renderer, width, height, false);
+    size_t bytes;
+
+    if (hud_renderer_init_common(renderer, width, height, false) < 0) {
+        return -1;
+    }
+    bytes = (size_t)width * height * VIDEO_FRAME_CHANNELS;
+    renderer->static_layer.pixels = calloc(1U, bytes);
+    if (renderer->static_layer.pixels == NULL) {
+        hud_renderer_close(renderer);
+        return -1;
+    }
+    renderer->static_layer.pixel_format = HUD_PIXEL_FORMAT_ARGB8888;
+    hud_render_static(renderer);
+    return 0;
 }
 
 void hud_renderer_close(HudRenderer *renderer)
@@ -794,6 +807,7 @@ const HudLayer *hud_renderer_render_frame_to_surface(
     HudLayer *layer;
     uint64_t total_start;
     uint64_t stage_start;
+    size_t region_index;
 
     if (renderer == NULL || !renderer->initialized ||
         !hud_surface_valid(renderer, surface)) {
@@ -806,12 +820,39 @@ const HudLayer *hud_renderer_render_frame_to_surface(
     layer = &renderer->external_dynamic_layer;
     total_start = hud_renderer_now_us();
     stage_start = total_start;
-    hud_layer_clear(layer);
+    if (!renderer->external_surface_initialized ||
+        renderer->external_surface_pixels != surface->pixels) {
+        uint32_t row;
+
+        for (row = 0U; row < renderer->height; ++row) {
+            memcpy(layer->pixels + (size_t)row * layer->stride,
+                   renderer->static_layer.pixels +
+                       (size_t)row * renderer->static_layer.stride,
+                   (size_t)renderer->width * VIDEO_FRAME_CHANNELS);
+        }
+        renderer->external_surface_pixels = surface->pixels;
+        renderer->external_surface_initialized = true;
+    } else {
+        hud_layer_set_dynamic_regions(renderer, layer);
+        for (region_index = 0U; region_index < layer->region_count;
+             ++region_index) {
+            const HudRegion *region = &layer->regions[region_index];
+            uint32_t row;
+
+            for (row = region->y; row < region->y + region->height; ++row) {
+                memcpy(layer->pixels + (size_t)row * layer->stride +
+                           (size_t)region->x * VIDEO_FRAME_CHANNELS,
+                       renderer->static_layer.pixels +
+                           (size_t)row * renderer->static_layer.stride +
+                           (size_t)region->x * VIDEO_FRAME_CHANNELS,
+                       (size_t)region->width * VIDEO_FRAME_CHANNELS);
+            }
+        }
+    }
     if (timing != NULL) {
         timing->clear_time_us = hud_renderer_now_us() - stage_start;
     }
     stage_start = hud_renderer_now_us();
-    hud_render_static_layer(renderer, layer, false);
     hud_render_dynamic_values(renderer, layer, state);
     if (recording) {
         hud_draw_circle(renderer, layer, 182, 28, 6, hud_red);

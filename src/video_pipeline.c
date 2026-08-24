@@ -951,7 +951,7 @@ int video_pipeline_init(VideoPipeline *pipeline,
         (uint64_t)pipeline->camera_frame.capacity +
         (uint64_t)config->width * config->height * VIDEO_FRAME_CHANNELS *
             (video_compositor_active_mode(&pipeline->compositor) ==
-             VIDEO_COMPOSITOR_MODE_G2D ? 3ULL : 2ULL) +
+             VIDEO_COMPOSITOR_MODE_G2D ? 4ULL : 2ULL) +
         (video_compositor_active_mode(&pipeline->compositor) ==
          VIDEO_COMPOSITOR_MODE_G2D ?
          (uint64_t)config->width * config->height * 3ULL / 2ULL : 0ULL);

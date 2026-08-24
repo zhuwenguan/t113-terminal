@@ -175,16 +175,22 @@ static void test_render_to_external_argb_surface(void)
     const uint32_t height = 360U;
     const uint32_t stride = width * VIDEO_FRAME_CHANNELS + 16U;
     HudRenderer renderer;
+    HudRenderer reference_renderer;
     HudSurface surface;
+    HudSurface reference_surface;
     HudRenderTiming timing;
     VehicleState state;
     const HudLayer *layer;
     uint8_t *pixels;
+    uint8_t *reference_pixels;
     size_t index;
+    uint32_t row;
     bool saw_red = false;
 
     memset(&renderer, 0, sizeof(renderer));
+    memset(&reference_renderer, 0, sizeof(reference_renderer));
     memset(&surface, 0, sizeof(surface));
+    memset(&reference_surface, 0, sizeof(reference_surface));
     memset(&timing, 0, sizeof(timing));
     memset(&state, 0, sizeof(state));
     pixels = calloc(1U, (size_t)stride * height);
@@ -228,6 +234,28 @@ static void test_render_to_external_argb_surface(void)
     /* The complete direct surface includes the static left panel as well as
      * dynamic values. */
     assert(pixels[(size_t)(75U) * stride + (size_t)20U * 4U + 3U] != 0U);
+
+    /* Reusing the ION-like surface must restore every dynamic region before
+     * drawing the next snapshot, including removal of REC and shorter text. */
+    memset(&state, 0, sizeof(state));
+    layer = hud_renderer_render_frame_to_surface(&renderer, &state, false,
+                                                 &surface, &timing);
+    assert(layer != NULL);
+    reference_pixels = calloc(1U, (size_t)stride * height);
+    assert(reference_pixels != NULL);
+    reference_surface = surface;
+    reference_surface.pixels = reference_pixels;
+    assert(hud_renderer_init_external(&reference_renderer, width, height) == 0);
+    assert(hud_renderer_render_frame_to_surface(&reference_renderer, &state,
+                                                false, &reference_surface,
+                                                NULL) != NULL);
+    for (row = 0U; row < height; ++row) {
+        assert(memcmp(pixels + (size_t)row * stride,
+                      reference_pixels + (size_t)row * stride,
+                      (size_t)width * VIDEO_FRAME_CHANNELS) == 0);
+    }
+    hud_renderer_close(&reference_renderer);
+    free(reference_pixels);
     hud_renderer_close(&renderer);
     free(pixels);
 }

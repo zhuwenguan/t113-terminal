@@ -58,12 +58,16 @@ typedef struct {
     HudLayer static_layer;
     HudLayer dynamic_layer;
     HudLayer external_dynamic_layer;
+    uint8_t *external_surface_pixels;
+    bool external_surface_initialized;
     bool dynamic_surface_only;
     bool initialized;
 } HudRenderer;
 
 int hud_renderer_init(HudRenderer *renderer, uint32_t width, uint32_t height);
-/* Initializes a renderer without allocating a dynamic CPU framebuffer. */
+/* Initializes a renderer without allocating a dynamic CPU framebuffer.  A
+ * static ARGB template is retained so production can restore only dynamic HUD
+ * regions without a full-frame upload. */
 int hud_renderer_init_external(HudRenderer *renderer, uint32_t width,
                                uint32_t height);
 void hud_renderer_close(HudRenderer *renderer);
