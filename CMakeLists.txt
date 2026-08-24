@@ -144,6 +144,7 @@ add_executable(t113_terminal
     src/vehicle_state_snapshot.c
     src/hmi.c
     src/video_frame.c
+    src/encoded_frame_queue.c
     src/jpeg_codec.c
     src/video_encoder.c
     src/video_capture.c
@@ -188,6 +189,20 @@ else()
 endif()
 
 if (BUILD_TESTING)
+    add_executable(test_encoded_frame_queue
+        tests/test_encoded_frame_queue.c
+        src/encoded_frame_queue.c
+    )
+    target_include_directories(test_encoded_frame_queue PRIVATE include)
+    target_compile_options(test_encoded_frame_queue PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_encoded_frame_queue PRIVATE Threads::Threads)
+    add_test(NAME encoded_frame_queue_bounded_lifecycle
+             COMMAND test_encoded_frame_queue)
+
     add_executable(test_can_decoder
         tests/test_can_decoder.c
         src/can_decoder.c
