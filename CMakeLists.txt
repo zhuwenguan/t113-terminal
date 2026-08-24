@@ -190,6 +190,19 @@ else()
 endif()
 
 if (BUILD_TESTING)
+    add_library(video_writer_fault_preload SHARED
+        tests/video_writer_fault_preload.c
+    )
+    target_compile_options(video_writer_fault_preload PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(video_writer_fault_preload PRIVATE
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+    )
+
     add_executable(test_vehicle_state_clock
         tests/test_vehicle_state_clock.c
         src/vehicle_state_clock.c
