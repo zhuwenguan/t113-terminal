@@ -157,6 +157,7 @@ add_executable(t113_terminal
 )
 
 target_include_directories(t113_terminal PRIVATE
+    ${CMAKE_SOURCE_DIR}
     include
     ${T113_JPEG_INCLUDE_DIR}
 )
@@ -339,13 +340,16 @@ if (BUILD_TESTING)
         src/video_compositor.c
         src/video_frame.c
     )
-    target_include_directories(test_hud_renderer PRIVATE include)
+    target_include_directories(test_hud_renderer PRIVATE
+        ${CMAKE_SOURCE_DIR}
+        include
+    )
     target_compile_options(test_hud_renderer PRIVATE
         -Wall
         -Wextra
         -Wpedantic
     )
-    target_link_libraries(test_hud_renderer PRIVATE m)
+    target_link_libraries(test_hud_renderer PRIVATE m ${CMAKE_DL_LIBS})
     add_test(NAME hud_renderer_layout_and_invalid_state
              COMMAND test_hud_renderer)
 

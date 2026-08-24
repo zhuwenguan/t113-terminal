@@ -440,12 +440,14 @@ static const char *hud_drive_state_name(VehicleDriveState state)
     }
 }
 
-static void hud_render_static(HudRenderer *renderer)
+static void hud_render_static_layer(HudRenderer *renderer, HudLayer *layer,
+                                    bool clear)
 {
-    HudLayer *layer = &renderer->static_layer;
     int index;
 
-    hud_layer_clear(layer);
+    if (clear) {
+        hud_layer_clear(layer);
+    }
     /* Top status line intentionally has no panel to keep the road visible. */
     hud_panel(renderer, layer, 24, 64, 252, 354);
     hud_static_text(renderer, layer, 40, 76, "ELECTRIC SYSTEM");
@@ -495,6 +497,11 @@ static void hud_render_static(HudRenderer *renderer)
     hud_fill_rect(renderer, layer, 32, 30, 130, 2, hud_cyan);
     hud_fill_rect(renderer, layer, 1115, 22, 125, 2, hud_cyan);
     hud_layer_set_static_regions(renderer, layer);
+}
+
+static void hud_render_static(HudRenderer *renderer)
+{
+    hud_render_static_layer(renderer, &renderer->static_layer, true);
 }
 
 static void hud_value(const HudRenderer *renderer, HudLayer *layer,
@@ -778,4 +785,47 @@ const HudLayer *hud_renderer_render_dynamic_to_surface(
     return hud_renderer_render_dynamic_layer(renderer,
                                               &renderer->external_dynamic_layer,
                                               state, recording, timing);
+}
+
+const HudLayer *hud_renderer_render_frame_to_surface(
+    HudRenderer *renderer, const VehicleState *state, bool recording,
+    const HudSurface *surface, HudRenderTiming *timing)
+{
+    HudLayer *layer;
+    uint64_t total_start;
+    uint64_t stage_start;
+
+    if (renderer == NULL || !renderer->initialized ||
+        !hud_surface_valid(renderer, surface)) {
+        return NULL;
+    }
+    if (timing != NULL) {
+        memset(timing, 0, sizeof(*timing));
+    }
+    hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
+    layer = &renderer->external_dynamic_layer;
+    total_start = hud_renderer_now_us();
+    stage_start = total_start;
+    hud_layer_clear(layer);
+    if (timing != NULL) {
+        timing->clear_time_us = hud_renderer_now_us() - stage_start;
+    }
+    stage_start = hud_renderer_now_us();
+    hud_render_static_layer(renderer, layer, false);
+    hud_render_dynamic_values(renderer, layer, state);
+    if (recording) {
+        hud_draw_circle(renderer, layer, 182, 28, 6, hud_red);
+        hud_value(renderer, layer, 194, 21, "REC", hud_red);
+    }
+    /* G2D blends the complete surface, not the CPU compositor region list. */
+    layer->region_count = 1U;
+    layer->regions[0].x = 0U;
+    layer->regions[0].y = 0U;
+    layer->regions[0].width = renderer->width;
+    layer->regions[0].height = renderer->height;
+    if (timing != NULL) {
+        timing->draw_time_us = hud_renderer_now_us() - stage_start;
+        timing->total_time_us = hud_renderer_now_us() - total_start;
+    }
+    return layer;
 }

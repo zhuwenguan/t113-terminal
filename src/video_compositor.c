@@ -1,25 +1,443 @@
 #include "video_compositor.h"
 
+#include "g2d_driver.h"
+
+#include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/ioctl.h>
+#include <time.h>
+#include <unistd.h>
 
 #if defined(__ARM_NEON)
 #include <arm_neon.h>
 #endif
 
-int video_compositor_init(VideoCompositor *compositor, uint32_t width,
-                          uint32_t height)
+#define VIDEO_G2D_DEVICE "/dev/g2d"
+#define VIDEO_ION_LIBRARY "libawion.so"
+
+static uint64_t video_compositor_now_us(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
+        return 0U;
+    }
+    return (uint64_t)now.tv_sec * 1000000ULL +
+           (uint64_t)now.tv_nsec / 1000ULL;
+}
+
+const char *video_compositor_mode_name(VideoCompositorMode mode)
+{
+    switch (mode) {
+    case VIDEO_COMPOSITOR_MODE_G2D: return "g2d";
+    case VIDEO_COMPOSITOR_MODE_CPU: return "cpu";
+    case VIDEO_COMPOSITOR_MODE_AUTO:
+    default: return "auto";
+    }
+}
+
+bool video_compositor_parse_mode(const char *value, VideoCompositorMode *mode)
+{
+    if (value == NULL || mode == NULL) {
+        return false;
+    }
+    if (strcmp(value, "auto") == 0) {
+        *mode = VIDEO_COMPOSITOR_MODE_AUTO;
+    } else if (strcmp(value, "g2d") == 0) {
+        *mode = VIDEO_COMPOSITOR_MODE_G2D;
+    } else if (strcmp(value, "cpu") == 0) {
+        *mode = VIDEO_COMPOSITOR_MODE_CPU;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+static bool video_compositor_load_symbol(void *library, const char *name,
+                                         void *target, size_t target_size)
+{
+    void *symbol;
+
+    if (library == NULL || target == NULL || target_size != sizeof(symbol)) {
+        return false;
+    }
+    dlerror();
+    symbol = dlsym(library, name);
+    if (symbol == NULL || dlerror() != NULL) {
+        return false;
+    }
+    memcpy(target, &symbol, sizeof(symbol));
+    return true;
+}
+
+static void video_ion_buffer_reset(VideoIonBuffer *buffer)
+{
+    memset(buffer, 0, sizeof(*buffer));
+    buffer->fd = -1;
+}
+
+static bool video_ion_buffer_alloc(VideoCompositor *compositor,
+                                   VideoIonBuffer *buffer, size_t size)
+{
+    video_ion_buffer_reset(buffer);
+    if (size == 0U || size > INT_MAX) {
+        return false;
+    }
+    buffer->memory = compositor->ion_alloc((int)size);
+    if (buffer->memory == NULL) {
+        return false;
+    }
+    buffer->fd = compositor->ion_get_fd(buffer->memory);
+    buffer->size = size;
+    if (buffer->fd < 0) {
+        compositor->ion_free(buffer->memory);
+        video_ion_buffer_reset(buffer);
+        return false;
+    }
+    return true;
+}
+
+static void video_ion_buffer_free(VideoCompositor *compositor,
+                                  VideoIonBuffer *buffer)
+{
+    if (buffer->memory != NULL && compositor->ion_free != NULL) {
+        compositor->ion_free(buffer->memory);
+    }
+    video_ion_buffer_reset(buffer);
+}
+
+static void video_ion_buffer_sync(VideoCompositor *compositor,
+                                  const VideoIonBuffer *buffer)
+{
+    if (compositor->ion_flush != NULL && buffer->memory != NULL &&
+        buffer->size <= INT_MAX) {
+        compositor->ion_flush(buffer->memory, (int)buffer->size);
+    }
+}
+
+static void video_g2d_set_image(g2d_image_enh *image, int fd,
+                                g2d_fmt_enh format, uint32_t width,
+                                uint32_t height)
+{
+    memset(image, 0, sizeof(*image));
+    image->bbuff = 1;
+    image->format = format;
+    image->width = width;
+    image->height = height;
+    image->clip_rect.w = width;
+    image->clip_rect.h = height;
+    image->gamut = G2D_BT601;
+    image->alpha = 0xffU;
+    image->mode = G2D_PIXEL_ALPHA;
+    image->fd = fd;
+    image->color_range = COLOR_RANGE_0_255;
+}
+
+static void video_compositor_disable_g2d(VideoCompositor *compositor)
+{
+    if (compositor == NULL || !compositor->g2d_healthy) {
+        return;
+    }
+    compositor->g2d_healthy = false;
+    compositor->fatal_failures++;
+    if (compositor->g2d_fd >= 0) {
+        close(compositor->g2d_fd);
+        compositor->g2d_fd = -1;
+    }
+    if (compositor->requested_mode == VIDEO_COMPOSITOR_MODE_AUTO) {
+        compositor->active_mode = VIDEO_COMPOSITOR_MODE_CPU;
+    }
+}
+
+static int video_compositor_init_g2d(VideoCompositor *compositor)
+{
+    size_t pixels;
+    size_t yuv_size;
+    size_t argb_size;
+
+    if ((uint64_t)compositor->width * compositor->height > SIZE_MAX) {
+        errno = EOVERFLOW;
+        return -1;
+    }
+    pixels = (size_t)compositor->width * compositor->height;
+    yuv_size = pixels + pixels / 2U;
+    argb_size = pixels * VIDEO_FRAME_CHANNELS;
+    compositor->ion_library = dlopen(VIDEO_ION_LIBRARY, RTLD_NOW | RTLD_LOCAL);
+    if (compositor->ion_library == NULL ||
+        !video_compositor_load_symbol(compositor->ion_library,
+            "sunxi_ion_alloc_open", &compositor->ion_open,
+            sizeof(compositor->ion_open)) ||
+        !video_compositor_load_symbol(compositor->ion_library,
+            "sunxi_ion_alloc_close", &compositor->ion_close,
+            sizeof(compositor->ion_close)) ||
+        !video_compositor_load_symbol(compositor->ion_library,
+            "sunxi_ion_alloc_palloc", &compositor->ion_alloc,
+            sizeof(compositor->ion_alloc)) ||
+        !video_compositor_load_symbol(compositor->ion_library,
+            "sunxi_ion_alloc_pfree", &compositor->ion_free,
+            sizeof(compositor->ion_free)) ||
+        !video_compositor_load_symbol(compositor->ion_library,
+            "sunxi_ion_alloc_get_bufferFd", &compositor->ion_get_fd,
+            sizeof(compositor->ion_get_fd)) ||
+        !video_compositor_load_symbol(compositor->ion_library,
+            "sunxi_ion_alloc_flush_cache", &compositor->ion_flush,
+            sizeof(compositor->ion_flush)) || compositor->ion_open() != 0) {
+        errno = ENOSYS;
+        return -1;
+    }
+    compositor->ion_opened = true;
+    if (!video_ion_buffer_alloc(compositor, &compositor->yuv_input, yuv_size) ||
+        !video_ion_buffer_alloc(compositor, &compositor->argb_camera, argb_size) ||
+        !video_ion_buffer_alloc(compositor, &compositor->argb_hud, argb_size) ||
+        !video_ion_buffer_alloc(compositor, &compositor->argb_final, argb_size)) {
+        errno = ENOMEM;
+        return -1;
+    }
+    memset(compositor->argb_hud.memory, 0, argb_size);
+    memset(compositor->argb_final.memory, 0, argb_size);
+    video_ion_buffer_sync(compositor, &compositor->argb_hud);
+    video_ion_buffer_sync(compositor, &compositor->argb_final);
+    compositor->g2d_fd = open(VIDEO_G2D_DEVICE, O_RDWR | O_CLOEXEC);
+    if (compositor->g2d_fd < 0) {
+        return -1;
+    }
+    compositor->argb_stride = compositor->width * VIDEO_FRAME_CHANNELS;
+    compositor->hud_surface.pixels = compositor->argb_hud.memory;
+    compositor->hud_surface.width = compositor->width;
+    compositor->hud_surface.height = compositor->height;
+    compositor->hud_surface.stride_bytes = compositor->argb_stride;
+    compositor->hud_surface.pixel_format = HUD_PIXEL_FORMAT_ARGB8888;
+    compositor->final_frame.width = compositor->width;
+    compositor->final_frame.height = compositor->height;
+    compositor->final_frame.stride = compositor->argb_stride;
+    compositor->final_frame.capacity = argb_size;
+    compositor->final_frame.pixels = compositor->argb_final.memory;
+    compositor->g2d_healthy = true;
+    compositor->active_mode = VIDEO_COMPOSITOR_MODE_G2D;
+    return 0;
+}
+
+int video_compositor_init_mode(VideoCompositor *compositor, uint32_t width,
+                               uint32_t height, VideoCompositorMode mode)
 {
     if (compositor == NULL || width == 0U || height == 0U) {
         errno = EINVAL;
         return -1;
     }
     memset(compositor, 0, sizeof(*compositor));
+    compositor->g2d_fd = -1;
+    video_ion_buffer_reset(&compositor->yuv_input);
+    video_ion_buffer_reset(&compositor->argb_camera);
+    video_ion_buffer_reset(&compositor->argb_hud);
+    video_ion_buffer_reset(&compositor->argb_final);
     compositor->width = width;
     compositor->height = height;
+    compositor->requested_mode = mode;
+    compositor->active_mode = VIDEO_COMPOSITOR_MODE_CPU;
     compositor->initialized = true;
+    if (mode != VIDEO_COMPOSITOR_MODE_CPU &&
+        video_compositor_init_g2d(compositor) < 0) {
+        int saved_errno = errno;
+
+        video_compositor_close(compositor);
+        if (mode == VIDEO_COMPOSITOR_MODE_G2D) {
+            errno = saved_errno;
+            return -1;
+        }
+        memset(compositor, 0, sizeof(*compositor));
+        compositor->g2d_fd = -1;
+        compositor->width = width;
+        compositor->height = height;
+        compositor->requested_mode = mode;
+        compositor->active_mode = VIDEO_COMPOSITOR_MODE_CPU;
+        compositor->initialized = true;
+    }
     return 0;
+}
+
+int video_compositor_init(VideoCompositor *compositor, uint32_t width,
+                          uint32_t height)
+{
+    return video_compositor_init_mode(compositor, width, height,
+                                      VIDEO_COMPOSITOR_MODE_CPU);
+}
+
+void video_compositor_close(VideoCompositor *compositor)
+{
+    if (compositor == NULL) {
+        return;
+    }
+    if (compositor->g2d_fd >= 0) {
+        close(compositor->g2d_fd);
+    }
+    video_ion_buffer_free(compositor, &compositor->argb_final);
+    video_ion_buffer_free(compositor, &compositor->argb_hud);
+    video_ion_buffer_free(compositor, &compositor->argb_camera);
+    video_ion_buffer_free(compositor, &compositor->yuv_input);
+    if (compositor->ion_opened && compositor->ion_close != NULL) {
+        compositor->ion_close();
+    }
+    if (compositor->ion_library != NULL) {
+        dlclose(compositor->ion_library);
+    }
+    memset(compositor, 0, sizeof(*compositor));
+    compositor->g2d_fd = -1;
+}
+
+VideoCompositorMode video_compositor_active_mode(
+    const VideoCompositor *compositor)
+{
+    return compositor != NULL ? compositor->active_mode :
+           VIDEO_COMPOSITOR_MODE_CPU;
+}
+
+bool video_compositor_is_g2d_healthy(const VideoCompositor *compositor)
+{
+    return compositor != NULL && compositor->initialized &&
+           compositor->active_mode == VIDEO_COMPOSITOR_MODE_G2D &&
+           compositor->g2d_healthy;
+}
+
+const HudSurface *video_compositor_hud_surface(
+    const VideoCompositor *compositor)
+{
+    return video_compositor_is_g2d_healthy(compositor) ?
+           &compositor->hud_surface : NULL;
+}
+
+bool video_compositor_sync_hud(VideoCompositor *compositor,
+                               VideoCompositorTiming *timing)
+{
+    uint64_t start;
+
+    if (!video_compositor_is_g2d_healthy(compositor)) {
+        return false;
+    }
+    start = video_compositor_now_us();
+    video_ion_buffer_sync(compositor, &compositor->argb_hud);
+    if (timing != NULL) {
+        timing->hud_cache_sync_time_us += video_compositor_now_us() - start;
+    }
+    return true;
+}
+
+static bool video_compositor_copy_yuv420p(VideoCompositor *compositor,
+                                          const VideoYuvFrame *camera)
+{
+    uint8_t *destination_y;
+    uint8_t *destination_u;
+    uint8_t *destination_v;
+    const uint8_t *source_u;
+    const uint8_t *source_v;
+    uint32_t row;
+    uint32_t chroma_width;
+    uint32_t chroma_height;
+
+    if (camera == NULL || camera->plane[0] == NULL || camera->plane[1] == NULL ||
+        camera->plane[2] == NULL || camera->width != compositor->width ||
+        camera->height != compositor->height || (camera->width & 1U) != 0U ||
+        (camera->height & 1U) != 0U ||
+        (camera->format != VIDEO_YUV_FORMAT_YUV420P &&
+         camera->format != VIDEO_YUV_FORMAT_YV12) ||
+        camera->stride[0] < camera->width ||
+        camera->stride[1] < camera->width / 2U ||
+        camera->stride[2] < camera->width / 2U) {
+        return false;
+    }
+    destination_y = compositor->yuv_input.memory;
+    chroma_width = camera->width / 2U;
+    chroma_height = camera->height / 2U;
+    destination_u = destination_y + (size_t)camera->width * camera->height;
+    destination_v = destination_u + (size_t)chroma_width * chroma_height;
+    source_u = camera->format == VIDEO_YUV_FORMAT_YV12 ? camera->plane[2] :
+               camera->plane[1];
+    source_v = camera->format == VIDEO_YUV_FORMAT_YV12 ? camera->plane[1] :
+               camera->plane[2];
+    for (row = 0U; row < camera->height; ++row) {
+        memcpy(destination_y + (size_t)row * camera->width,
+               camera->plane[0] +
+                   (size_t)(row + camera->top_offset) * camera->stride[0] +
+                   camera->left_offset,
+               camera->width);
+    }
+    for (row = 0U; row < chroma_height; ++row) {
+        size_t source_offset =
+            (size_t)(row + camera->top_offset / 2U) * camera->stride[1] +
+            camera->left_offset / 2U;
+        memcpy(destination_u + (size_t)row * chroma_width,
+               source_u + source_offset, chroma_width);
+        memcpy(destination_v + (size_t)row * chroma_width,
+               source_v + source_offset, chroma_width);
+    }
+    return true;
+}
+
+const VideoFrame *video_compositor_compose_g2d(
+    VideoCompositor *compositor, const VideoYuvFrame *camera,
+    uint64_t timestamp_us, VideoCompositorTiming *timing)
+{
+    g2d_blt_h blt;
+    g2d_bld blend;
+    uint64_t stage;
+
+    if (!video_compositor_is_g2d_healthy(compositor)) {
+        return NULL;
+    }
+    stage = video_compositor_now_us();
+    if (!video_compositor_copy_yuv420p(compositor, camera)) {
+        return NULL;
+    }
+    if (timing != NULL) {
+        timing->yuv_copy_time_us += video_compositor_now_us() - stage;
+    }
+    stage = video_compositor_now_us();
+    video_ion_buffer_sync(compositor, &compositor->yuv_input);
+    if (timing != NULL) {
+        timing->yuv_cache_sync_time_us += video_compositor_now_us() - stage;
+    }
+    memset(&blt, 0, sizeof(blt));
+    blt.flag_h = G2D_BLT_NONE_H;
+    video_g2d_set_image(&blt.src_image_h, compositor->yuv_input.fd,
+                        G2D_FORMAT_YUV420_PLANAR, compositor->width,
+                        compositor->height);
+    video_g2d_set_image(&blt.dst_image_h, compositor->argb_camera.fd,
+                        G2D_FORMAT_ARGB8888, compositor->width,
+                        compositor->height);
+    stage = video_compositor_now_us();
+    if (ioctl(compositor->g2d_fd, G2D_CMD_BITBLT_H, &blt) < 0) {
+        video_compositor_disable_g2d(compositor);
+        return NULL;
+    }
+    video_ion_buffer_sync(compositor, &compositor->argb_camera);
+    if (timing != NULL) {
+        timing->yuv_to_argb_time_us += video_compositor_now_us() - stage;
+    }
+    memset(&blend, 0, sizeof(blend));
+    blend.bld_cmd = G2D_BLD_SRCOVER;
+    video_g2d_set_image(&blend.src_image[0], compositor->argb_camera.fd,
+                        G2D_FORMAT_ARGB8888, compositor->width,
+                        compositor->height);
+    video_g2d_set_image(&blend.src_image[1], compositor->argb_hud.fd,
+                        G2D_FORMAT_ARGB8888, compositor->width,
+                        compositor->height);
+    video_g2d_set_image(&blend.dst_image, compositor->argb_final.fd,
+                        G2D_FORMAT_ARGB8888, compositor->width,
+                        compositor->height);
+    stage = video_compositor_now_us();
+    if (ioctl(compositor->g2d_fd, G2D_CMD_BLD_H, &blend) < 0) {
+        video_compositor_disable_g2d(compositor);
+        return NULL;
+    }
+    video_ion_buffer_sync(compositor, &compositor->argb_final);
+    if (timing != NULL) {
+        timing->blend_time_us += video_compositor_now_us() - stage;
+    }
+    compositor->final_frame.timestamp_us = timestamp_us;
+    return &compositor->final_frame;
 }
 
 static void video_compositor_blend_layer(VideoFrame *output,

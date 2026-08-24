@@ -81,4 +81,11 @@ const HudLayer *hud_renderer_render_dynamic_to_surface(
     HudRenderer *renderer, const VehicleState *state, bool recording,
     const HudSurface *surface, HudRenderTiming *timing);
 
+/* Clears and renders the complete static + dynamic HUD directly into a
+ * caller-owned surface.  This is the production G2D overlay path: no heap
+ * framebuffer upload is performed. */
+const HudLayer *hud_renderer_render_frame_to_surface(
+    HudRenderer *renderer, const VehicleState *state, bool recording,
+    const HudSurface *surface, HudRenderTiming *timing);
+
 #endif
