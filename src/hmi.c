@@ -111,17 +111,6 @@ static ssize_t hmi_serial_write(void *context, const void *buffer,
     return write(hmi->fd, buffer, length);
 }
 
-static int hmi_serial_drain(void *context)
-{
-    const Hmi *hmi = context;
-
-    if (hmi == NULL || hmi->fd < 0) {
-        errno = EBADF;
-        return -1;
-    }
-    return tcdrain(hmi->fd);
-}
-
 static int hmi_configure_termios(int fd)
 {
     struct termios settings;
@@ -160,7 +149,7 @@ int hmi_init(Hmi *hmi, const char *device_path)
     }
     memset(hmi, 0, sizeof(*hmi));
     hmi->fd = -1;
-    fd = open(path, O_RDWR | O_NOCTTY | O_CLOEXEC);
+    fd = open(path, O_RDWR | O_NOCTTY | O_CLOEXEC | O_NONBLOCK);
     if (fd < 0) {
         LOG_WARN("HMI: cannot open UART1 %s: %s", path, strerror(errno));
         return -1;
@@ -173,7 +162,10 @@ int hmi_init(Hmi *hmi, const char *device_path)
     }
     hmi->fd = fd;
     transport.write = hmi_serial_write;
-    transport.drain = hmi_serial_drain;
+    /* UART1 uses external automatic RS485 direction control.  Keeping the
+     * descriptor non-blocking and avoiding tcdrain ensures a failed display
+     * cannot stall the VehicleState snapshot and shutdown paths. */
+    transport.drain = NULL;
     transport.context = hmi;
     hmi->transport = transport;
     hmi->initialized = true;

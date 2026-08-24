@@ -1180,10 +1180,13 @@ int replay_run(const ReplayConfig *config)
             uint64_t now_us = replay_monotonic_us();
 
             if (last_report_us == 0U || now_us - last_report_us >= 1000000ULL) {
-                const VehicleState empty_state = {0};
-                const VehicleState *state = config->vehicle_state != NULL
-                                                ? config->vehicle_state
-                                                : &empty_state;
+                VehicleState state;
+
+                memset(&state, 0, sizeof(state));
+                if (config->vehicle_state_getter != NULL) {
+                    (void)config->vehicle_state_getter(
+                        &state, config->sink_context);
+                }
 
                 LOG_INFO("[Replay] time=%llu.%03llu source=%s "
                          "vehicle_speed=%.2f gps_valid=%u can_valid=%u",
@@ -1193,9 +1196,9 @@ int replay_run(const ReplayConfig *config)
                          (unsigned long long)(((event.timestamp_us -
                                                 first_timestamp_us) /
                                                1000ULL) % 1000ULL),
-                         replay_source_name(event.source), state->speed_kmh,
-                         state->gps_valid ? 1U : 0U,
-                         state->can_valid ? 1U : 0U);
+                         replay_source_name(event.source), state.speed_kmh,
+                         state.gps_valid ? 1U : 0U,
+                         state.can_valid ? 1U : 0U);
                 last_report_us = now_us;
             }
         }

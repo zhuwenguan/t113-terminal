@@ -3,10 +3,32 @@
 #include "video_recorder.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+static void write_sentinel(const char *path, const char *value)
+{
+    FILE *file = fopen(path, "wb");
+
+    assert(file != NULL);
+    assert(fwrite(value, 1U, strlen(value), file) == strlen(value));
+    assert(fclose(file) == 0);
+}
+
+static void assert_sentinel(const char *path, const char *value)
+{
+    char buffer[32] = { 0 };
+    FILE *file = fopen(path, "rb");
+
+    assert(file != NULL);
+    assert(fread(buffer, 1U, sizeof(buffer), file) == strlen(value));
+    assert(!ferror(file));
+    assert(fclose(file) == 0);
+    assert(memcmp(buffer, value, strlen(value)) == 0);
+}
 
 static uint32_t read_be32(const uint8_t *value)
 {
@@ -32,11 +54,26 @@ int main(void)
     size_t index;
     const uint32_t expected_duration[] = { 4500U, 9000U, 3000U };
     bool found = false;
+    char index_path[sizeof(path) + 4U];
 
     memset(&recorder, 0, sizeof(recorder));
     memset(&frame, 0, sizeof(frame));
     (void)snprintf(path, sizeof(path), "/tmp/t113_recorder_%ld.mp4",
                    (long)getpid());
+    assert(snprintf(index_path, sizeof(index_path), "%s.idx", path) > 0);
+
+    write_sentinel(path, "existing-mp4");
+    assert(video_recorder_init(&recorder, path, 16U, 16U, 30U) < 0);
+    assert_sentinel(path, "existing-mp4");
+    assert(access(index_path, F_OK) < 0 && errno == ENOENT);
+    assert(unlink(path) == 0);
+
+    write_sentinel(index_path, "existing-index");
+    assert(video_recorder_init(&recorder, path, 16U, 16U, 30U) < 0);
+    assert(access(path, F_OK) < 0 && errno == ENOENT);
+    assert_sentinel(index_path, "existing-index");
+    assert(unlink(index_path) == 0);
+
     assert(video_frame_init(&frame, 16U, 16U) == 0);
     memset(frame.pixels, 0x40, frame.capacity);
     assert(video_recorder_init(&recorder, path, 16U, 16U, 30U) == 0);
@@ -88,6 +125,7 @@ int main(void)
         break;
     }
     assert(found);
+    assert(access(index_path, F_OK) < 0 && errno == ENOENT);
     assert(unlink(path) == 0);
     return 0;
 }

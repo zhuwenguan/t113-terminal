@@ -5,6 +5,7 @@
 #include "console_log.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -417,17 +418,44 @@ static int video_recorder_mux_open(VideoRecorder *recorder)
         0U, 0U, 0U, 1U, 'm','d','a','t',
         0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U
     };
+    int file_fd = -1;
+    int index_fd = -1;
+    int saved_errno;
 
-    recorder->file = fopen(recorder->path, "wb+");
-    if (recorder->file == NULL) {
+    file_fd = open(recorder->path,
+                   O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0664);
+    if (file_fd < 0) {
         return -1;
     }
-    recorder->index_file = fopen(recorder->index_path, "wb+");
+    recorder->file = fdopen(file_fd, "wb+");
+    if (recorder->file == NULL) {
+        saved_errno = errno;
+        close(file_fd);
+        (void)unlink(recorder->path);
+        errno = saved_errno;
+        return -1;
+    }
+    file_fd = -1;
+    index_fd = open(recorder->index_path,
+                    O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC, 0664);
+    if (index_fd >= 0) {
+        recorder->index_file = fdopen(index_fd, "wb+");
+        if (recorder->index_file != NULL) {
+            index_fd = -1;
+        }
+    }
     if (recorder->index_file == NULL ||
         !video_recorder_write_ftyp(recorder->file) ||
         fwrite(mdat_header, 1U, sizeof(mdat_header), recorder->file) !=
             sizeof(mdat_header)) {
+        saved_errno = errno != 0 ? errno : EIO;
+        if (index_fd >= 0) {
+            close(index_fd);
+            (void)unlink(recorder->index_path);
+        }
         video_recorder_close_mux_files(recorder);
+        (void)unlink(recorder->path);
+        errno = saved_errno;
         return -1;
     }
     recorder->mdat_size_offset = 32U;

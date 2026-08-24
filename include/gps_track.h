@@ -5,8 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Keep enough fixed history for event learning before any compaction. */
-#define GPS_TRACK_MAX_POINTS 4096U
+/* At the circuit detector's 5 Hz storage rate this covers more than the
+ * advertised 900-second maximum loop without unbounded allocation. */
+#define GPS_TRACK_MAX_POINTS 4608U
 
 typedef struct {
     uint64_t timestamp_us;
@@ -36,6 +37,14 @@ bool gps_track_append(GpsTrack *track, uint64_t timestamp_us,
                       double latitude, double longitude, double speed_kmh,
                       double heading_deg, double hacc_m,
                       GpsTrackPoint *current_point);
+
+/* Projects every input sample but stores at most one point per interval.
+ * total_distance_m continues to accumulate from every raw sample. */
+bool gps_track_sample(GpsTrack *track, uint64_t timestamp_us,
+                      double latitude, double longitude, double speed_kmh,
+                      double heading_deg, double hacc_m,
+                      uint64_t minimum_store_interval_us,
+                      GpsTrackPoint *current_point, bool *stored);
 
 const GpsTrackPoint *gps_track_at(const GpsTrack *track, size_t index);
 

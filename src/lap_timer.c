@@ -16,6 +16,7 @@
 #define LAP_TIMER_CURRENT_CROSSING_FRACTION 0.10
 #define LAP_TIMER_INITIAL_CROSSING_FRACTION 0.25
 #define LAP_TIMER_TRACE_MAX_ATTEMPTS 10000U
+#define LAP_TIMER_REFERENCE_SAMPLE_INTERVAL_US 200000ULL
 
 static FILE *lap_timer_open_trace_file(const LapTimer *timer,
                                        uint32_t lap_number, char *path,
@@ -389,10 +390,18 @@ static uint64_t lap_timer_crossing_timestamp(
 
 static bool lap_timer_append_current_lap_point(
     LapTimer *timer, uint64_t timestamp_us, double x_m, double y_m,
-    double speed_kmh, double heading_deg)
+    double speed_kmh, double heading_deg, bool force)
 {
     LapReferencePoint *destination;
 
+    if (!force && timer->current_lap_count > 0U &&
+        timestamp_us >=
+            timer->current_lap[timer->current_lap_count - 1U].timestamp_us &&
+        timestamp_us -
+                timer->current_lap[timer->current_lap_count - 1U].timestamp_us <
+            LAP_TIMER_REFERENCE_SAMPLE_INTERVAL_US) {
+        return true;
+    }
     if (timer->current_lap_count >= LAP_TIMER_REFERENCE_CAPACITY) {
         timer->current_lap_overflow = true;
         return false;
@@ -434,14 +443,14 @@ static void lap_timer_begin_current_lap(LapTimer *timer,
 
         lap_timer_append_current_lap_point(
             timer, start_timestamp_us, start->x_m, start->y_m,
-            start->speed_kmh, start->heading_deg);
+            start->speed_kmh, start->heading_deg, true);
     }
     if (current_point != NULL &&
         current_point->timestamp_us >= start_timestamp_us) {
         lap_timer_append_current_lap_point(
             timer, current_point->timestamp_us, current_point->x_m,
             current_point->y_m, current_point->speed_kmh,
-            current_point->heading_deg);
+            current_point->heading_deg, false);
     }
 }
 
@@ -508,7 +517,7 @@ static bool lap_timer_finish_current_lap(LapTimer *timer,
     start = &timer->reference[0];
     lap_timer_append_current_lap_point(
         timer, crossing_timestamp_us, start->x_m, start->y_m,
-        start->speed_kmh, start->heading_deg);
+        start->speed_kmh, start->heading_deg, true);
     if (lap_time_s < timer->best_lap_time_s) {
         if (lap_timer_rebuild_reference_from_current_lap(timer,
                                                          lap_time_s)) {
@@ -709,7 +718,7 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
             timer->delta_time_s = 0.0;
             lap_timer_append_current_lap_point(
                 timer, point->timestamp_us, point->x_m, point->y_m,
-                point->speed_kmh, point->heading_deg);
+                point->speed_kmh, point->heading_deg, false);
             lap_timer_set_state(timer, state);
             return;
         }
@@ -737,7 +746,7 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
             timer->delta_time_s = 0.0;
             lap_timer_append_current_lap_point(
                 timer, point->timestamp_us, point->x_m, point->y_m,
-                point->speed_kmh, point->heading_deg);
+                point->speed_kmh, point->heading_deg, false);
             lap_timer_set_state(timer, state);
             return;
         }
@@ -821,7 +830,7 @@ void lap_timer_update(LapTimer *timer, const GpsTrackPoint *point,
     if (!started_new_lap) {
         lap_timer_append_current_lap_point(
             timer, point->timestamp_us, point->x_m, point->y_m,
-            point->speed_kmh, point->heading_deg);
+            point->speed_kmh, point->heading_deg, false);
     }
     lap_timer_trace_queue_sample(timer, point);
     if (timer->last_report_timestamp_us == 0U ||

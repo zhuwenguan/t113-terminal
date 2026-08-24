@@ -141,6 +141,14 @@ static bool video_pipeline_stop_requested(VideoPipeline *pipeline)
     return requested;
 }
 
+static void video_pipeline_request_stop(VideoPipeline *pipeline)
+{
+    if (pipeline != NULL && pthread_mutex_lock(&pipeline->mutex) == 0) {
+        pipeline->stop_requested = true;
+        pthread_mutex_unlock(&pipeline->mutex);
+    }
+}
+
 static void video_pipeline_add_us(struct timespec *deadline, uint64_t us)
 {
     deadline->tv_sec += (time_t)(us / 1000000ULL);
@@ -474,7 +482,7 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
     pipeline->stats.rendered_frames++;
     pipeline->stats.processed_frames++;
     if (pipeline->config.single_frame_path != NULL) {
-        pipeline->stop_requested = true;
+        video_pipeline_request_stop(pipeline);
     }
     pipeline->stats.render_time_us += video_pipeline_now_us() - render_start;
     if (pipeline->stats.first_timestamp_us == 0U) {
@@ -1089,10 +1097,7 @@ void video_pipeline_stop(VideoPipeline *pipeline)
         return;
     }
     if (pipeline->initialized && pipeline->started) {
-        if (pthread_mutex_lock(&pipeline->mutex) == 0) {
-            pipeline->stop_requested = true;
-            pthread_mutex_unlock(&pipeline->mutex);
-        }
+        video_pipeline_request_stop(pipeline);
         pthread_join(pipeline->thread, NULL);
         pipeline->started = false;
     }

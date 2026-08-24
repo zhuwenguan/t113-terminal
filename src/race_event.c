@@ -18,6 +18,7 @@
 #define RACE_EVENT_LOOP_MIN_MATCHES 5U
 #define RACE_EVENT_LOOP_SEARCH_RADIUS 2U
 #define RACE_EVENT_MOVING_SPEED_KMH 2.0
+#define RACE_EVENT_TRACK_SAMPLE_INTERVAL_US 200000ULL
 
 static double race_event_heading_error(double first_deg, double second_deg)
 {
@@ -227,6 +228,8 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
     size_t loop_end;
     size_t virtual_start;
     bool loop_detected;
+    bool track_point_stored;
+    size_t previous_point_count;
 
     if (event == NULL || sample == NULL || state == NULL ||
         sample->fix_type < 3U || !isfinite(sample->latitude) ||
@@ -238,15 +241,18 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
         return;
     }
 
-    if (event->gps_track.point_count >= GPS_TRACK_MAX_POINTS) {
-        /* The track buffer compacts in place; old detector indexes are no
+    previous_point_count = event->gps_track.point_count;
+    if (!gps_track_sample(&event->gps_track, timestamp_us, sample->latitude,
+                          sample->longitude, sample->speed_kmh,
+                          sample->heading_deg, sample->hacc_m,
+                          RACE_EVENT_TRACK_SAMPLE_INTERVAL_US, &point,
+                          &track_point_stored)) {
+        return;
+    }
+    if (track_point_stored && previous_point_count >= GPS_TRACK_MAX_POINTS) {
+        /* The track buffer compacted in place; old detector indexes are no
          * longer meaningful after that point. */
         event->loop_match_count = 0U;
-    }
-    if (!gps_track_append(&event->gps_track, timestamp_us, sample->latitude,
-                          sample->longitude, sample->speed_kmh,
-                          sample->heading_deg, sample->hacc_m, &point)) {
-        return;
     }
 
     if (!event->movement_started &&
@@ -261,8 +267,10 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
                       state);
 
     if (event->mode == RACE_EVENT_UNKNOWN) {
-        loop_detected = race_event_update_loop_detector(
-            event, event->gps_track.point_count - 1U, &loop_begin, &loop_end);
+        loop_detected = track_point_stored &&
+            race_event_update_loop_detector(
+                event, event->gps_track.point_count - 1U, &loop_begin,
+                &loop_end);
         if (loop_detected &&
             gps_track_find_virtual_start(&event->gps_track, loop_begin,
                                          loop_end, &virtual_start) &&

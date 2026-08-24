@@ -1,8 +1,14 @@
+#define _GNU_SOURCE
+
 #include <assert.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "console_log.h"
 #include "hmi.h"
@@ -96,6 +102,39 @@ static void make_test_state(VehicleState *state)
     state->max_acceleration = 1.95;
 }
 
+static uint64_t monotonic_us(void)
+{
+    struct timespec now;
+
+    assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+    return (uint64_t)now.tv_sec * 1000000ULL +
+           (uint64_t)now.tv_nsec / 1000ULL;
+}
+
+static void test_serial_failure_is_nonblocking(const VehicleState *state)
+{
+    Hmi serial_hmi;
+    char *slave_path;
+    uint64_t start_us;
+    int master_fd;
+
+    master_fd = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
+    assert(master_fd >= 0);
+    assert(grantpt(master_fd) == 0);
+    assert(unlockpt(master_fd) == 0);
+    slave_path = ptsname(master_fd);
+    assert(slave_path != NULL);
+    assert(hmi_init(&serial_hmi, slave_path) == 0);
+    assert((fcntl(serial_hmi.fd, F_GETFL) & O_NONBLOCK) != 0);
+    assert(serial_hmi.transport.drain == NULL);
+
+    assert(close(master_fd) == 0);
+    start_us = monotonic_us();
+    assert(hmi_update(&serial_hmi, state->timestamp_us, state) < 0);
+    assert(monotonic_us() - start_us < 100000ULL);
+    hmi_close(&serial_hmi);
+}
+
 int main(int argc, char *argv[])
 {
     Capture capture;
@@ -111,6 +150,8 @@ int main(int argc, char *argv[])
     if (argc == 2) {
         console_log_set_level(CONSOLE_LOG_DEBUG);
         assert(hmi_init(&hmi, argv[1]) == 0);
+        assert((fcntl(hmi.fd, F_GETFL) & O_NONBLOCK) != 0);
+        assert(hmi.transport.drain == NULL);
         assert(hmi_update(&hmi, state.timestamp_us, &state) == HMI_FIELD_COUNT);
         hmi_close(&hmi);
         return 0;
@@ -150,5 +191,6 @@ int main(int argc, char *argv[])
     assert(hmi_get_field_map(&mapping_count) != NULL);
     assert(mapping_count == HMI_FIELD_COUNT);
     hmi_close(&hmi);
+    test_serial_failure_is_nonblocking(&state);
     return 0;
 }

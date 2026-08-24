@@ -17,6 +17,7 @@ typedef struct {
     unsigned int snapshot_count;
     uint64_t first_snapshot_us;
     uint64_t last_snapshot_us;
+    unsigned int state_get_count;
 } TestCounts;
 
 static LapProSampleSink test_lappro_sink;
@@ -97,6 +98,17 @@ static void test_snapshot_sink(uint64_t timestamp_us, void *context)
     counts->snapshot_count++;
 }
 
+static bool test_state_getter(VehicleState *state, void *context)
+{
+    TestCounts *counts = context;
+
+    assert(state != NULL);
+    memset(state, 0, sizeof(*state));
+    state->speed_kmh = 42.0;
+    counts->state_get_count++;
+    return true;
+}
+
 static void test_write_inputs(const char *directory, unsigned int rows)
 {
     char can_path[256];
@@ -148,6 +160,7 @@ int main(void)
     config.speed = 0.0;
     config.can_sink = test_can_sink;
     config.lappro_sink = test_lappro_sample_sink;
+    config.vehicle_state_getter = test_state_getter;
     config.vehicle_state_snapshot_sink = test_snapshot_sink;
     config.sink_context = &counts;
     assert(replay_run(&config) == 0);
@@ -160,6 +173,7 @@ int main(void)
     assert(counts.snapshot_count == 40U);
     assert(counts.first_snapshot_us == 1050000ULL);
     assert(counts.last_snapshot_us == 3000000ULL);
+    assert(counts.state_get_count > 0U);
 
     {
         char can_path[256];

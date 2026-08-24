@@ -16,6 +16,7 @@
 #include "race_event.h"
 #include "replay.h"
 #include "vehicle_state_snapshot.h"
+#include "vehicle_state_clock.h"
 #include "video_capture.h"
 #include "video_pipeline.h"
 
@@ -25,6 +26,7 @@ typedef struct {
     CanDecoder decoder;
     RaceEvent race_event;
     VehicleState vehicle_state;
+    VehicleStateClock clock;
     Hmi *hmi;
 } MainCanContext;
 
@@ -54,6 +56,25 @@ static uint64_t main_monotonic_us(void)
            (uint64_t)now.tv_nsec / 1000ULL;
 }
 
+static void main_vehicle_state_snapshot_locked(MainCanContext *can_context,
+                                               uint64_t timestamp_us,
+                                               VehicleState *state)
+{
+    can_decoder_expire_stale(&can_context->decoder, timestamp_us,
+                             &can_context->vehicle_state);
+    vehicle_state_clock_expire_lappro(&can_context->clock, timestamp_us,
+                                      &can_context->vehicle_state);
+    can_context->vehicle_state.can_valid =
+        (can_context->vehicle_state.valid_mask &
+         VEHICLE_STATE_CAN_REQUIRED_MASK) == VEHICLE_STATE_CAN_REQUIRED_MASK;
+    can_context->vehicle_state.gps_valid =
+        (can_context->vehicle_state.valid_mask &
+         VEHICLE_STATE_LAPPRO_REQUIRED_MASK) ==
+        VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
+    *state = can_context->vehicle_state;
+    state->timestamp_us = timestamp_us;
+}
+
 static bool main_vehicle_state_snapshot_provider(uint64_t timestamp_us,
                                                  VehicleState *state,
                                                  void *context)
@@ -65,23 +86,7 @@ static bool main_vehicle_state_snapshot_provider(uint64_t timestamp_us,
     }
 
     pthread_mutex_lock(&can_context->mutex);
-    can_decoder_expire_stale(&can_context->decoder, timestamp_us,
-                             &can_context->vehicle_state);
-    can_context->vehicle_state.can_valid =
-        (can_context->vehicle_state.valid_mask &
-         VEHICLE_STATE_CAN_REQUIRED_MASK) == VEHICLE_STATE_CAN_REQUIRED_MASK;
-    can_context->vehicle_state.gps_valid =
-        (can_context->vehicle_state.valid_mask &
-         VEHICLE_STATE_LAPPRO_REQUIRED_MASK) ==
-        VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
-    *state = can_context->vehicle_state;
-    state->timestamp_us = timestamp_us;
-    state->can_valid =
-        (state->valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) ==
-        VEHICLE_STATE_CAN_REQUIRED_MASK;
-    state->gps_valid =
-        (state->valid_mask & VEHICLE_STATE_LAPPRO_REQUIRED_MASK) ==
-        VEHICLE_STATE_LAPPRO_REQUIRED_MASK;
+    main_vehicle_state_snapshot_locked(can_context, timestamp_us, state);
     pthread_mutex_unlock(&can_context->mutex);
 
     /* HMI can display partial state; the logger applies its own completeness
@@ -101,12 +106,12 @@ static void main_vehicle_state_snapshot_sink(uint64_t timestamp_us,
         return;
     }
 
-    if (can_context->hmi != NULL) {
-        (void)hmi_update(can_context->hmi, timestamp_us, state);
-    }
     if (can_context->logger != NULL &&
         (state->valid_mask & required_mask) == required_mask) {
         logger_vehicle_state_sink(timestamp_us, state, can_context->logger);
+    }
+    if (can_context->hmi != NULL) {
+        (void)hmi_update(can_context->hmi, timestamp_us, state);
     }
 }
 
@@ -123,9 +128,17 @@ static void main_replay_vehicle_state_snapshot_sink(uint64_t timestamp_us,
 static bool main_video_state_getter(VehicleState *state, void *context)
 {
     MainCanContext *can_context = context;
+    uint64_t timestamp_us;
 
-    return main_vehicle_state_snapshot_provider(main_monotonic_us(), state,
-                                                can_context);
+    if (can_context == NULL || state == NULL) {
+        return false;
+    }
+    pthread_mutex_lock(&can_context->mutex);
+    timestamp_us = vehicle_state_clock_snapshot_timestamp(
+        &can_context->clock, main_monotonic_us());
+    main_vehicle_state_snapshot_locked(can_context, timestamp_us, state);
+    pthread_mutex_unlock(&can_context->mutex);
+    return true;
 }
 
 static bool main_hud_demo_state_getter(VehicleState *state, void *context)
@@ -212,6 +225,8 @@ static void main_can_message_sink(const CanMessage *message, void *context)
     }
 
     pthread_mutex_lock(&can_context->mutex);
+    vehicle_state_clock_note_event(&can_context->clock,
+                                   message->timestamp_us);
     (void)can_decoder_process(&can_context->decoder, message,
                               &can_context->vehicle_state);
     pthread_mutex_unlock(&can_context->mutex);
@@ -233,6 +248,8 @@ static void main_lappro_sample_sink(uint64_t timestamp_us,
     }
 
     pthread_mutex_lock(&can_context->mutex);
+    vehicle_state_clock_note_lappro(&can_context->clock, timestamp_us,
+                                    sample->fix_type >= 3U);
     can_decoder_expire_stale(&can_context->decoder, timestamp_us,
                              &can_context->vehicle_state);
     can_context->vehicle_state.timestamp_us = timestamp_us;
@@ -453,6 +470,7 @@ int main(int argc, char *argv[])
     if (main_parse_arguments(argc, argv, &options) < 0) {
         return EXIT_FAILURE;
     }
+    vehicle_state_clock_init(&can_context.clock, options.replay);
     context_mutex_result = pthread_mutex_init(&can_context.mutex, NULL);
     if (context_mutex_result != 0) {
         LOG_ERROR("Cannot initialize VehicleState mutex: %s",
@@ -551,7 +569,7 @@ int main(int argc, char *argv[])
         replay_config.can_sink = main_can_message_sink;
         replay_config.lappro_sink = main_lappro_sample_sink;
         replay_config.sink_context = &can_context;
-        replay_config.vehicle_state = &can_context.vehicle_state;
+        replay_config.vehicle_state_getter = main_video_state_getter;
         replay_config.vehicle_state_snapshot_sink =
             main_replay_vehicle_state_snapshot_sink;
         result = replay_run(&replay_config);

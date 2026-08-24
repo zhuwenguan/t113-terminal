@@ -99,6 +99,21 @@ int main(void)
     assert(fabs(timer.delta_time_s - 1.0) < 0.001);
     assert(fabs(state.delta_time_s - timer.delta_time_s) < 0.001);
 
+    /* A 50 Hz long-running lap must not overflow the fixed reference buffer;
+     * only the reference trace is decimated, while timing still updates for
+     * every sample. */
+    {
+        unsigned int sample;
+
+        for (sample = 1U; sample <= 5000U; ++sample) {
+            feed_point(&timer, &third,
+                       13750000ULL + (uint64_t)sample * 20000ULL, &state);
+        }
+        assert(!timer.current_lap_overflow);
+        assert(timer.current_lap_count < 600U);
+        assert(timer.current_time_s > 100.0);
+    }
+
     lap_timer_close(&timer);
     return 0;
 }

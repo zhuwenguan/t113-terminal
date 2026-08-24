@@ -14,6 +14,7 @@
 #define TEST_LOOP_POINTS 32U
 #define TEST_LOOP_PERIOD_US 30000000ULL
 #define TEST_LOOP_STEP_US (TEST_LOOP_PERIOD_US / TEST_LOOP_POINTS)
+#define TEST_HIGH_RATE_STEP_US 20000ULL
 
 static void update_local(RaceEvent *event, VehicleState *state,
                          uint64_t timestamp_us, double x_m, double y_m,
@@ -158,10 +159,61 @@ static void test_loop_transition_and_next_lap(void)
     race_event_close(&event);
 }
 
+static void test_high_rate_ninety_second_loop(void)
+{
+    const uint64_t loop_period_us = 90000000ULL;
+    const unsigned int loop_steps =
+        (unsigned int)(loop_period_us / TEST_HIGH_RATE_STEP_US);
+    RaceEvent event;
+    VehicleState state;
+    unsigned int step;
+
+    memset(&state, 0, sizeof(state));
+    race_event_init(&event, NULL);
+    update_local(&event, &state, 1000000ULL, 100.0, 0.0, 0.0, 0.0);
+    for (step = 0U; step <= loop_steps + 60U; ++step) {
+        double phase = 2.0 * M_PI *
+                       (double)(step % loop_steps) / (double)loop_steps;
+        double x_m = 100.0 * cos(phase);
+        double y_m = 100.0 * sin(phase);
+        double heading_deg = fmod(360.0 - phase * 180.0 / M_PI, 360.0);
+
+        update_local(&event, &state,
+                     2000000ULL + (uint64_t)step * TEST_HIGH_RATE_STEP_US,
+                     x_m, y_m, 25.0, heading_deg);
+    }
+    assert(event.mode == RACE_EVENT_CIRCUIT_MODE);
+    assert(event.gps_track.point_count > 400U);
+    assert(event.gps_track.point_count < 600U);
+    race_event_close(&event);
+}
+
+static void test_nine_hundred_second_storage_budget(void)
+{
+    GpsTrack track;
+    GpsTrackPoint point;
+    bool stored;
+    unsigned int sample;
+
+    gps_track_init(&track);
+    for (sample = 0U; sample <= 45000U; ++sample) {
+        assert(gps_track_sample(
+            &track, 1000000ULL + (uint64_t)sample * TEST_HIGH_RATE_STEP_US,
+            TEST_ORIGIN_LATITUDE,
+            TEST_ORIGIN_LONGITUDE + (double)sample / 1000000000.0,
+            25.0, 90.0, 1.0, 200000ULL, &point, &stored));
+    }
+    assert(track.point_count == 4501U);
+    assert(track.point_count < GPS_TRACK_MAX_POINTS);
+}
+
 int main(void)
 {
     console_log_init();
+    console_log_set_level(CONSOLE_LOG_WARN);
     test_unknown_running_time();
     test_loop_transition_and_next_lap();
+    test_high_rate_ninety_second_loop();
+    test_nine_hundred_second_storage_budget();
     return 0;
 }

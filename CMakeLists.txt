@@ -141,6 +141,7 @@ add_executable(t113_terminal
     src/race_event.c
     src/logger.c
     src/replay.c
+    src/vehicle_state_clock.c
     src/vehicle_state_snapshot.c
     src/hmi.c
     src/video_frame.c
@@ -189,6 +190,19 @@ else()
 endif()
 
 if (BUILD_TESTING)
+    add_executable(test_vehicle_state_clock
+        tests/test_vehicle_state_clock.c
+        src/vehicle_state_clock.c
+    )
+    target_include_directories(test_vehicle_state_clock PRIVATE include)
+    target_compile_options(test_vehicle_state_clock PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    add_test(NAME vehicle_state_live_replay_clock_and_gps_freshness
+             COMMAND test_vehicle_state_clock)
+
     add_executable(test_encoded_frame_queue
         tests/test_encoded_frame_queue.c
         src/encoded_frame_queue.c

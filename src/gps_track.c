@@ -44,24 +44,21 @@ void gps_track_init(GpsTrack *track)
     memset(track, 0, sizeof(*track));
 }
 
-bool gps_track_append(GpsTrack *track, uint64_t timestamp_us,
+bool gps_track_sample(GpsTrack *track, uint64_t timestamp_us,
                       double latitude, double longitude, double speed_kmh,
                       double heading_deg, double hacc_m,
-                      GpsTrackPoint *current_point)
+                      uint64_t minimum_store_interval_us,
+                      GpsTrackPoint *current_point, bool *stored)
 {
     GpsTrackPoint point;
+    GpsTrackPoint previous_point;
     double latitude_scale;
     double delta_latitude;
     double delta_longitude;
+    bool should_store;
 
-    if (track == NULL || current_point == NULL) {
+    if (track == NULL || current_point == NULL || stored == NULL) {
         return false;
-    }
-    if (track->point_count >= GPS_TRACK_MAX_POINTS) {
-        /* Keep the most recent half without allocating memory. */
-        memmove(track->points, track->points + GPS_TRACK_MAX_POINTS / 2U,
-                (GPS_TRACK_MAX_POINTS / 2U) * sizeof(track->points[0]));
-        track->point_count = GPS_TRACK_MAX_POINTS / 2U;
     }
 
     memset(&point, 0, sizeof(point));
@@ -82,19 +79,55 @@ bool gps_track_append(GpsTrack *track, uint64_t timestamp_us,
     delta_longitude = gps_track_radians(longitude - track->origin_longitude);
     point.x_m = delta_longitude * GPS_TRACK_EARTH_RADIUS_M * latitude_scale;
     point.y_m = delta_latitude * GPS_TRACK_EARTH_RADIUS_M;
+    memset(&previous_point, 0, sizeof(previous_point));
     if (track->point_count > 0U) {
-        const GpsTrackPoint *previous =
-            &track->points[track->point_count - 1U];
+        double previous_delta_latitude = gps_track_radians(
+            track->previous_latitude - track->origin_latitude);
+        double previous_delta_longitude = gps_track_radians(
+            track->previous_longitude - track->origin_longitude);
 
-        point.segment_distance_m = gps_track_distance(&point, previous);
-        track->total_distance_m += point.segment_distance_m;
+        previous_point.x_m = previous_delta_longitude *
+                             GPS_TRACK_EARTH_RADIUS_M * latitude_scale;
+        previous_point.y_m = previous_delta_latitude *
+                             GPS_TRACK_EARTH_RADIUS_M;
+        track->total_distance_m += gps_track_distance(&point, &previous_point);
     }
     point.total_distance_m = track->total_distance_m;
-    track->points[track->point_count++] = point;
     track->previous_latitude = latitude;
     track->previous_longitude = longitude;
+    should_store = track->point_count == 0U ||
+        timestamp_us < track->points[track->point_count - 1U].timestamp_us ||
+        timestamp_us - track->points[track->point_count - 1U].timestamp_us >=
+            minimum_store_interval_us;
+    if (should_store) {
+        if (track->point_count >= GPS_TRACK_MAX_POINTS) {
+            /* Keep the most recent half without allocating memory. */
+            memmove(track->points,
+                    track->points + GPS_TRACK_MAX_POINTS / 2U,
+                    (GPS_TRACK_MAX_POINTS / 2U) * sizeof(track->points[0]));
+            track->point_count = GPS_TRACK_MAX_POINTS / 2U;
+        }
+        if (track->point_count > 0U) {
+            point.segment_distance_m = point.total_distance_m -
+                track->points[track->point_count - 1U].total_distance_m;
+        }
+        track->points[track->point_count++] = point;
+    }
     *current_point = point;
+    *stored = should_store;
     return true;
+}
+
+bool gps_track_append(GpsTrack *track, uint64_t timestamp_us,
+                      double latitude, double longitude, double speed_kmh,
+                      double heading_deg, double hacc_m,
+                      GpsTrackPoint *current_point)
+{
+    bool stored = false;
+
+    return gps_track_sample(track, timestamp_us, latitude, longitude,
+                            speed_kmh, heading_deg, hacc_m, 0U,
+                            current_point, &stored) && stored;
 }
 
 const GpsTrackPoint *gps_track_at(const GpsTrack *track, size_t index)

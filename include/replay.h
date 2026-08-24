@@ -28,6 +28,7 @@ typedef void (*ReplayLapProSink)(uint64_t timestamp_us,
                                  const LapProState *state, void *context);
 typedef void (*ReplayVehicleStateSnapshotSink)(uint64_t timestamp_us,
                                                void *context);
+typedef bool (*ReplayVehicleStateGetter)(VehicleState *state, void *context);
 
 typedef struct {
     const char *directory;
@@ -35,7 +36,7 @@ typedef struct {
     ReplayCanSink can_sink;
     ReplayLapProSink lappro_sink;
     void *sink_context;
-    const VehicleState *vehicle_state;
+    ReplayVehicleStateGetter vehicle_state_getter;
     ReplayVehicleStateSnapshotSink vehicle_state_snapshot_sink;
 } ReplayConfig;
 
