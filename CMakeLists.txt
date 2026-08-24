@@ -27,6 +27,10 @@ add_executable(hud_ion_test
     src/hud_renderer.c
 )
 
+add_executable(mjpeg_mp4_inspect
+    tools/mjpeg_mp4_inspect.c
+)
+
 target_include_directories(g2d_smoke_test PRIVATE
     ${CMAKE_SOURCE_DIR}
 )
@@ -74,6 +78,12 @@ target_compile_options(video_argb_pipeline_test PRIVATE
 )
 
 target_compile_options(hud_ion_test PRIVATE
+    -Wall
+    -Wextra
+    -Wpedantic
+)
+
+target_compile_options(mjpeg_mp4_inspect PRIVATE
     -Wall
     -Wextra
     -Wpedantic
