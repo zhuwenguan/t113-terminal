@@ -89,6 +89,46 @@ static void video_latency_log(const char *name,
                                   distribution->samples : 0U));
 }
 
+static uint64_t video_writer_latency_percentile(
+    const VideoWriterLatencyDistribution *distribution,
+    unsigned int percentile)
+{
+    uint64_t target;
+    uint64_t cumulative = 0U;
+    size_t bucket;
+
+    if (distribution == NULL || distribution->samples == 0U) {
+        return 0U;
+    }
+    target = (distribution->samples * percentile + 99U) / 100U;
+    for (bucket = 0U; bucket < VIDEO_WRITER_LATENCY_BUCKET_COUNT; ++bucket) {
+        cumulative += distribution->buckets[bucket];
+        if (cumulative >= target) {
+            return (uint64_t)bucket * VIDEO_WRITER_LATENCY_BUCKET_US;
+        }
+    }
+    return distribution->max_us;
+}
+
+static void video_pipeline_refresh_recorder_stats(VideoPipeline *pipeline)
+{
+    if (pipeline == NULL || !pipeline->recorder_ready) {
+        return;
+    }
+    video_recorder_get_stats(&pipeline->recorder,
+                             &pipeline->stats.recorder_stats);
+    video_recorder_get_queue_stats(&pipeline->recorder,
+                                   &pipeline->stats.writer_queue_stats);
+    pipeline->stats.encoded_frames =
+        pipeline->stats.recorder_stats.encoded_frames;
+    pipeline->stats.enqueued_frames =
+        pipeline->stats.recorder_stats.enqueued_frames;
+    pipeline->stats.written_frames =
+        pipeline->stats.recorder_stats.written_frames;
+    pipeline->stats.mux_write_time_us =
+        pipeline->stats.recorder_stats.write_latency.total_us;
+}
+
 static bool video_pipeline_stop_requested(VideoPipeline *pipeline)
 {
     bool requested;
@@ -422,16 +462,13 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
                     recorder_timing.encoded_size;
             }
         }
-        pipeline->stats.mux_write_time_us += recorder_timing.mux_write_time_us;
-        if (recorder_timing.written) {
-            video_latency_record(&pipeline->stats.latency_mux_write,
-                                 recorder_timing.mux_write_time_us);
-        }
+        pipeline->stats.enqueue_copy_time_us +=
+            recorder_timing.enqueue_copy_time_us;
         if (recorder_timing.encoded) {
             pipeline->stats.encoded_frames++;
         }
-        if (recorder_timing.written) {
-            pipeline->stats.written_frames++;
+        if (recorder_timing.enqueued) {
+            pipeline->stats.enqueued_frames++;
         }
     }
     pipeline->stats.rendered_frames++;
@@ -474,18 +511,21 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
         last_stats == NULL || now_us < *next_log_us) {
         return;
     }
+    video_pipeline_refresh_recorder_stats(pipeline);
     current = pipeline->stats;
     elapsed_us = now_us > *last_log_us ? now_us - *last_log_us : 0U;
     elapsed_s = (double)elapsed_us / 1000000.0;
     if (elapsed_s > 0.0) {
         LOG_INFO("Video 1s: camera=%llu lost=%llu decoded=%llu processed=%llu "
-                 "encoded=%llu written=%llu app_drop=%llu "
-                 "fps[capture=%.2f decode=%.2f process=%.2f record=%.2f]",
+                 "encoded=%llu enqueued=%llu written=%llu app_drop=%llu "
+                 "fps[capture=%.2f decode=%.2f process=%.2f encode=%.2f "
+                 "enqueue=%.2f write=%.2f]",
                  (unsigned long long)current.camera_received_frames,
                  (unsigned long long)current.camera_sequence_lost,
                  (unsigned long long)current.decoded_frames,
                  (unsigned long long)current.processed_frames,
                  (unsigned long long)current.encoded_frames,
+                 (unsigned long long)current.enqueued_frames,
                  (unsigned long long)current.written_frames,
                  (unsigned long long)current.application_dropped_frames,
                  (double)video_pipeline_counter_delta(
@@ -498,6 +538,12 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                      current.processed_frames, last_stats->processed_frames) /
                      elapsed_s,
                  (double)video_pipeline_counter_delta(
+                     current.encoded_frames, last_stats->encoded_frames) /
+                     elapsed_s,
+                 (double)video_pipeline_counter_delta(
+                     current.enqueued_frames, last_stats->enqueued_frames) /
+                     elapsed_s,
+                 (double)video_pipeline_counter_delta(
                      current.written_frames, last_stats->written_frames) /
                      elapsed_s);
         LOG_INFO("Video profile 1s: capture=%.2fms input_copy=%.2fms "
@@ -508,7 +554,8 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                  "hud=%.2fms compose=%.2fms "
                  "jpeg_encode=%.2fms encoder_submit=%.2fms "
                  "encoder_hw=%.2fms encoder_acquire=%.2fms "
-                 "encoder_release=%.2fms mux_write=%.2fms total_frame=%.2fms "
+                 "encoder_release=%.2fms enqueue_copy=%.2fms "
+                 "processing_total=%.2fms "
                  "encoder_size=%.1fKB "
                  "decoder_init_total=%.2fms",
                  video_pipeline_average_ms(
@@ -611,10 +658,11 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                      video_pipeline_counter_delta(current.encoded_frames,
                                                   last_stats->encoded_frames)),
                  video_pipeline_average_ms(
-                     video_pipeline_counter_delta(current.mux_write_time_us,
-                                                  last_stats->mux_write_time_us),
-                     video_pipeline_counter_delta(current.written_frames,
-                                                  last_stats->written_frames)),
+                     video_pipeline_counter_delta(
+                         current.enqueue_copy_time_us,
+                         last_stats->enqueue_copy_time_us),
+                     video_pipeline_counter_delta(current.enqueued_frames,
+                                                  last_stats->enqueued_frames)),
                  video_pipeline_average_ms(
                      video_pipeline_counter_delta(current.total_frame_time_us,
                                                   last_stats->total_frame_time_us),
@@ -671,6 +719,50 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                      last_stats->cedar_handoff_time_us),
                      video_pipeline_counter_delta(current.encoded_frames,
                                                   last_stats->encoded_frames)));
+        if (pipeline->recorder_ready) {
+            const VideoRecorderStats *writer = &current.recorder_stats;
+            const EncodedFrameQueueStats *queue =
+                &current.writer_queue_stats;
+            uint64_t interval_write_samples = video_pipeline_counter_delta(
+                writer->write_latency.samples,
+                last_stats->recorder_stats.write_latency.samples);
+            uint64_t interval_write_us = video_pipeline_counter_delta(
+                writer->write_latency.total_us,
+                last_stats->recorder_stats.write_latency.total_us);
+
+            LOG_INFO("Video writer queue 1s: depth=%zu/%zu avg=%.2f max=%zu "
+                     "full=%llu dropped=%llu oversized=%llu",
+                     queue->current_depth, queue->capacity,
+                     queue->depth_samples > 0U ?
+                     (double)queue->depth_sample_total /
+                         (double)queue->depth_samples : 0.0,
+                     queue->max_depth,
+                     (unsigned long long)queue->full_events,
+                     (unsigned long long)queue->dropped_frames,
+                     (unsigned long long)queue->oversized_frames);
+            LOG_INFO("Video writer storage 1s: throughput[encoded=%.2fMB/s "
+                     "enqueued=%.2fMB/s written=%.2fMB/s] write_avg=%.2fms "
+                     "write_max=%.2fms calls=%llu bytes_per_call=%.1f",
+                     (double)video_pipeline_counter_delta(
+                         writer->encoded_bytes,
+                         last_stats->recorder_stats.encoded_bytes) /
+                         elapsed_s / (1024.0 * 1024.0),
+                     (double)video_pipeline_counter_delta(
+                         writer->enqueued_bytes,
+                         last_stats->recorder_stats.enqueued_bytes) /
+                         elapsed_s / (1024.0 * 1024.0),
+                     (double)video_pipeline_counter_delta(
+                         writer->bytes_written,
+                         last_stats->recorder_stats.bytes_written) /
+                         elapsed_s / (1024.0 * 1024.0),
+                     video_pipeline_average_ms(interval_write_us,
+                                               interval_write_samples),
+                     writer->write_latency.max_us / 1000.0,
+                     (unsigned long long)writer->writer_write_calls,
+                     writer->writer_write_calls > 0U ?
+                     (double)writer->writer_write_call_bytes /
+                         (double)writer->writer_write_calls : 0.0);
+        }
     }
     *last_stats = current;
     *last_log_us = now_us;
@@ -966,7 +1058,10 @@ int video_pipeline_init(VideoPipeline *pipeline,
              VIDEO_COMPOSITOR_MODE_G2D ? 4ULL : 2ULL) +
         (video_compositor_active_mode(&pipeline->compositor) ==
          VIDEO_COMPOSITOR_MODE_G2D ?
-         (uint64_t)config->width * config->height * 3ULL / 2ULL : 0ULL);
+         (uint64_t)config->width * config->height * 3ULL / 2ULL : 0ULL) +
+        (pipeline->recorder_ready ?
+         (uint64_t)VIDEO_WRITER_QUEUE_CAPACITY *
+             VIDEO_WRITER_SLOT_CAPACITY : 0ULL);
     return 0;
 }
 
@@ -1002,12 +1097,8 @@ void video_pipeline_stop(VideoPipeline *pipeline)
         pipeline->started = false;
     }
     if (pipeline->recorder_ready) {
-        VideoRecorderStats recorder_stats;
-
         (void)video_recorder_finalize(&pipeline->recorder);
-        video_recorder_get_stats(&pipeline->recorder, &recorder_stats);
-        pipeline->stats.encoded_frames = recorder_stats.encoded_frames;
-        pipeline->stats.written_frames = recorder_stats.written_frames;
+        video_pipeline_refresh_recorder_stats(pipeline);
         video_recorder_close(&pipeline->recorder);
         pipeline->recorder_ready = false;
     }
@@ -1035,7 +1126,9 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
     double capture_fps = 0.0;
     double decode_fps = 0.0;
     double process_fps = 0.0;
-    double record_fps = 0.0;
+    double encode_fps = 0.0;
+    double enqueue_fps = 0.0;
+    double write_fps = 0.0;
     double cpu_percent = 0.0;
 
     if (pipeline == NULL) {
@@ -1051,7 +1144,11 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
             (double)(stats.decoded_frames - 1U) / elapsed_s : 0.0;
         process_fps = stats.processed_frames > 1U ?
             (double)(stats.processed_frames - 1U) / elapsed_s : 0.0;
-        record_fps = stats.written_frames > 1U ?
+        encode_fps = stats.encoded_frames > 1U ?
+            (double)(stats.encoded_frames - 1U) / elapsed_s : 0.0;
+        enqueue_fps = stats.enqueued_frames > 1U ?
+            (double)(stats.enqueued_frames - 1U) / elapsed_s : 0.0;
+        write_fps = stats.written_frames > 1U ?
             (double)(stats.written_frames - 1U) / elapsed_s : 0.0;
         if (stats.process_cpu_end_us >= stats.process_cpu_start_us) {
             cpu_percent = (double)(stats.process_cpu_end_us -
@@ -1062,17 +1159,21 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
     memset(&usage, 0, sizeof(usage));
     (void)getrusage(RUSAGE_SELF, &usage);
     LOG_INFO("Video statistics: camera=%llu lost=%llu decoded=%llu "
-             "processed=%llu encoded=%llu written=%llu app_drop=%llu "
+             "processed=%llu encoded=%llu enqueued=%llu written=%llu "
+             "app_drop=%llu "
              "capture_fps=%.2f decode_fps=%.2f process_fps=%.2f "
-             "record_fps=%.2f decode_errors=%llu reconnects=%llu",
+             "encode_fps=%.2f enqueue_fps=%.2f write_fps=%.2f "
+             "decode_errors=%llu reconnects=%llu",
              (unsigned long long)stats.camera_received_frames,
              (unsigned long long)stats.camera_sequence_lost,
              (unsigned long long)stats.decoded_frames,
              (unsigned long long)stats.processed_frames,
              (unsigned long long)stats.encoded_frames,
+             (unsigned long long)stats.enqueued_frames,
              (unsigned long long)stats.written_frames,
              (unsigned long long)stats.application_dropped_frames,
-             capture_fps, decode_fps, process_fps, record_fps,
+             capture_fps, decode_fps, process_fps, encode_fps, enqueue_fps,
+             write_fps,
              (unsigned long long)stats.decode_errors,
              (unsigned long long)stats.reconnects);
     LOG_INFO("Video profile: decoder_init_total=%.2fms capture=%.2fms "
@@ -1084,7 +1185,7 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
              "hud=%.2fms compose=%.2fms jpeg_encode=%.2fms "
              "encoder_submit=%.2fms encoder_hw=%.2fms "
              "encoder_acquire=%.2fms encoder_release=%.2fms "
-             "mux_write=%.2fms total_frame=%.2fms "
+             "enqueue_copy=%.2fms processing_total=%.2fms "
              "encoder_size_avg=%.1fKB encoder_size_max=%.1fKB "
              "frame_buffers=%lluKB max_rss=%ldKB",
              (double)stats.decoder_init_time_us / 1000.0,
@@ -1123,8 +1224,8 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
                                         stats.encoded_frames),
              video_pipeline_average_ms(stats.encoder_release_time_us,
                                         stats.encoded_frames),
-             video_pipeline_average_ms(stats.mux_write_time_us,
-                                        stats.written_frames),
+             video_pipeline_average_ms(stats.enqueue_copy_time_us,
+                                        stats.enqueued_frames),
              video_pipeline_average_ms(stats.total_frame_time_us,
                                         stats.processed_frames),
              stats.encoded_frames > 0U ?
@@ -1134,6 +1235,7 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
              (unsigned long long)(stats.memory_bytes / 1024ULL),
              usage.ru_maxrss);
     LOG_INFO("Video G2D profile: mode=%s healthy=%s fatal=%s video_fault=%s "
+             "recording_failed=%s "
              "yuv_stage_copy=%.3fms yuv_stage_sync=%.3fms "
              "yuv_to_argb=%.3fms hud[clear=%.3f draw=%.3f sync=%.3f] "
              "blend=%.3fms cedar_handoff=%.3fms process_cpu=%.1f%%",
@@ -1141,6 +1243,7 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
              stats.g2d_healthy_at_end ?
              "yes" : "no", pipeline->g2d_fatal_failure ? "yes" : "no",
              pipeline->video_faulted ? "yes" : "no",
+             pipeline->recording_failed ? "yes" : "no",
              video_pipeline_average_ms(stats.yuv_staging_copy_time_us,
                                        stats.processed_frames),
              video_pipeline_average_ms(stats.yuv_staging_sync_time_us,
@@ -1166,8 +1269,56 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
     video_latency_log("g2d_blend", &stats.latency_blend);
     video_latency_log("cedar_handoff", &stats.latency_cedar_handoff);
     video_latency_log("jpeg_encode", &stats.latency_jpeg_encode);
-    video_latency_log("mux_write", &stats.latency_mux_write);
     video_latency_log("total_frame", &stats.latency_total_frame);
+    LOG_INFO("Video writer queue: depth=%zu/%zu avg=%.2f max=%zu full=%llu "
+             "dropped=%llu oversized=%llu encoded=%llu enqueued=%llu "
+             "written=%llu",
+             stats.writer_queue_stats.current_depth,
+             stats.writer_queue_stats.capacity,
+             stats.writer_queue_stats.depth_samples > 0U ?
+             (double)stats.writer_queue_stats.depth_sample_total /
+                 (double)stats.writer_queue_stats.depth_samples : 0.0,
+             stats.writer_queue_stats.max_depth,
+             (unsigned long long)stats.writer_queue_stats.full_events,
+             (unsigned long long)stats.writer_queue_stats.dropped_frames,
+             (unsigned long long)stats.writer_queue_stats.oversized_frames,
+             (unsigned long long)stats.recorder_stats.encoded_frames,
+             (unsigned long long)stats.recorder_stats.enqueued_frames,
+             (unsigned long long)stats.recorder_stats.written_frames);
+    LOG_INFO("Video writer latency: avg=%.3fms p95=%.3fms p99=%.3fms "
+             "max=%.3fms samples=%llu >50ms=%llu >100ms=%llu >200ms=%llu "
+             ">500ms=%llu calls=%llu bytes_per_call=%.1f "
+             "throughput[encoded=%.2fMB/s enqueued=%.2fMB/s written=%.2fMB/s] "
+             "failed=%s errors=%llu",
+             stats.recorder_stats.write_latency.samples > 0U ?
+             (double)stats.recorder_stats.write_latency.total_us /
+                 (double)stats.recorder_stats.write_latency.samples / 1000.0 :
+                 0.0,
+             video_writer_latency_percentile(
+                 &stats.recorder_stats.write_latency, 95U) / 1000.0,
+             video_writer_latency_percentile(
+                 &stats.recorder_stats.write_latency, 99U) / 1000.0,
+             stats.recorder_stats.write_latency.max_us / 1000.0,
+             (unsigned long long)stats.recorder_stats.write_latency.samples,
+             (unsigned long long)stats.recorder_stats.writes_over_50ms,
+             (unsigned long long)stats.recorder_stats.writes_over_100ms,
+             (unsigned long long)stats.recorder_stats.writes_over_200ms,
+             (unsigned long long)stats.recorder_stats.writes_over_500ms,
+             (unsigned long long)stats.recorder_stats.writer_write_calls,
+             stats.recorder_stats.writer_write_calls > 0U ?
+             (double)stats.recorder_stats.writer_write_call_bytes /
+                 (double)stats.recorder_stats.writer_write_calls : 0.0,
+             elapsed_s > 0.0 ?
+             (double)stats.recorder_stats.encoded_bytes / elapsed_s /
+                 (1024.0 * 1024.0) : 0.0,
+             elapsed_s > 0.0 ?
+             (double)stats.recorder_stats.enqueued_bytes / elapsed_s /
+                 (1024.0 * 1024.0) : 0.0,
+             elapsed_s > 0.0 ?
+             (double)stats.recorder_stats.bytes_written / elapsed_s /
+                 (1024.0 * 1024.0) : 0.0,
+             stats.recorder_stats.writer_failed ? "yes" : "no",
+             (unsigned long long)stats.recorder_stats.writer_errors);
     LOG_INFO("Video frame budget: >33.3ms=%llu (%.3f%%) >50ms=%llu "
              "(%.3f%%) >100ms=%llu (%.3f%%)",
              (unsigned long long)stats.frames_over_33ms,

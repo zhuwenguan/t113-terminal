@@ -92,6 +92,7 @@ static void test_bounded_drop_and_reuse(void)
     encoded_frame_queue_get_stats(&queue, &stats);
     assert(stats.current_depth == 2U && stats.max_depth == 2U);
     assert(stats.capacity == 2U && stats.slot_capacity == 8U);
+    assert(stats.depth_samples == 2U && stats.depth_sample_total == 3U);
     assert(stats.full_events == 1U && stats.oversized_frames == 1U);
     assert(stats.dropped_frames == 2U);
     assert(encoded_frame_queue_pop(&queue, &output));
@@ -99,6 +100,8 @@ static void test_bounded_drop_and_reuse(void)
     source.size = 8U;
     assert(encoded_frame_queue_try_push(&queue, &source) ==
            ENCODED_FRAME_QUEUE_PUSH_OK);
+    encoded_frame_queue_get_stats(&queue, &stats);
+    assert(stats.depth_samples == 3U && stats.depth_sample_total == 5U);
     encoded_frame_queue_close(&queue);
     assert(encoded_frame_queue_try_push(&queue, &source) ==
            ENCODED_FRAME_QUEUE_PUSH_CLOSED);

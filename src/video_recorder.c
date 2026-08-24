@@ -428,7 +428,9 @@ static int video_recorder_mux_open(VideoRecorder *recorder)
 }
 
 static bool video_recorder_commit_pending_sample(VideoRecorder *recorder,
-                                                 uint64_t next_timestamp_us)
+                                                 uint64_t next_timestamp_us,
+                                                 uint64_t *write_calls,
+                                                 uint64_t *write_bytes)
 {
     uint64_t delta_us;
     uint64_t duration;
@@ -446,6 +448,12 @@ static bool video_recorder_commit_pending_sample(VideoRecorder *recorder,
         duration = UINT32_MAX;
     }
     recorder->pending_sample.duration = (uint32_t)duration;
+    if (write_calls != NULL) {
+        (*write_calls)++;
+    }
+    if (write_bytes != NULL) {
+        *write_bytes += sizeof(recorder->pending_sample);
+    }
     if (fwrite(&recorder->pending_sample, 1U,
                sizeof(recorder->pending_sample), recorder->index_file) !=
         sizeof(recorder->pending_sample)) {
@@ -456,7 +464,9 @@ static bool video_recorder_commit_pending_sample(VideoRecorder *recorder,
 }
 
 static bool video_recorder_mux_write_encoded(VideoRecorder *recorder,
-                                             const EncodedFrame *frame)
+                                             const EncodedFrame *frame,
+                                             uint64_t *write_calls,
+                                             uint64_t *write_bytes)
 {
     off_t offset;
     VideoRecorderSample sample;
@@ -467,6 +477,12 @@ static bool video_recorder_mux_write_encoded(VideoRecorder *recorder,
         return false;
     }
     offset = ftello(recorder->file);
+    if (write_calls != NULL) {
+        (*write_calls)++;
+    }
+    if (write_bytes != NULL) {
+        *write_bytes += frame->size;
+    }
     if (offset < 0 || fwrite(frame->data, 1U, frame->size, recorder->file) !=
                           frame->size) {
         return false;
@@ -474,7 +490,8 @@ static bool video_recorder_mux_write_encoded(VideoRecorder *recorder,
     sample.offset = (uint64_t)offset;
     sample.size = (uint32_t)frame->size;
     sample.duration = 0U;
-    if (!video_recorder_commit_pending_sample(recorder, frame->pts_us)) {
+    if (!video_recorder_commit_pending_sample(recorder, frame->pts_us,
+                                               write_calls, write_bytes)) {
         return false;
     }
     recorder->pending_sample = sample;
@@ -499,7 +516,8 @@ static int video_recorder_mux_finalize(VideoRecorder *recorder)
     if (recorder->have_pending_sample) {
         uint64_t nominal_next = recorder->pending_timestamp_us +
                                 1000000ULL / recorder->fps;
-        if (!video_recorder_commit_pending_sample(recorder, nominal_next)) {
+        if (!video_recorder_commit_pending_sample(recorder, nominal_next,
+                                                   NULL, NULL)) {
             goto done;
         }
     }
@@ -552,6 +570,35 @@ static void video_recorder_mark_writer_failed(VideoRecorder *recorder)
     encoded_frame_queue_close(&recorder->writer_queue);
 }
 
+static void video_recorder_record_write_latency(VideoRecorderStats *stats,
+                                                uint64_t elapsed_us)
+{
+    uint64_t bucket;
+
+    stats->write_latency.samples++;
+    stats->write_latency.total_us += elapsed_us;
+    if (elapsed_us > stats->write_latency.max_us) {
+        stats->write_latency.max_us = elapsed_us;
+    }
+    bucket = elapsed_us / VIDEO_WRITER_LATENCY_BUCKET_US;
+    if (bucket >= VIDEO_WRITER_LATENCY_BUCKET_COUNT) {
+        bucket = VIDEO_WRITER_LATENCY_BUCKET_COUNT - 1U;
+    }
+    stats->write_latency.buckets[bucket]++;
+    if (elapsed_us > 50000U) {
+        stats->writes_over_50ms++;
+    }
+    if (elapsed_us > 100000U) {
+        stats->writes_over_100ms++;
+    }
+    if (elapsed_us > 200000U) {
+        stats->writes_over_200ms++;
+    }
+    if (elapsed_us > 500000U) {
+        stats->writes_over_500ms++;
+    }
+}
+
 static void *video_recorder_writer_thread(void *opaque)
 {
     VideoRecorder *recorder = opaque;
@@ -580,17 +627,31 @@ static void *video_recorder_writer_thread(void *opaque)
 
     memset(&frame, 0, sizeof(frame));
     while (encoded_frame_queue_pop(&recorder->writer_queue, &frame)) {
-        if (!failed && !video_recorder_mux_write_encoded(recorder, &frame)) {
+        uint64_t write_calls = 0U;
+        uint64_t write_bytes = 0U;
+        uint64_t write_start_us = video_recorder_now_us();
+        bool written = !failed && video_recorder_mux_write_encoded(
+            recorder, &frame, &write_calls, &write_bytes);
+        uint64_t write_elapsed_us = video_recorder_now_us() - write_start_us;
+
+        if (pthread_mutex_lock(&recorder->state_mutex) == 0) {
+            if (!failed) {
+                video_recorder_record_write_latency(&recorder->stats,
+                                                    write_elapsed_us);
+                recorder->stats.writer_write_calls += write_calls;
+                recorder->stats.writer_write_call_bytes += write_bytes;
+            }
+            if (written) {
+                recorder->stats.written_frames++;
+                recorder->stats.bytes_written += frame.size;
+            } else {
+                recorder->stats.dropped_frames++;
+            }
+            pthread_mutex_unlock(&recorder->state_mutex);
+        }
+        if (!failed && !written) {
             failed = true;
             video_recorder_mark_writer_failed(recorder);
-        }
-        if (!failed && pthread_mutex_lock(&recorder->state_mutex) == 0) {
-            recorder->stats.written_frames++;
-            recorder->stats.bytes_written += frame.size;
-            pthread_mutex_unlock(&recorder->state_mutex);
-        } else if (failed && pthread_mutex_lock(&recorder->state_mutex) == 0) {
-            recorder->stats.dropped_frames++;
-            pthread_mutex_unlock(&recorder->state_mutex);
         }
         encoded_frame_queue_release(&recorder->writer_queue, &frame);
     }

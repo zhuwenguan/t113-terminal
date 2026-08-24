@@ -49,6 +49,10 @@ int main(void)
     assert(recorder_stats.written_frames == 3U);
     assert(recorder_stats.dropped_frames == 0U);
     assert(!recorder_stats.writer_failed);
+    assert(recorder_stats.write_latency.samples == 3U);
+    assert(recorder_stats.writer_write_calls == 5U);
+    assert(recorder_stats.writer_write_call_bytes >
+           recorder_stats.bytes_written);
     assert(queue_stats.current_depth == 0U);
     assert(queue_stats.pushed_frames == 3U && queue_stats.popped_frames == 3U);
     video_recorder_close(&recorder);

@@ -67,6 +67,7 @@ typedef struct {
     uint64_t decoded_frames;
     uint64_t processed_frames;
     uint64_t encoded_frames;
+    uint64_t enqueued_frames;
     uint64_t written_frames;
     uint64_t application_dropped_frames;
     uint64_t capture_time_us;
@@ -92,6 +93,7 @@ typedef struct {
     uint64_t encoder_output_bytes;
     uint64_t encoder_output_max_bytes;
     uint64_t mux_write_time_us;
+    uint64_t enqueue_copy_time_us;
     uint64_t total_frame_time_us;
     uint64_t frames_over_33ms;
     uint64_t frames_over_50ms;
@@ -107,6 +109,8 @@ typedef struct {
     VideoLatencyDistribution latency_jpeg_encode;
     VideoLatencyDistribution latency_mux_write;
     VideoLatencyDistribution latency_total_frame;
+    VideoRecorderStats recorder_stats;
+    EncodedFrameQueueStats writer_queue_stats;
 } VideoPipelineStats;
 
 typedef struct {

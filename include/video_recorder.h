@@ -14,6 +14,15 @@
 #define VIDEO_RECORDER_DEFAULT_FPS 30U
 #define VIDEO_RECORDER_JPEG_CAPACITY (4U * 1024U * 1024U)
 #define VIDEO_RECORDER_MAX_DURATION_SECONDS (60U * 60U)
+#define VIDEO_WRITER_LATENCY_BUCKET_US 1000U
+#define VIDEO_WRITER_LATENCY_BUCKET_COUNT 1001U
+
+typedef struct {
+    uint64_t samples;
+    uint64_t total_us;
+    uint64_t max_us;
+    uint64_t buckets[VIDEO_WRITER_LATENCY_BUCKET_COUNT];
+} VideoWriterLatencyDistribution;
 
 typedef struct {
     uint64_t encoded_frames;
@@ -23,7 +32,14 @@ typedef struct {
     uint64_t encoded_bytes;
     uint64_t enqueued_bytes;
     uint64_t bytes_written;
+    uint64_t writer_write_calls;
+    uint64_t writer_write_call_bytes;
+    uint64_t writes_over_50ms;
+    uint64_t writes_over_100ms;
+    uint64_t writes_over_200ms;
+    uint64_t writes_over_500ms;
     uint64_t writer_errors;
+    VideoWriterLatencyDistribution write_latency;
     bool writer_failed;
     bool recording_failed;
     bool active;

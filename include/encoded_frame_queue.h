@@ -39,6 +39,8 @@ typedef struct {
     uint64_t dropped_frames;
     uint64_t oversized_frames;
     uint64_t pushed_bytes;
+    uint64_t depth_sample_total;
+    uint64_t depth_samples;
     bool closed;
 } EncodedFrameQueueStats;
 
@@ -73,6 +75,8 @@ typedef struct {
     uint64_t dropped_frames;
     uint64_t oversized_frames;
     uint64_t pushed_bytes;
+    uint64_t depth_sample_total;
+    uint64_t depth_samples;
     bool closed;
     bool mutex_initialized;
     bool condition_initialized;

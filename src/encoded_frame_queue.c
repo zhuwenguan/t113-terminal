@@ -92,6 +92,8 @@ EncodedFrameQueuePushResult encoded_frame_queue_try_push(
     if (depth > queue->max_depth) {
         queue->max_depth = depth;
     }
+    queue->depth_sample_total += depth;
+    queue->depth_samples++;
     pthread_cond_signal(&queue->ready_condition);
     pthread_mutex_unlock(&queue->mutex);
     return ENCODED_FRAME_QUEUE_PUSH_OK;
@@ -181,6 +183,8 @@ void encoded_frame_queue_get_stats(EncodedFrameQueue *queue,
     stats->dropped_frames = queue->dropped_frames;
     stats->oversized_frames = queue->oversized_frames;
     stats->pushed_bytes = queue->pushed_bytes;
+    stats->depth_sample_total = queue->depth_sample_total;
+    stats->depth_samples = queue->depth_samples;
     stats->closed = queue->closed;
     pthread_mutex_unlock(&queue->mutex);
 }
