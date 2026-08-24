@@ -178,7 +178,8 @@ static void video_pipeline_note_frame_time(VideoPipeline *pipeline,
 
 static bool video_pipeline_render_frame(VideoPipeline *pipeline,
                                         VideoYuvFrame *native_camera,
-                                        uint64_t timestamp_us)
+                                        uint64_t timestamp_us,
+                                        uint32_t v4l2_sequence)
 {
     VehicleState state;
     const HudLayer *dynamic_layer = NULL;
@@ -352,18 +353,28 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
         }
     }
     if (pipeline->recorder_ready &&
+        video_recorder_is_recording(&pipeline->recorder) &&
         ((g2d_path &&
           !video_recorder_write_argb_frame_timed(
               &pipeline->recorder, record_frame, timestamp_us,
+              v4l2_sequence,
               &recorder_timing)) ||
          (!g2d_path && native_record_path &&
           !video_recorder_write_native_frame_timed(
-              &pipeline->recorder, native_camera, &recorder_timing)) ||
+              &pipeline->recorder, native_camera, timestamp_us,
+              v4l2_sequence, &recorder_timing)) ||
          (!g2d_path && !native_record_path &&
           !video_recorder_write_frame_timed(&pipeline->recorder,
                                             &pipeline->camera_frame,
+                                            v4l2_sequence,
                                             &recorder_timing)))) {
         video_pipeline_note_application_drop(pipeline);
+    }
+    if (pipeline->recorder_ready && !pipeline->recording_failed &&
+        video_recorder_has_failed(&pipeline->recorder)) {
+        pipeline->recording_failed = true;
+        LOG_ERROR("Video: storage writer failed; recording stopped while "
+                  "video processing and vehicle data remain active");
     }
     if (g2d_path && pipeline->recorder_ready &&
         !pipeline->recorder.hardware_encoder_ready) {
@@ -709,7 +720,8 @@ static void *video_pipeline_thread(void *context)
             pipeline->stats.capture_frames++;
             pipeline->stats.camera_received_frames++;
             processed = video_pipeline_render_frame(
-                pipeline, NULL, pipeline->camera_frame.timestamp_us);
+                pipeline, NULL, pipeline->camera_frame.timestamp_us,
+                (uint32_t)(mock_tick - 1U));
             if (processed) {
                 video_pipeline_note_frame_time(
                     pipeline, video_pipeline_now_us() - frame_start_us);
@@ -829,7 +841,7 @@ static void *video_pipeline_thread(void *context)
                     pipeline,
                     jpeg_decoder_is_native(&pipeline->decoder) ?
                     &pipeline->native_camera_frame : NULL,
-                    buffer.timestamp_us)) {
+                    buffer.timestamp_us, buffer.sequence)) {
                 video_pipeline_note_frame_time(
                     pipeline, video_pipeline_now_us() - frame_start_us);
             }
@@ -990,7 +1002,12 @@ void video_pipeline_stop(VideoPipeline *pipeline)
         pipeline->started = false;
     }
     if (pipeline->recorder_ready) {
+        VideoRecorderStats recorder_stats;
+
         (void)video_recorder_finalize(&pipeline->recorder);
+        video_recorder_get_stats(&pipeline->recorder, &recorder_stats);
+        pipeline->stats.encoded_frames = recorder_stats.encoded_frames;
+        pipeline->stats.written_frames = recorder_stats.written_frames;
         video_recorder_close(&pipeline->recorder);
         pipeline->recorder_ready = false;
     }

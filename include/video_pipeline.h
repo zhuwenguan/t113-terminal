@@ -129,6 +129,7 @@ typedef struct {
     bool have_camera_sequence;
     bool g2d_fatal_failure;
     bool video_faulted;
+    bool recording_failed;
     uint32_t last_camera_sequence;
 } VideoPipeline;
 

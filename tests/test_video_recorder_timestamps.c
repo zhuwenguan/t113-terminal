@@ -18,6 +18,8 @@ int main(void)
 {
     char path[160];
     VideoRecorder recorder;
+    VideoRecorderStats recorder_stats;
+    EncodedFrameQueueStats queue_stats;
     VideoFrame frame;
     FILE *file;
     uint8_t data[1024 * 1024];
@@ -40,6 +42,15 @@ int main(void)
     frame.timestamp_us = 1150000U;
     assert(video_recorder_write_frame(&recorder, &frame));
     assert(video_recorder_finalize(&recorder) == 0);
+    video_recorder_get_stats(&recorder, &recorder_stats);
+    video_recorder_get_queue_stats(&recorder, &queue_stats);
+    assert(recorder_stats.encoded_frames == 3U);
+    assert(recorder_stats.enqueued_frames == 3U);
+    assert(recorder_stats.written_frames == 3U);
+    assert(recorder_stats.dropped_frames == 0U);
+    assert(!recorder_stats.writer_failed);
+    assert(queue_stats.current_depth == 0U);
+    assert(queue_stats.pushed_frames == 3U && queue_stats.popped_frames == 3U);
     video_recorder_close(&recorder);
     video_frame_close(&frame);
 

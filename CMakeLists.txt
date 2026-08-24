@@ -370,6 +370,7 @@ if (BUILD_TESTING)
 
     add_executable(test_video_recorder_timestamps
         tests/test_video_recorder_timestamps.c
+        src/encoded_frame_queue.c
         src/video_recorder.c
         src/video_encoder.c
         src/jpeg_codec.c
@@ -386,6 +387,7 @@ if (BUILD_TESTING)
         -Wpedantic
     )
     target_link_libraries(test_video_recorder_timestamps PRIVATE
+        Threads::Threads
         ${CMAKE_DL_LIBS}
     )
     add_test(NAME video_recorder_variable_timestamps
