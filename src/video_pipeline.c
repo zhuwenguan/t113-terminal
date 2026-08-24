@@ -3,6 +3,7 @@
 
 #include "video_pipeline.h"
 #include "console_log.h"
+#include "tools/resource_monitor.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -20,6 +21,72 @@ static uint64_t video_pipeline_now_us(void)
     }
     return (uint64_t)now.tv_sec * 1000000ULL +
            (uint64_t)now.tv_nsec / 1000ULL;
+}
+
+static uint64_t video_pipeline_rusage_us(const struct rusage *usage)
+{
+    if (usage == NULL) {
+        return 0U;
+    }
+    return (uint64_t)usage->ru_utime.tv_sec * 1000000ULL +
+           (uint64_t)usage->ru_utime.tv_usec +
+           (uint64_t)usage->ru_stime.tv_sec * 1000000ULL +
+           (uint64_t)usage->ru_stime.tv_usec;
+}
+
+static void video_latency_record(VideoLatencyDistribution *distribution,
+                                 uint64_t elapsed_us)
+{
+    uint64_t bucket;
+
+    if (distribution == NULL) {
+        return;
+    }
+    distribution->samples++;
+    distribution->total_us += elapsed_us;
+    if (elapsed_us > distribution->max_us) {
+        distribution->max_us = elapsed_us;
+    }
+    bucket = elapsed_us / VIDEO_LATENCY_BUCKET_US;
+    if (bucket >= VIDEO_LATENCY_BUCKET_COUNT) {
+        bucket = VIDEO_LATENCY_BUCKET_COUNT - 1U;
+    }
+    distribution->buckets[bucket]++;
+}
+
+static uint64_t video_latency_percentile(
+    const VideoLatencyDistribution *distribution, unsigned int percentile)
+{
+    uint64_t target;
+    uint64_t cumulative = 0U;
+    size_t bucket;
+
+    if (distribution == NULL || distribution->samples == 0U) {
+        return 0U;
+    }
+    target = (distribution->samples * percentile + 99U) / 100U;
+    for (bucket = 0U; bucket < VIDEO_LATENCY_BUCKET_COUNT; ++bucket) {
+        cumulative += distribution->buckets[bucket];
+        if (cumulative >= target) {
+            return (uint64_t)bucket * VIDEO_LATENCY_BUCKET_US;
+        }
+    }
+    return distribution->max_us;
+}
+
+static void video_latency_log(const char *name,
+                              const VideoLatencyDistribution *distribution)
+{
+    double average_ms = distribution != NULL && distribution->samples > 0U ?
+        (double)distribution->total_us / distribution->samples / 1000.0 : 0.0;
+
+    LOG_INFO("Video latency %-14s avg=%.3fms p95=%.3fms p99=%.3fms "
+             "max=%.3fms samples=%llu", name, average_ms,
+             video_latency_percentile(distribution, 95U) / 1000.0,
+             video_latency_percentile(distribution, 99U) / 1000.0,
+             distribution != NULL ? distribution->max_us / 1000.0 : 0.0,
+             (unsigned long long)(distribution != NULL ?
+                                  distribution->samples : 0U));
 }
 
 static bool video_pipeline_stop_requested(VideoPipeline *pipeline)
@@ -93,46 +160,154 @@ static void video_pipeline_note_application_drop(VideoPipeline *pipeline)
     pipeline->stats.application_dropped_frames++;
 }
 
+static void video_pipeline_note_frame_time(VideoPipeline *pipeline,
+                                           uint64_t elapsed_us)
+{
+    pipeline->stats.total_frame_time_us += elapsed_us;
+    video_latency_record(&pipeline->stats.latency_total_frame, elapsed_us);
+    if (elapsed_us > 33333U) {
+        pipeline->stats.frames_over_33ms++;
+    }
+    if (elapsed_us > 50000U) {
+        pipeline->stats.frames_over_50ms++;
+    }
+    if (elapsed_us > 100000U) {
+        pipeline->stats.frames_over_100ms++;
+    }
+}
+
 static bool video_pipeline_render_frame(VideoPipeline *pipeline,
                                         VideoYuvFrame *native_camera,
                                         uint64_t timestamp_us)
 {
     VehicleState state;
-    const HudLayer *dynamic_layer;
+    const HudLayer *dynamic_layer = NULL;
+    const VideoFrame *record_frame = &pipeline->camera_frame;
     VideoRecorderFrameTiming recorder_timing;
+    VideoCompositorTiming compositor_timing;
+    HudRenderTiming hud_timing;
     uint64_t render_start = video_pipeline_now_us();
     uint64_t stage_start;
     bool need_rgba_output;
-    bool native_record_path;
+    bool native_record_path = false;
+    bool g2d_path;
     bool state_available = video_pipeline_get_state(pipeline, &state);
 
     (void)state_available;
-    stage_start = video_pipeline_now_us();
-    dynamic_layer = hud_renderer_render_dynamic(
-        &pipeline->hud, &state,
-        pipeline->recorder_ready &&
-            video_recorder_is_recording(&pipeline->recorder));
-    pipeline->stats.hud_time_us += video_pipeline_now_us() - stage_start;
-    stage_start = video_pipeline_now_us();
-    if (dynamic_layer == NULL ||
-        (native_camera != NULL &&
-         !video_compositor_compose_yuv(
-             &pipeline->compositor, native_camera,
-             hud_renderer_static_layer(&pipeline->hud), dynamic_layer)) ||
-        (native_camera == NULL &&
-         !video_compositor_compose(
-             &pipeline->compositor, &pipeline->camera_frame,
-             hud_renderer_static_layer(&pipeline->hud), dynamic_layer,
-             &pipeline->camera_frame))) {
-        video_pipeline_note_application_drop(pipeline);
-        return false;
+    memset(&recorder_timing, 0, sizeof(recorder_timing));
+    memset(&compositor_timing, 0, sizeof(compositor_timing));
+    memset(&hud_timing, 0, sizeof(hud_timing));
+    g2d_path = native_camera != NULL &&
+               video_compositor_active_mode(&pipeline->compositor) ==
+                   VIDEO_COMPOSITOR_MODE_G2D;
+    if (g2d_path) {
+        dynamic_layer = hud_renderer_render_frame_to_surface(
+            &pipeline->hud, &state,
+            pipeline->recorder_ready &&
+                video_recorder_is_recording(&pipeline->recorder),
+            video_compositor_hud_surface(&pipeline->compositor), &hud_timing);
+        if (dynamic_layer == NULL ||
+            !video_compositor_sync_hud(&pipeline->compositor,
+                                       &compositor_timing)) {
+            video_pipeline_note_application_drop(pipeline);
+            return false;
+        }
+        record_frame = video_compositor_compose_g2d(
+            &pipeline->compositor, native_camera, timestamp_us,
+            &compositor_timing);
+        if (record_frame == NULL) {
+            if (!video_compositor_is_g2d_healthy(&pipeline->compositor)) {
+                pipeline->g2d_fatal_failure = pipeline->recorder_ready ||
+                    pipeline->config.compositor_mode ==
+                        VIDEO_COMPOSITOR_MODE_G2D;
+                if (pipeline->g2d_fatal_failure) {
+                    LOG_ERROR("Video: fatal G2D failure errno=%d (%s); "
+                              "hardware submissions disabled and video "
+                              "recording stopped", errno, strerror(errno));
+                } else {
+                    LOG_ERROR("Video: fatal G2D failure errno=%d (%s); "
+                              "hardware submissions disabled, switching to "
+                              "CPU compositor", errno, strerror(errno));
+                }
+            }
+            video_pipeline_note_application_drop(pipeline);
+            return false;
+        }
+        pipeline->stats.hud_clear_time_us += hud_timing.clear_time_us;
+        pipeline->stats.hud_draw_time_us += hud_timing.draw_time_us;
+        pipeline->stats.hud_sync_time_us +=
+            compositor_timing.hud_cache_sync_time_us;
+        pipeline->stats.hud_time_us += hud_timing.total_time_us +
+            compositor_timing.hud_cache_sync_time_us;
+        pipeline->stats.yuv_staging_copy_time_us +=
+            compositor_timing.yuv_copy_time_us;
+        pipeline->stats.yuv_staging_sync_time_us +=
+            compositor_timing.yuv_cache_sync_time_us;
+        pipeline->stats.yuv_to_argb_time_us +=
+            compositor_timing.yuv_to_argb_time_us;
+        pipeline->stats.g2d_blend_time_us += compositor_timing.blend_time_us;
+        video_latency_record(&pipeline->stats.latency_hud_clear,
+                             hud_timing.clear_time_us);
+        video_latency_record(&pipeline->stats.latency_hud_draw,
+                             hud_timing.draw_time_us);
+        video_latency_record(&pipeline->stats.latency_hud_sync,
+                             compositor_timing.hud_cache_sync_time_us);
+        video_latency_record(&pipeline->stats.latency_hud_total,
+                             hud_timing.total_time_us +
+                             compositor_timing.hud_cache_sync_time_us);
+        video_latency_record(&pipeline->stats.latency_yuv_to_argb,
+                             compositor_timing.yuv_to_argb_time_us);
+        video_latency_record(&pipeline->stats.latency_blend,
+                             compositor_timing.blend_time_us);
+        pipeline->stats.compose_time_us +=
+            compositor_timing.yuv_copy_time_us +
+            compositor_timing.yuv_cache_sync_time_us +
+            compositor_timing.yuv_to_argb_time_us +
+            compositor_timing.blend_time_us;
+    } else {
+        if (pipeline->hud.dynamic_surface_only) {
+            hud_renderer_close(&pipeline->hud);
+            if (hud_renderer_init(&pipeline->hud, pipeline->config.width,
+                                  pipeline->config.height) < 0) {
+                LOG_ERROR("Video: CPU compositor fallback HUD allocation failed");
+                video_pipeline_note_application_drop(pipeline);
+                pipeline->g2d_fatal_failure = true;
+                return false;
+            }
+        }
+        stage_start = video_pipeline_now_us();
+        dynamic_layer = hud_renderer_render_dynamic(
+            &pipeline->hud, &state,
+            pipeline->recorder_ready &&
+                video_recorder_is_recording(&pipeline->recorder));
+        {
+            uint64_t hud_elapsed = video_pipeline_now_us() - stage_start;
+
+            pipeline->stats.hud_time_us += hud_elapsed;
+            video_latency_record(&pipeline->stats.latency_hud_total,
+                                 hud_elapsed);
+        }
+        stage_start = video_pipeline_now_us();
+        if (dynamic_layer == NULL ||
+            (native_camera != NULL &&
+             !video_compositor_compose_yuv(
+                 &pipeline->compositor, native_camera,
+                 hud_renderer_static_layer(&pipeline->hud), dynamic_layer)) ||
+            (native_camera == NULL &&
+             !video_compositor_compose(
+                 &pipeline->compositor, &pipeline->camera_frame,
+                 hud_renderer_static_layer(&pipeline->hud), dynamic_layer,
+                 &pipeline->camera_frame))) {
+            video_pipeline_note_application_drop(pipeline);
+            return false;
+        }
+        pipeline->stats.compose_time_us += video_pipeline_now_us() - stage_start;
+        pipeline->camera_frame.timestamp_us = timestamp_us;
+        native_record_path = native_camera != NULL && pipeline->recorder_ready &&
+                             video_recorder_supports_native_yuv(
+                                 &pipeline->recorder);
     }
-    pipeline->stats.compose_time_us += video_pipeline_now_us() - stage_start;
-    pipeline->camera_frame.timestamp_us = timestamp_us;
-    native_record_path = native_camera != NULL && pipeline->recorder_ready &&
-                         video_recorder_supports_native_yuv(
-                             &pipeline->recorder);
-    need_rgba_output = native_camera != NULL &&
+    need_rgba_output = !g2d_path && native_camera != NULL &&
         ((pipeline->config.single_frame_path != NULL &&
           pipeline->stats.rendered_frames == 0U) ||
          (pipeline->recorder_ready && !native_record_path));
@@ -148,26 +323,79 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
             video_pipeline_now_us() - stage_start;
     }
     if (pipeline->config.single_frame_path != NULL &&
-        pipeline->stats.rendered_frames == 0U &&
-        !video_frame_write_image(&pipeline->camera_frame,
+        pipeline->stats.rendered_frames == 0U) {
+        const VideoFrame *snapshot_frame = record_frame;
+
+        if (g2d_path) {
+            uint32_t row;
+
+            for (row = 0U; row < record_frame->height; ++row) {
+                const uint8_t *source = record_frame->pixels +
+                    (size_t)row * record_frame->stride;
+                uint8_t *destination = pipeline->camera_frame.pixels +
+                    (size_t)row * pipeline->camera_frame.stride;
+                uint32_t column;
+
+                for (column = 0U; column < record_frame->width; ++column) {
+                    destination[column * 4U] = source[column * 4U + 2U];
+                    destination[column * 4U + 1U] = source[column * 4U + 1U];
+                    destination[column * 4U + 2U] = source[column * 4U];
+                    destination[column * 4U + 3U] = source[column * 4U + 3U];
+                }
+            }
+            snapshot_frame = &pipeline->camera_frame;
+        }
+        if (!video_frame_write_image(snapshot_frame,
                                  pipeline->config.single_frame_path)) {
-        LOG_ERROR("Video: cannot write frame %s: %s",
-                  pipeline->config.single_frame_path, strerror(errno));
+            LOG_ERROR("Video: cannot write frame %s: %s",
+                      pipeline->config.single_frame_path, strerror(errno));
+        }
     }
     if (pipeline->recorder_ready &&
-        ((native_record_path &&
+        ((g2d_path &&
+          !video_recorder_write_argb_frame_timed(
+              &pipeline->recorder, record_frame, timestamp_us,
+              &recorder_timing)) ||
+         (!g2d_path && native_record_path &&
           !video_recorder_write_native_frame_timed(
               &pipeline->recorder, native_camera, &recorder_timing)) ||
-         (!native_record_path &&
+         (!g2d_path && !native_record_path &&
           !video_recorder_write_frame_timed(&pipeline->recorder,
                                             &pipeline->camera_frame,
                                             &recorder_timing)))) {
         video_pipeline_note_application_drop(pipeline);
     }
+    if (g2d_path && pipeline->recorder_ready &&
+        !pipeline->recorder.hardware_encoder_ready) {
+        pipeline->video_faulted = true;
+        LOG_ERROR("Video: ARGB Cedar encoder/write failure; stopping video "
+                  "module while vehicle data remains active");
+    }
     if (pipeline->recorder_ready) {
-        pipeline->stats.jpeg_encode_time_us += recorder_timing.encode_time_us;
+        pipeline->stats.jpeg_encode_time_us +=
+            recorder_timing.hardware_encoded ?
+            recorder_timing.encoder_hardware_time_us :
+            recorder_timing.encode_time_us;
         pipeline->stats.encoder_submit_time_us +=
             recorder_timing.encoder_submit_time_us;
+        pipeline->stats.encoder_input_acquire_time_us +=
+            recorder_timing.encoder_input_acquire_time_us;
+        pipeline->stats.encoder_input_copy_time_us +=
+            recorder_timing.encoder_input_copy_time_us;
+        pipeline->stats.encoder_cache_flush_time_us +=
+            recorder_timing.encoder_cache_flush_time_us;
+        pipeline->stats.encoder_input_prepare_time_us +=
+            recorder_timing.encoder_input_prepare_time_us;
+        pipeline->stats.cedar_handoff_time_us +=
+            recorder_timing.encoder_handoff_time_us;
+        if (recorder_timing.encoder_handoff_time_us > 0U) {
+            video_latency_record(&pipeline->stats.latency_cedar_handoff,
+                                 recorder_timing.encoder_handoff_time_us);
+        }
+        video_latency_record(&pipeline->stats.latency_jpeg_encode,
+            recorder_timing.hardware_encoded ?
+            recorder_timing.encoder_hardware_time_us :
+            recorder_timing.encode_time_us);
         pipeline->stats.encoder_hardware_time_us +=
             recorder_timing.encoder_hardware_time_us;
         pipeline->stats.encoder_acquire_time_us +=
@@ -184,6 +412,10 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
             }
         }
         pipeline->stats.mux_write_time_us += recorder_timing.mux_write_time_us;
+        if (recorder_timing.written) {
+            video_latency_record(&pipeline->stats.latency_mux_write,
+                                 recorder_timing.mux_write_time_us);
+        }
         if (recorder_timing.encoded) {
             pipeline->stats.encoded_frames++;
         }
@@ -388,6 +620,46 @@ static void video_pipeline_log_low_frequency_stats(VideoPipeline *pipeline,
                  (double)video_pipeline_counter_delta(
                      current.decoder_init_time_us,
                      last_stats->decoder_init_time_us) / 1000.0);
+        LOG_INFO("Video G2D profile 1s: yuv_stage_copy=%.2fms "
+                 "yuv_stage_sync=%.2fms yuv_to_argb=%.2fms "
+                 "hud[clear=%.2f draw=%.2f sync=%.2f] blend=%.2fms "
+                 "cedar_handoff=%.2fms",
+                 video_pipeline_average_ms(video_pipeline_counter_delta(
+                     current.yuv_staging_copy_time_us,
+                     last_stats->yuv_staging_copy_time_us),
+                     video_pipeline_counter_delta(current.processed_frames,
+                                                  last_stats->processed_frames)),
+                 video_pipeline_average_ms(video_pipeline_counter_delta(
+                     current.yuv_staging_sync_time_us,
+                     last_stats->yuv_staging_sync_time_us),
+                     video_pipeline_counter_delta(current.processed_frames,
+                                                  last_stats->processed_frames)),
+                 video_pipeline_average_ms(video_pipeline_counter_delta(
+                     current.yuv_to_argb_time_us,
+                     last_stats->yuv_to_argb_time_us),
+                     video_pipeline_counter_delta(current.processed_frames,
+                                                  last_stats->processed_frames)),
+                 video_pipeline_average_ms(video_pipeline_counter_delta(
+                     current.hud_clear_time_us, last_stats->hud_clear_time_us),
+                     video_pipeline_counter_delta(current.processed_frames,
+                                                  last_stats->processed_frames)),
+                 video_pipeline_average_ms(video_pipeline_counter_delta(
+                     current.hud_draw_time_us, last_stats->hud_draw_time_us),
+                     video_pipeline_counter_delta(current.processed_frames,
+                                                  last_stats->processed_frames)),
+                 video_pipeline_average_ms(video_pipeline_counter_delta(
+                     current.hud_sync_time_us, last_stats->hud_sync_time_us),
+                     video_pipeline_counter_delta(current.processed_frames,
+                                                  last_stats->processed_frames)),
+                 video_pipeline_average_ms(video_pipeline_counter_delta(
+                     current.g2d_blend_time_us, last_stats->g2d_blend_time_us),
+                     video_pipeline_counter_delta(current.processed_frames,
+                                                  last_stats->processed_frames)),
+                 video_pipeline_average_ms(video_pipeline_counter_delta(
+                     current.cedar_handoff_time_us,
+                     last_stats->cedar_handoff_time_us),
+                     video_pipeline_counter_delta(current.encoded_frames,
+                                                  last_stats->encoded_frames)));
     }
     *last_stats = current;
     *last_log_us = now_us;
@@ -404,7 +676,14 @@ static void *video_pipeline_thread(void *context)
     uint64_t last_log_us = start_us;
     VideoPipelineStats last_log_stats = { 0 };
     uint64_t next_open_us = start_us;
+    ResourceMonitor resource_monitor;
+    struct rusage usage;
 
+    memset(&usage, 0, sizeof(usage));
+    (void)getrusage(RUSAGE_SELF, &usage);
+    pipeline->stats.process_cpu_start_us = video_pipeline_rusage_us(&usage);
+    resource_monitor_init(&resource_monitor, pipeline->config.fps * 10U);
+    resource_monitor_sample(&resource_monitor, 0U, true);
     (void)clock_gettime(CLOCK_MONOTONIC, &mock_deadline);
     while (!video_pipeline_stop_requested(pipeline)) {
         uint64_t now_us = video_pipeline_now_us();
@@ -432,8 +711,8 @@ static void *video_pipeline_thread(void *context)
             processed = video_pipeline_render_frame(
                 pipeline, NULL, pipeline->camera_frame.timestamp_us);
             if (processed) {
-                pipeline->stats.total_frame_time_us +=
-                    video_pipeline_now_us() - frame_start_us;
+                video_pipeline_note_frame_time(
+                    pipeline, video_pipeline_now_us() - frame_start_us);
             }
             video_pipeline_add_us(&mock_deadline, interval_us);
         } else {
@@ -539,6 +818,10 @@ static void *video_pipeline_thread(void *context)
                     decoder_timing.decoder_release_time_us;
                 pipeline->stats.format_convert_time_us +=
                     decoder_timing.format_convert_time_us;
+                video_latency_record(&pipeline->stats.latency_decode,
+                                     decoder_timing.decoder_decode_time_us > 0U ?
+                                     decoder_timing.decoder_decode_time_us :
+                                     video_pipeline_now_us() - decode_start);
             }
             pipeline->camera_frame.timestamp_us = buffer.timestamp_us;
             (void)video_capture_queue(&pipeline->capture, buffer.index);
@@ -547,8 +830,8 @@ static void *video_pipeline_thread(void *context)
                     jpeg_decoder_is_native(&pipeline->decoder) ?
                     &pipeline->native_camera_frame : NULL,
                     buffer.timestamp_us)) {
-                pipeline->stats.total_frame_time_us +=
-                    video_pipeline_now_us() - frame_start_us;
+                video_pipeline_note_frame_time(
+                    pipeline, video_pipeline_now_us() - frame_start_us);
             }
             if (jpeg_decoder_is_native(&pipeline->decoder) &&
                 pipeline->native_camera_frame.opaque != NULL) {
@@ -561,14 +844,24 @@ static void *video_pipeline_thread(void *context)
                 pipeline->stats.decoder_return_picture_time_us +=
                     return_timing.decoder_return_picture_time_us;
             }
+            if (pipeline->g2d_fatal_failure || pipeline->video_faulted) {
+                break;
+            }
         }
         video_pipeline_log_low_frequency_stats(
             pipeline, video_pipeline_now_us(), &next_log_us, &last_log_us,
             &last_log_stats);
+        resource_monitor_sample(&resource_monitor,
+                                pipeline->stats.processed_frames, false);
     }
     if (pipeline->capture.streaming) {
         video_capture_close(&pipeline->capture);
     }
+    resource_monitor_finish(&resource_monitor,
+                            pipeline->stats.processed_frames);
+    memset(&usage, 0, sizeof(usage));
+    (void)getrusage(RUSAGE_SELF, &usage);
+    pipeline->stats.process_cpu_end_us = video_pipeline_rusage_us(&usage);
     return NULL;
 }
 
@@ -595,9 +888,15 @@ int video_pipeline_init(VideoPipeline *pipeline,
     pipeline->initialized = true;
     if (video_frame_init(&pipeline->camera_frame, config->width,
                          config->height) < 0 ||
-        hud_renderer_init(&pipeline->hud, config->width, config->height) < 0 ||
-        video_compositor_init(&pipeline->compositor, config->width,
-                              config->height) < 0) {
+        video_compositor_init_mode(&pipeline->compositor, config->width,
+                                   config->height,
+                                   config->compositor_mode) < 0 ||
+        (video_compositor_active_mode(&pipeline->compositor) ==
+             VIDEO_COMPOSITOR_MODE_G2D ?
+         hud_renderer_init_external(&pipeline->hud, config->width,
+                                    config->height) :
+         hud_renderer_init(&pipeline->hud, config->width,
+                           config->height)) < 0) {
         video_pipeline_stop(pipeline);
         errno = ENOMEM;
         return -1;
@@ -616,16 +915,46 @@ int video_pipeline_init(VideoPipeline *pipeline,
         pipeline->decoder_ready = true;
     }
     if (config->record_path != NULL && config->record_path[0] != '\0') {
-        if (video_recorder_init(&pipeline->recorder, config->record_path,
-                                config->width, config->height, config->fps) < 0) {
+        bool argb_recording = video_compositor_active_mode(
+                                  &pipeline->compositor) ==
+                              VIDEO_COMPOSITOR_MODE_G2D;
+        int recorder_result = argb_recording ?
+            video_recorder_init_argb(&pipeline->recorder, config->record_path,
+                                     config->width, config->height,
+                                     config->fps) :
+            video_recorder_init(&pipeline->recorder, config->record_path,
+                                config->width, config->height, config->fps);
+
+        if (recorder_result < 0) {
             LOG_WARN("Video: recording disabled because output could not be initialized");
         } else {
             pipeline->recorder_ready = true;
         }
     }
+    LOG_INFO("Video compositor: requested=%s active=%s g2d_healthy=%s",
+             video_compositor_mode_name(config->compositor_mode),
+             video_compositor_mode_name(video_compositor_active_mode(
+                 &pipeline->compositor)),
+             video_compositor_is_g2d_healthy(&pipeline->compositor) ?
+             "yes" : "no");
+    if (config->compositor_mode == VIDEO_COMPOSITOR_MODE_AUTO &&
+        video_compositor_active_mode(&pipeline->compositor) ==
+            VIDEO_COMPOSITOR_MODE_CPU) {
+        LOG_WARN("Video compositor: G2D initialization unavailable; using "
+                 "CPU fallback");
+    }
+    pipeline->stats.active_compositor_mode =
+        video_compositor_active_mode(&pipeline->compositor);
+    pipeline->stats.g2d_healthy_at_end =
+        video_compositor_is_g2d_healthy(&pipeline->compositor);
     pipeline->stats.memory_bytes =
         (uint64_t)pipeline->camera_frame.capacity +
-        (uint64_t)config->width * config->height * VIDEO_FRAME_CHANNELS * 2ULL;
+        (uint64_t)config->width * config->height * VIDEO_FRAME_CHANNELS *
+            (video_compositor_active_mode(&pipeline->compositor) ==
+             VIDEO_COMPOSITOR_MODE_G2D ? 3ULL : 2ULL) +
+        (video_compositor_active_mode(&pipeline->compositor) ==
+         VIDEO_COMPOSITOR_MODE_G2D ?
+         (uint64_t)config->width * config->height * 3ULL / 2ULL : 0ULL);
     return 0;
 }
 
@@ -672,6 +1001,9 @@ void video_pipeline_stop(VideoPipeline *pipeline)
     }
     video_frame_close(&pipeline->camera_frame);
     hud_renderer_close(&pipeline->hud);
+    pipeline->stats.g2d_healthy_at_end =
+        video_compositor_is_g2d_healthy(&pipeline->compositor);
+    video_compositor_close(&pipeline->compositor);
     if (pipeline->initialized) {
         pthread_mutex_destroy(&pipeline->mutex);
     }
@@ -687,6 +1019,7 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
     double decode_fps = 0.0;
     double process_fps = 0.0;
     double record_fps = 0.0;
+    double cpu_percent = 0.0;
 
     if (pipeline == NULL) {
         return;
@@ -695,10 +1028,19 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
     if (stats.last_timestamp_us > stats.first_timestamp_us) {
         elapsed_s = (double)(stats.last_timestamp_us -
                              stats.first_timestamp_us) / 1000000.0;
-        capture_fps = (double)stats.camera_received_frames / elapsed_s;
-        decode_fps = (double)stats.decoded_frames / elapsed_s;
-        process_fps = (double)stats.processed_frames / elapsed_s;
-        record_fps = (double)stats.written_frames / elapsed_s;
+        capture_fps = stats.camera_received_frames > 1U ?
+            (double)(stats.camera_received_frames - 1U) / elapsed_s : 0.0;
+        decode_fps = stats.decoded_frames > 1U ?
+            (double)(stats.decoded_frames - 1U) / elapsed_s : 0.0;
+        process_fps = stats.processed_frames > 1U ?
+            (double)(stats.processed_frames - 1U) / elapsed_s : 0.0;
+        record_fps = stats.written_frames > 1U ?
+            (double)(stats.written_frames - 1U) / elapsed_s : 0.0;
+        if (stats.process_cpu_end_us >= stats.process_cpu_start_us) {
+            cpu_percent = (double)(stats.process_cpu_end_us -
+                                   stats.process_cpu_start_us) /
+                          (elapsed_s * 10000.0);
+        }
     }
     memset(&usage, 0, sizeof(usage));
     (void)getrusage(RUSAGE_SELF, &usage);
@@ -774,6 +1116,55 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
              (double)stats.encoder_output_max_bytes / 1024.0,
              (unsigned long long)(stats.memory_bytes / 1024ULL),
              usage.ru_maxrss);
+    LOG_INFO("Video G2D profile: mode=%s healthy=%s fatal=%s video_fault=%s "
+             "yuv_stage_copy=%.3fms yuv_stage_sync=%.3fms "
+             "yuv_to_argb=%.3fms hud[clear=%.3f draw=%.3f sync=%.3f] "
+             "blend=%.3fms cedar_handoff=%.3fms process_cpu=%.1f%%",
+             video_compositor_mode_name(stats.active_compositor_mode),
+             stats.g2d_healthy_at_end ?
+             "yes" : "no", pipeline->g2d_fatal_failure ? "yes" : "no",
+             pipeline->video_faulted ? "yes" : "no",
+             video_pipeline_average_ms(stats.yuv_staging_copy_time_us,
+                                       stats.processed_frames),
+             video_pipeline_average_ms(stats.yuv_staging_sync_time_us,
+                                       stats.processed_frames),
+             video_pipeline_average_ms(stats.yuv_to_argb_time_us,
+                                       stats.processed_frames),
+             video_pipeline_average_ms(stats.hud_clear_time_us,
+                                       stats.processed_frames),
+             video_pipeline_average_ms(stats.hud_draw_time_us,
+                                       stats.processed_frames),
+             video_pipeline_average_ms(stats.hud_sync_time_us,
+                                       stats.processed_frames),
+             video_pipeline_average_ms(stats.g2d_blend_time_us,
+                                       stats.processed_frames),
+             video_pipeline_average_ms(stats.cedar_handoff_time_us,
+                                       stats.encoded_frames), cpu_percent);
+    video_latency_log("mjpeg_decode", &stats.latency_decode);
+    video_latency_log("yuv_to_argb", &stats.latency_yuv_to_argb);
+    video_latency_log("hud_clear", &stats.latency_hud_clear);
+    video_latency_log("hud_draw", &stats.latency_hud_draw);
+    video_latency_log("hud_sync", &stats.latency_hud_sync);
+    video_latency_log("hud_total", &stats.latency_hud_total);
+    video_latency_log("g2d_blend", &stats.latency_blend);
+    video_latency_log("cedar_handoff", &stats.latency_cedar_handoff);
+    video_latency_log("jpeg_encode", &stats.latency_jpeg_encode);
+    video_latency_log("mux_write", &stats.latency_mux_write);
+    video_latency_log("total_frame", &stats.latency_total_frame);
+    LOG_INFO("Video frame budget: >33.3ms=%llu (%.3f%%) >50ms=%llu "
+             "(%.3f%%) >100ms=%llu (%.3f%%)",
+             (unsigned long long)stats.frames_over_33ms,
+             stats.latency_total_frame.samples > 0U ?
+             (double)stats.frames_over_33ms * 100.0 /
+                 stats.latency_total_frame.samples : 0.0,
+             (unsigned long long)stats.frames_over_50ms,
+             stats.latency_total_frame.samples > 0U ?
+             (double)stats.frames_over_50ms * 100.0 /
+                 stats.latency_total_frame.samples : 0.0,
+             (unsigned long long)stats.frames_over_100ms,
+             stats.latency_total_frame.samples > 0U ?
+             (double)stats.frames_over_100ms * 100.0 /
+                 stats.latency_total_frame.samples : 0.0);
 }
 
 const VideoPipelineStats *video_pipeline_stats(const VideoPipeline *pipeline)

@@ -26,6 +26,11 @@ typedef struct {
     uint64_t mux_write_time_us;
     uint64_t total_time_us;
     uint64_t encoder_submit_time_us;
+    uint64_t encoder_input_acquire_time_us;
+    uint64_t encoder_input_copy_time_us;
+    uint64_t encoder_cache_flush_time_us;
+    uint64_t encoder_input_prepare_time_us;
+    uint64_t encoder_handoff_time_us;
     uint64_t encoder_hardware_time_us;
     uint64_t encoder_acquire_time_us;
     uint64_t encoder_release_time_us;
@@ -34,6 +39,12 @@ typedef struct {
     bool hardware_encoded;
     bool written;
 } VideoRecorderFrameTiming;
+
+typedef struct {
+    uint64_t offset;
+    uint32_t size;
+    uint32_t duration;
+} VideoRecorderPendingSample;
 
 typedef struct {
     FILE *file;
@@ -46,22 +57,32 @@ typedef struct {
     uint32_t width;
     uint32_t height;
     uint32_t fps;
+    uint64_t pending_timestamp_us;
+    VideoRecorderPendingSample pending_sample;
     JpegEncoder encoder;
     VideoEncoder hardware_encoder;
     bool hardware_encoder_ready;
     bool software_encoder_ready;
+    bool argb_hardware_input;
+    bool have_pending_sample;
     VideoRecorderStats stats;
     bool initialized;
 } VideoRecorder;
 
 int video_recorder_init(VideoRecorder *recorder, const char *path,
                         uint32_t width, uint32_t height, uint32_t fps);
+int video_recorder_init_argb(VideoRecorder *recorder, const char *path,
+                             uint32_t width, uint32_t height, uint32_t fps);
 bool video_recorder_write_frame_timed(VideoRecorder *recorder,
                                       const VideoFrame *frame,
                                       VideoRecorderFrameTiming *timing);
 bool video_recorder_write_native_frame_timed(VideoRecorder *recorder,
                                              const VideoYuvFrame *frame,
                                              VideoRecorderFrameTiming *timing);
+bool video_recorder_write_argb_frame_timed(VideoRecorder *recorder,
+                                           const VideoFrame *frame,
+                                           uint64_t timestamp_us,
+                                           VideoRecorderFrameTiming *timing);
 bool video_recorder_write_frame(VideoRecorder *recorder,
                                 const VideoFrame *frame);
 bool video_recorder_supports_native_yuv(const VideoRecorder *recorder);

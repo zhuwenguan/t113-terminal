@@ -29,6 +29,11 @@ typedef struct {
 } VideoEncoderApi;
 
 typedef struct {
+    uint64_t input_acquire_time_us;
+    uint64_t input_copy_time_us;
+    uint64_t cache_flush_time_us;
+    uint64_t input_prepare_time_us;
+    uint64_t handoff_time_us;
     uint64_t submit_time_us;
     uint64_t hardware_encode_time_us;
     uint64_t acquire_time_us;
@@ -38,6 +43,11 @@ typedef struct {
     bool encoded;
 } VideoEncoderTiming;
 
+typedef enum {
+    VIDEO_ENCODER_INPUT_YUV420P = 0,
+    VIDEO_ENCODER_INPUT_ARGB8888
+} VideoEncoderInputFormat;
+
 typedef struct {
     void *library_handle;
     void *jpeg_library_handle;
@@ -46,6 +56,8 @@ typedef struct {
     uint32_t height;
     uint32_t stride;
     uint32_t aligned_height;
+    size_t input_size;
+    VideoEncoderInputFormat input_format;
     size_t output_capacity;
     uint8_t *output;
     bool initialized;
@@ -61,6 +73,9 @@ typedef struct {
 int video_encoder_init(VideoEncoder *encoder, uint32_t width,
                        uint32_t height, uint32_t fps, int quality,
                        size_t output_capacity);
+int video_encoder_init_argb(VideoEncoder *encoder, uint32_t width,
+                            uint32_t height, uint32_t fps, int quality,
+                            size_t output_capacity);
 void video_encoder_close(VideoEncoder *encoder);
 bool video_encoder_is_available(const VideoEncoder *encoder);
 bool video_encoder_encode_yuv_timed(VideoEncoder *encoder,
@@ -70,5 +85,10 @@ bool video_encoder_encode_yuv_timed(VideoEncoder *encoder,
                                     VideoEncoderTiming *timing);
 bool video_encoder_encode_yuv(VideoEncoder *encoder, const VideoYuvFrame *frame,
                               const uint8_t **jpeg_data, size_t *jpeg_size);
+bool video_encoder_encode_argb_timed(VideoEncoder *encoder,
+                                     const VideoFrame *frame,
+                                     const uint8_t **jpeg_data,
+                                     size_t *jpeg_size,
+                                     VideoEncoderTiming *timing);
 
 #endif

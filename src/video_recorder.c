@@ -13,11 +13,7 @@
 #include <time.h>
 #include <unistd.h>
 
-typedef struct {
-    uint64_t offset;
-    uint32_t size;
-    uint32_t duration;
-} VideoRecorderSample;
+typedef VideoRecorderPendingSample VideoRecorderSample;
 
 typedef struct {
     uint8_t *data;
@@ -191,9 +187,17 @@ static bool mp4_build_movie(Mp4Buffer *buffer, const VideoRecorder *recorder,
     size_t stsc;
     size_t stsz;
     size_t co64;
-    uint64_t duration = recorder->frame_count * 90000ULL / recorder->fps;
-    uint32_t frame_duration = 90000U / recorder->fps;
+    uint64_t duration = 0U;
+    uint32_t timing_entries = 0U;
     uint64_t index;
+
+    for (index = 0U; index < recorder->frame_count; ++index) {
+        duration += samples[index].duration;
+        if (index == 0U || samples[index].duration !=
+                           samples[index - 1U].duration) {
+            timing_entries++;
+        }
+    }
 
     moov = mp4_begin(buffer, "moov");
     mvhd = mp4_begin(buffer, "mvhd");
@@ -308,9 +312,24 @@ static bool mp4_build_movie(Mp4Buffer *buffer, const VideoRecorder *recorder,
     }
     stts = mp4_begin(buffer, "stts");
     if (stts == SIZE_MAX || !mp4_append_u32(buffer, 0U) ||
-        !mp4_append_u32(buffer, 1U) ||
-        !mp4_append_u32(buffer, (uint32_t)recorder->frame_count) ||
-        !mp4_append_u32(buffer, frame_duration) || !mp4_end(buffer, stts)) {
+        !mp4_append_u32(buffer, timing_entries)) {
+        return false;
+    }
+    index = 0U;
+    while (index < recorder->frame_count) {
+        uint64_t run_end = index + 1U;
+
+        while (run_end < recorder->frame_count &&
+               samples[run_end].duration == samples[index].duration) {
+            run_end++;
+        }
+        if (!mp4_append_u32(buffer, (uint32_t)(run_end - index)) ||
+            !mp4_append_u32(buffer, samples[index].duration)) {
+            return false;
+        }
+        index = run_end;
+    }
+    if (!mp4_end(buffer, stts)) {
         return false;
     }
     stsc = mp4_begin(buffer, "stsc");
@@ -375,8 +394,10 @@ static bool video_recorder_write_u32_at(FILE *file, uint64_t offset,
     return true;
 }
 
-int video_recorder_init(VideoRecorder *recorder, const char *path,
-                        uint32_t width, uint32_t height, uint32_t fps)
+static int video_recorder_init_format(VideoRecorder *recorder,
+                                      const char *path, uint32_t width,
+                                      uint32_t height, uint32_t fps,
+                                      bool argb_hardware_input)
 {
     uint8_t mdat_header[8] = { 0U, 0U, 0U, 0U, 'm','d','a','t' };
     bool hardware_encoder_ready = false;
@@ -403,10 +424,19 @@ int video_recorder_init(VideoRecorder *recorder, const char *path,
         video_recorder_close(recorder);
         return -1;
     }
-    if (video_encoder_init(&recorder->hardware_encoder, width, height, fps,
-                           VIDEO_ENCODER_DEFAULT_JPEG_QUALITY,
-                           VIDEO_RECORDER_JPEG_CAPACITY) == 0) {
+    if ((argb_hardware_input ?
+         video_encoder_init_argb(&recorder->hardware_encoder, width, height,
+                                 fps, VIDEO_ENCODER_DEFAULT_JPEG_QUALITY,
+                                 VIDEO_RECORDER_JPEG_CAPACITY) :
+         video_encoder_init(&recorder->hardware_encoder, width, height, fps,
+                            VIDEO_ENCODER_DEFAULT_JPEG_QUALITY,
+                            VIDEO_RECORDER_JPEG_CAPACITY)) == 0) {
         hardware_encoder_ready = true;
+    }
+    if (!hardware_encoder_ready && argb_hardware_input) {
+        errno = ENODEV;
+        video_recorder_close(recorder);
+        return -1;
     }
     if (!hardware_encoder_ready &&
         jpeg_encoder_init(&recorder->encoder, width,
@@ -420,18 +450,61 @@ int video_recorder_init(VideoRecorder *recorder, const char *path,
     recorder->fps = fps;
     recorder->hardware_encoder_ready = hardware_encoder_ready;
     recorder->software_encoder_ready = !hardware_encoder_ready;
+    recorder->argb_hardware_input = argb_hardware_input;
     recorder->initialized = true;
     recorder->stats.active = true;
-    LOG_INFO("Video recorder: Motion-JPEG MP4 output %s backend=%s",
+    LOG_INFO("Video recorder: Motion-JPEG MP4 output %s backend=%s input=%s",
              recorder->path, hardware_encoder_ready ? "cedar-hardware" :
-             "software");
+             "software", argb_hardware_input ? "ARGB8888" : "YUV420P");
     return 0;
+}
+
+int video_recorder_init(VideoRecorder *recorder, const char *path,
+                        uint32_t width, uint32_t height, uint32_t fps)
+{
+    return video_recorder_init_format(recorder, path, width, height, fps,
+                                      false);
+}
+
+int video_recorder_init_argb(VideoRecorder *recorder, const char *path,
+                             uint32_t width, uint32_t height, uint32_t fps)
+{
+    return video_recorder_init_format(recorder, path, width, height, fps,
+                                      true);
+}
+
+static bool video_recorder_commit_pending_sample(VideoRecorder *recorder,
+                                                 uint64_t next_timestamp_us)
+{
+    uint64_t delta_us;
+    uint64_t duration;
+
+    if (!recorder->have_pending_sample) {
+        return true;
+    }
+    delta_us = next_timestamp_us > recorder->pending_timestamp_us ?
+               next_timestamp_us - recorder->pending_timestamp_us :
+               1000000ULL / recorder->fps;
+    duration = (delta_us * 90000ULL + 500000ULL) / 1000000ULL;
+    if (duration == 0U) {
+        duration = 1U;
+    } else if (duration > UINT32_MAX) {
+        duration = UINT32_MAX;
+    }
+    recorder->pending_sample.duration = (uint32_t)duration;
+    if (fwrite(&recorder->pending_sample, 1U,
+               sizeof(recorder->pending_sample), recorder->index_file) !=
+        sizeof(recorder->pending_sample)) {
+        return false;
+    }
+    recorder->have_pending_sample = false;
+    return true;
 }
 
 static bool video_recorder_write_encoded_timed(
     VideoRecorder *recorder, const uint8_t *jpeg_data, size_t jpeg_size,
     VideoRecorderFrameTiming *timing, uint64_t total_start_us,
-    uint64_t encode_time_us)
+    uint64_t encode_time_us, uint64_t timestamp_us)
 {
     off_t offset;
     VideoRecorderSample sample;
@@ -453,11 +526,13 @@ static bool video_recorder_write_encoded_timed(
     }
     sample.offset = (uint64_t)offset;
     sample.size = (uint32_t)jpeg_size;
-    sample.duration = 90000U / recorder->fps;
-    if (fwrite(&sample, 1U, sizeof(sample), recorder->index_file) !=
-        sizeof(sample)) {
+    sample.duration = 0U;
+    if (!video_recorder_commit_pending_sample(recorder, timestamp_us)) {
         return false;
     }
+    recorder->pending_sample = sample;
+    recorder->pending_timestamp_us = timestamp_us;
+    recorder->have_pending_sample = true;
     recorder->media_bytes += jpeg_size;
     recorder->frame_count++;
     recorder->stats.encoded_frames++;
@@ -507,7 +582,10 @@ bool video_recorder_write_frame_timed(VideoRecorder *recorder,
     if (!video_recorder_write_encoded_timed(recorder, jpeg_data, jpeg_size,
                                             timing, total_start_us,
                                             video_recorder_now_us() -
-                                            encode_start_us)) {
+                                            encode_start_us,
+                                            frame->timestamp_us != 0U ?
+                                            frame->timestamp_us :
+                                            video_recorder_now_us())) {
         recorder->stats.dropped_frames++;
         goto done;
     }
@@ -545,6 +623,14 @@ bool video_recorder_write_native_frame_timed(VideoRecorder *recorder,
                                              &encoder_timing);
     if (timing != NULL) {
         timing->encoder_submit_time_us = encoder_timing.submit_time_us;
+        timing->encoder_input_acquire_time_us =
+            encoder_timing.input_acquire_time_us;
+        timing->encoder_input_copy_time_us = encoder_timing.input_copy_time_us;
+        timing->encoder_cache_flush_time_us =
+            encoder_timing.cache_flush_time_us;
+        timing->encoder_input_prepare_time_us =
+            encoder_timing.input_prepare_time_us;
+        timing->encoder_handoff_time_us = encoder_timing.handoff_time_us;
         timing->encoder_hardware_time_us = encoder_timing.hardware_encode_time_us;
         timing->encoder_acquire_time_us = encoder_timing.acquire_time_us;
         timing->encoder_release_time_us = encoder_timing.release_time_us;
@@ -552,13 +638,64 @@ bool video_recorder_write_native_frame_timed(VideoRecorder *recorder,
     }
     if (!success || !video_recorder_write_encoded_timed(
             recorder, jpeg_data, jpeg_size, timing, total_start_us,
-            encoder_timing.total_time_us)) {
+            encoder_timing.total_time_us, video_recorder_now_us())) {
         recorder->hardware_encoder_ready = false;
         if (!recorder->software_encoder_ready &&
             jpeg_encoder_init(&recorder->encoder, recorder->width,
                               VIDEO_RECORDER_JPEG_CAPACITY) == 0) {
             recorder->software_encoder_ready = true;
         }
+        recorder->stats.dropped_frames++;
+        return false;
+    }
+    return true;
+}
+
+
+bool video_recorder_write_argb_frame_timed(VideoRecorder *recorder,
+                                           const VideoFrame *frame,
+                                           uint64_t timestamp_us,
+                                           VideoRecorderFrameTiming *timing)
+{
+    const uint8_t *jpeg_data = NULL;
+    size_t jpeg_size = 0U;
+    VideoEncoderTiming encoder_timing;
+    uint64_t total_start_us;
+    bool success;
+
+    if (timing != NULL) {
+        memset(timing, 0, sizeof(*timing));
+    }
+    if (recorder == NULL || !recorder->initialized ||
+        !recorder->hardware_encoder_ready || !recorder->argb_hardware_input ||
+        frame == NULL) {
+        return false;
+    }
+    total_start_us = video_recorder_now_us();
+    memset(&encoder_timing, 0, sizeof(encoder_timing));
+    success = video_encoder_encode_argb_timed(&recorder->hardware_encoder,
+                                              frame, &jpeg_data, &jpeg_size,
+                                              &encoder_timing);
+    if (timing != NULL) {
+        timing->encoder_input_acquire_time_us =
+            encoder_timing.input_acquire_time_us;
+        timing->encoder_input_copy_time_us = encoder_timing.input_copy_time_us;
+        timing->encoder_cache_flush_time_us =
+            encoder_timing.cache_flush_time_us;
+        timing->encoder_input_prepare_time_us =
+            encoder_timing.input_prepare_time_us;
+        timing->encoder_handoff_time_us = encoder_timing.handoff_time_us;
+        timing->encoder_submit_time_us = encoder_timing.submit_time_us;
+        timing->encoder_hardware_time_us =
+            encoder_timing.hardware_encode_time_us;
+        timing->encoder_acquire_time_us = encoder_timing.acquire_time_us;
+        timing->encoder_release_time_us = encoder_timing.release_time_us;
+        timing->hardware_encoded = success;
+    }
+    if (!success || !video_recorder_write_encoded_timed(
+            recorder, jpeg_data, jpeg_size, timing, total_start_us,
+            encoder_timing.total_time_us, timestamp_us)) {
+        recorder->hardware_encoder_ready = false;
         recorder->stats.dropped_frames++;
         return false;
     }
@@ -581,6 +718,13 @@ int video_recorder_finalize(VideoRecorder *recorder)
 
     if (recorder == NULL || !recorder->initialized) {
         return 0;
+    }
+    if (recorder->have_pending_sample) {
+        uint64_t nominal_next = recorder->pending_timestamp_us +
+                                1000000ULL / recorder->fps;
+        if (!video_recorder_commit_pending_sample(recorder, nominal_next)) {
+            goto done;
+        }
     }
     if (fflush(recorder->index_file) != 0 ||
         fseeko(recorder->index_file, 0, SEEK_END) != 0 ||
@@ -655,6 +799,7 @@ bool video_recorder_supports_native_yuv(const VideoRecorder *recorder)
 {
     return recorder != NULL && recorder->initialized &&
            recorder->hardware_encoder_ready &&
+           !recorder->argb_hardware_input &&
            video_encoder_is_available(&recorder->hardware_encoder);
 }
 

@@ -73,7 +73,8 @@ static bool video_encoder_api_ready(const VideoEncoder *encoder)
 }
 
 static bool video_encoder_copy_yuv420p(VideoEncoder *encoder,
-                                       const VideoYuvFrame *frame)
+                                       const VideoYuvFrame *frame,
+                                       const CedarVencInputBuffer *input)
 {
     uint32_t row;
     uint32_t chroma_width;
@@ -84,8 +85,8 @@ static bool video_encoder_copy_yuv420p(VideoEncoder *encoder,
     if (encoder == NULL || frame == NULL || frame->format !=
         VIDEO_YUV_FORMAT_YUV420P || frame->plane[0] == NULL ||
         frame->plane[1] == NULL || frame->plane[2] == NULL ||
-        encoder->input_memory.pAddrVirY == NULL ||
-        encoder->input_memory.pAddrVirC == NULL || frame->width != encoder->width ||
+        input == NULL || input->pAddrVirY == NULL ||
+        input->pAddrVirC == NULL || frame->width != encoder->width ||
         frame->height != encoder->height || (frame->width & 1U) != 0U ||
         (frame->height & 1U) != 0U || frame->stride[0] < frame->width ||
         frame->stride[1] < frame->width / 2U ||
@@ -93,14 +94,14 @@ static bool video_encoder_copy_yuv420p(VideoEncoder *encoder,
         return false;
     }
     for (row = 0U; row < frame->height; ++row) {
-        memcpy(encoder->input_memory.pAddrVirY +
+        memcpy(input->pAddrVirY +
                    (size_t)row * encoder->stride,
                frame->plane[0] + (size_t)row * frame->stride[0],
                frame->width);
     }
     chroma_width = frame->width / 2U;
     chroma_height = frame->height / 2U;
-    destination_u = encoder->input_memory.pAddrVirC;
+    destination_u = input->pAddrVirC;
     destination_v = destination_u +
                     (size_t)encoder->stride * encoder->aligned_height / 4U;
     for (row = 0U; row < chroma_height; ++row) {
@@ -113,11 +114,32 @@ static bool video_encoder_copy_yuv420p(VideoEncoder *encoder,
     }
     return true;
 }
+
+static bool video_encoder_copy_argb(VideoEncoder *encoder,
+                                    const VideoFrame *frame,
+                                    const CedarVencInputBuffer *input)
+{
+    uint32_t row;
+
+    if (encoder == NULL || frame == NULL || input == NULL ||
+        input->pAddrVirY == NULL || frame->pixels == NULL ||
+        frame->width != encoder->width || frame->height != encoder->height ||
+        frame->stride < frame->width * VIDEO_FRAME_CHANNELS) {
+        return false;
+    }
+    for (row = 0U; row < frame->height; ++row) {
+        memcpy(input->pAddrVirY + (size_t)row * encoder->stride,
+               frame->pixels + (size_t)row * frame->stride,
+               (size_t)frame->width * VIDEO_FRAME_CHANNELS);
+    }
+    return true;
+}
 #endif
 
-int video_encoder_init(VideoEncoder *encoder, uint32_t width,
-                       uint32_t height, uint32_t fps, int quality,
-                       size_t output_capacity)
+static int video_encoder_init_format(VideoEncoder *encoder, uint32_t width,
+                                     uint32_t height, uint32_t fps, int quality,
+                                     size_t output_capacity,
+                                     VideoEncoderInputFormat input_format)
 {
 #if !defined(__arm__) && !defined(__aarch64__)
     (void)encoder;
@@ -126,6 +148,7 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
     (void)fps;
     (void)quality;
     (void)output_capacity;
+    (void)input_format;
     errno = ENOSYS;
     return -1;
 #else
@@ -201,7 +224,9 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
     aligned_height = (int)((height + 15U) & ~15U);
     encoder->width = width;
     encoder->height = height;
-    encoder->stride = (uint32_t)aligned_width;
+    encoder->input_format = input_format;
+    encoder->stride = input_format == VIDEO_ENCODER_INPUT_ARGB8888 ?
+                      width * VIDEO_FRAME_CHANNELS : (uint32_t)aligned_width;
     encoder->aligned_height = (uint32_t)aligned_height;
     encoder->output_capacity = output_capacity;
     encoder->output = malloc(output_capacity);
@@ -213,8 +238,9 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
     config.nInputHeight = height;
     config.nDstWidth = width;
     config.nDstHeight = height;
-    config.nStride = (uint32_t)aligned_width;
-    config.eInputFormat = CEDAR_VENC_PIXEL_YUV420P;
+    config.nStride = encoder->stride;
+    config.eInputFormat = input_format == VIDEO_ENCODER_INPUT_ARGB8888 ?
+                          CEDAR_VENC_PIXEL_ARGB : CEDAR_VENC_PIXEL_YUV420P;
     handle = encoder->api.create(CEDAR_VENC_CODEC_JPEG);
     if (handle == NULL) {
         errno = ENODEV;
@@ -231,8 +257,15 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
     encoder->initialized = true;
     memset(&buffer_param, 0, sizeof(buffer_param));
     buffer_param.nBufferNum = 1U;
-    buffer_param.nSizeY = (uint32_t)aligned_width * (uint32_t)aligned_height;
-    buffer_param.nSizeC = buffer_param.nSizeY / 2U;
+    if (input_format == VIDEO_ENCODER_INPUT_ARGB8888) {
+        buffer_param.nSizeY = encoder->stride * (uint32_t)aligned_height;
+        buffer_param.nSizeC = 0U;
+    } else {
+        buffer_param.nSizeY = (uint32_t)aligned_width *
+                              (uint32_t)aligned_height;
+        buffer_param.nSizeC = buffer_param.nSizeY / 2U;
+    }
+    encoder->input_size = (size_t)buffer_param.nSizeY + buffer_param.nSizeC;
     if (encoder->api.alloc_input(handle, &buffer_param) != 0) {
         errno = ENOMEM;
         goto fail;
@@ -241,7 +274,8 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
     memset(&input_buffer, 0, sizeof(input_buffer));
     if (encoder->api.get_input(handle, &input_buffer) != 0 ||
         input_buffer.pAddrVirY == NULL ||
-        input_buffer.pAddrVirC == NULL) {
+        (input_format == VIDEO_ENCODER_INPUT_YUV420P &&
+         input_buffer.pAddrVirC == NULL)) {
         errno = EIO;
         goto fail;
     }
@@ -250,14 +284,33 @@ int video_encoder_init(VideoEncoder *encoder, uint32_t width,
     (void)encoder->api.return_input(handle, &input_buffer);
     encoder->available = true;
     LOG_INFO("Video encoder: Cedar hardware MJPEG %ux%u stride=%u "
-             "format=YUV420P quality=%d", width, height, encoder->stride,
-             quality);
+             "format=%s quality=%d", width, height, encoder->stride,
+             input_format == VIDEO_ENCODER_INPUT_ARGB8888 ? "ARGB8888" :
+             "YUV420P", quality);
     return 0;
 
 fail:
     video_encoder_close(encoder);
     return -1;
 #endif
+}
+
+int video_encoder_init(VideoEncoder *encoder, uint32_t width,
+                       uint32_t height, uint32_t fps, int quality,
+                       size_t output_capacity)
+{
+    return video_encoder_init_format(encoder, width, height, fps, quality,
+                                     output_capacity,
+                                     VIDEO_ENCODER_INPUT_YUV420P);
+}
+
+int video_encoder_init_argb(VideoEncoder *encoder, uint32_t width,
+                            uint32_t height, uint32_t fps, int quality,
+                            size_t output_capacity)
+{
+    return video_encoder_init_format(encoder, width, height, fps, quality,
+                                     output_capacity,
+                                     VIDEO_ENCODER_INPUT_ARGB8888);
 }
 
 void video_encoder_close(VideoEncoder *encoder)
@@ -295,15 +348,17 @@ bool video_encoder_is_available(const VideoEncoder *encoder)
     return encoder != NULL && encoder->initialized && encoder->available;
 }
 
-bool video_encoder_encode_yuv_timed(VideoEncoder *encoder,
-                                    const VideoYuvFrame *frame,
-                                    const uint8_t **jpeg_data,
-                                    size_t *jpeg_size,
-                                    VideoEncoderTiming *timing)
+static bool video_encoder_encode_timed(VideoEncoder *encoder,
+                                       const VideoYuvFrame *yuv_frame,
+                                       const VideoFrame *argb_frame,
+                                       const uint8_t **jpeg_data,
+                                       size_t *jpeg_size,
+                                       VideoEncoderTiming *timing)
 {
 #if !defined(__arm__) && !defined(__aarch64__)
     (void)encoder;
-    (void)frame;
+    (void)yuv_frame;
+    (void)argb_frame;
     (void)jpeg_data;
     (void)jpeg_size;
     if (timing != NULL) {
@@ -323,26 +378,61 @@ bool video_encoder_encode_yuv_timed(VideoEncoder *encoder,
     if (timing != NULL) {
         memset(timing, 0, sizeof(*timing));
     }
-    if (!video_encoder_is_available(encoder) || frame == NULL ||
-        jpeg_data == NULL || jpeg_size == NULL) {
+    if (!video_encoder_is_available(encoder) || jpeg_data == NULL ||
+        jpeg_size == NULL ||
+        (encoder->input_format == VIDEO_ENCODER_INPUT_YUV420P &&
+         yuv_frame == NULL) ||
+        (encoder->input_format == VIDEO_ENCODER_INPUT_ARGB8888 &&
+         argb_frame == NULL)) {
         return false;
     }
     total_start_us = video_encoder_now_us();
     handle = (CedarVideoEncoder *)encoder->encoder;
     memset(&input_buffer, 0, sizeof(input_buffer));
     stage_start_us = video_encoder_now_us();
-    if (!video_encoder_copy_yuv420p(encoder, frame) ||
-        encoder->api.get_input(handle, &input_buffer) != 0 ||
-        input_buffer.pAddrVirY == NULL || input_buffer.pAddrVirC == NULL) {
+    if (encoder->api.get_input(handle, &input_buffer) != 0 ||
+        input_buffer.pAddrVirY == NULL ||
+        (encoder->input_format == VIDEO_ENCODER_INPUT_YUV420P &&
+         input_buffer.pAddrVirC == NULL)) {
         goto done;
     }
-    /* The allocated input buffer is persistent; only the YUV contents change. */
+    if (timing != NULL) {
+        timing->input_acquire_time_us =
+            video_encoder_now_us() - stage_start_us;
+    }
+    stage_start_us = video_encoder_now_us();
+    if ((encoder->input_format == VIDEO_ENCODER_INPUT_YUV420P &&
+         !video_encoder_copy_yuv420p(encoder, yuv_frame, &input_buffer)) ||
+        (encoder->input_format == VIDEO_ENCODER_INPUT_ARGB8888 &&
+         !video_encoder_copy_argb(encoder, argb_frame, &input_buffer))) {
+        (void)encoder->api.return_input(handle, &input_buffer);
+        goto done;
+    }
+    if (timing != NULL) {
+        timing->input_copy_time_us = video_encoder_now_us() - stage_start_us;
+    }
+    stage_start_us = video_encoder_now_us();
     input_buffer.nWidth = (int)encoder->width;
     input_buffer.nHeight = (int)encoder->height;
     input_buffer.nAlign = (int)encoder->stride;
     input_buffer.nPts = (int64_t)total_start_us;
-    if (encoder->api.flush_input(handle, &input_buffer) != 0 ||
-        encoder->api.add_input(handle, &input_buffer) != 0) {
+    if (timing != NULL) {
+        timing->input_prepare_time_us = video_encoder_now_us() - stage_start_us;
+    }
+    stage_start_us = video_encoder_now_us();
+    if (encoder->api.flush_input(handle, &input_buffer) != 0) {
+        (void)encoder->api.return_input(handle, &input_buffer);
+        goto done;
+    }
+    if (timing != NULL) {
+        timing->cache_flush_time_us = video_encoder_now_us() - stage_start_us;
+        timing->handoff_time_us = timing->input_acquire_time_us +
+                                  timing->input_copy_time_us +
+                                  timing->cache_flush_time_us +
+                                  timing->input_prepare_time_us;
+    }
+    stage_start_us = video_encoder_now_us();
+    if (encoder->api.add_input(handle, &input_buffer) != 0) {
         (void)encoder->api.return_input(handle, &input_buffer);
         goto done;
     }
@@ -417,9 +507,29 @@ done:
 #endif
 }
 
+bool video_encoder_encode_yuv_timed(VideoEncoder *encoder,
+                                    const VideoYuvFrame *frame,
+                                    const uint8_t **jpeg_data,
+                                    size_t *jpeg_size,
+                                    VideoEncoderTiming *timing)
+{
+    return video_encoder_encode_timed(encoder, frame, NULL, jpeg_data,
+                                      jpeg_size, timing);
+}
+
 bool video_encoder_encode_yuv(VideoEncoder *encoder, const VideoYuvFrame *frame,
                               const uint8_t **jpeg_data, size_t *jpeg_size)
 {
     return video_encoder_encode_yuv_timed(encoder, frame, jpeg_data, jpeg_size,
                                           NULL);
+}
+
+bool video_encoder_encode_argb_timed(VideoEncoder *encoder,
+                                     const VideoFrame *frame,
+                                     const uint8_t **jpeg_data,
+                                     size_t *jpeg_size,
+                                     VideoEncoderTiming *timing)
+{
+    return video_encoder_encode_timed(encoder, NULL, frame, jpeg_data,
+                                      jpeg_size, timing);
 }

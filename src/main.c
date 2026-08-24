@@ -40,6 +40,7 @@ typedef struct {
     char video_output[PATH_MAX];
     char video_frame[PATH_MAX];
     uint32_t video_seconds;
+    VideoCompositorMode video_compositor_mode;
 } MainOptions;
 
 static uint64_t main_monotonic_us(void)
@@ -281,6 +282,7 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
     }
     memset(options, 0, sizeof(*options));
     options->replay_speed = 1.0;
+    options->video_compositor_mode = VIDEO_COMPOSITOR_MODE_AUTO;
     (void)snprintf(options->camera_path, sizeof(options->camera_path), "%s",
                    VIDEO_CAPTURE_DEFAULT_DEVICE);
     for (argument_index = 1; argument_index < argc; ++argument_index) {
@@ -377,6 +379,16 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
             options->video = true;
             continue;
         }
+        if (strcmp(argv[argument_index], "--video-compositor") == 0) {
+            if (argument_index + 1 >= argc ||
+                !video_compositor_parse_mode(argv[++argument_index],
+                                             &options->video_compositor_mode)) {
+                LOG_ERROR("Invalid --video-compositor; use auto, g2d, or cpu");
+                return -1;
+            }
+            options->video = true;
+            continue;
+        }
         if (strcmp(argv[argument_index], "--hud-demo") == 0) {
             options->hud_demo = true;
             options->video = true;
@@ -400,7 +412,9 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
                   "[--replay-speed <number>] [--video] [--camera <path>] "
                   "[--video-only] "
                   "[--video-record [path]] [--video-frame <path>] "
-                  "[--video-seconds <number>] [--hud-demo|--hud-demo-no-frame]",
+                  "[--video-seconds <number>] "
+                  "[--video-compositor auto|g2d|cpu] "
+                  "[--hud-demo|--hud-demo-no-frame]",
                   argv[0]);
         return -1;
     }
@@ -489,6 +503,8 @@ int main(int argc, char *argv[])
         video_config.fps = VIDEO_CAPTURE_FPS;
         video_config.run_seconds = options.video_seconds;
         video_config.mock_camera = options.hud_demo;
+        video_config.compositor_mode = options.hud_demo ?
+            VIDEO_COMPOSITOR_MODE_CPU : options.video_compositor_mode;
         video_config.get_state = options.hud_demo ?
                                  main_hud_demo_state_getter :
                                  main_video_state_getter;

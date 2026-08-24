@@ -218,6 +218,16 @@ static void test_render_to_external_argb_surface(void)
         }
     }
     assert(saw_red);
+    memset(pixels, 0, (size_t)stride * height);
+    layer = hud_renderer_render_frame_to_surface(&renderer, &state, true,
+                                                 &surface, &timing);
+    assert(layer != NULL);
+    assert(layer->region_count == 1U);
+    assert(layer->regions[0].width == width);
+    assert(layer->regions[0].height == height);
+    /* The complete direct surface includes the static left panel as well as
+     * dynamic values. */
+    assert(pixels[(size_t)(75U) * stride + (size_t)20U * 4U + 3U] != 0U);
     hud_renderer_close(&renderer);
     free(pixels);
 }
