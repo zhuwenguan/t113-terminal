@@ -317,3 +317,103 @@ MP4 sample duration 由相邻帧 monotonic timestamp 生成并压缩为 `stts` r
 每阶段结束后检查 MP4、HUD/VehicleState 动态变化、播放时长、`dmesg`，并保存末尾
 的 latency、frame budget、sequence lost、resource slope 和 CPU 汇总。主机 mock
 只用于回归，不能作为真实 USB 摄像头性能结论。
+
+## 编码帧异步写盘队列
+
+录像链已将 Cedar JPEG 编码与 MP4/U 盘写入解耦。采集、解码、G2D HUD 合成和
+Cedar 编码仍在原视频处理线程串行执行；本轮没有把完整 capture/process 链拆成
+多线程，也没有修改 G2D、HUD、Cedar 的图像格式和 buffer handoff：
+
+```text
+Video processing thread
+  V4L2 -> Cedar decode -> G2D/HUD -> Cedar JPEG
+       -> copy encoded JPEG + capture metadata into bounded queue
+
+Recorder writer thread
+  queue pop -> MP4 mdat + temporary sample index
+            -> drain -> stts/stsz/co64/moov -> flush/close
+```
+
+只有 writer thread 可以打开、写入、seek、flush、finalize 或关闭 MP4 和临时
+`.idx` 文件。producer 在 `video_recorder_init()` 完成后不再访问 mux/file 状态；
+Cedar encoder 仍只由视频处理线程持有。
+
+队列是 32 槽固定池，每槽 384 KiB，只保存编码后 JPEG 及其 `pts_us`、capture
+timestamp、V4L2 sequence、frame index 和 keyframe 标志，不保存 ARGB/YUV 大图。
+槽内存仅在 recorder 初始化时分配，帧循环内没有 malloc/free。producer 的
+`try_push` 只执行 JPEG copy 和短临界区，不等待 writer；队列满时丢弃当前最新
+编码帧并立即返回，oversize 帧同样被明确计数。writer pop 后持有槽，写完才归还，
+因此统计 depth 包含 ready 和 writer in-use 槽。
+
+MP4 sample duration 继续使用原 capture monotonic PTS。被丢帧时不重排、不补造
+时间戳，下一成功帧与前一成功帧之间的真实 gap 会进入 `stts`，所以播放不会因
+drop newest 而快放。停止顺序为 close queue、writer drain、join、writer 内生成
+`moov` 并关闭文件，之后才释放 queue 和 encoder；最终统计从 join 后状态刷新。
+正常退出时 `enqueued == written` 可用于核对排空结果；writer failure 会单独报告。
+
+writer 的 open/write/seek/flush/finalize 任一步失败都会原子标记
+`recording_failed`，关闭队列并停止后续编码入队，只结束录像；摄像头解码、G2D
+合成、HUD 和车辆数据线程继续运行。运行时错误只告警一次，close 阶段也不会重复
+打印 finalize 错误。
+
+为支持长录像，`mdat` 使用标准 16-byte extended-size box（32-bit size 为 1，
+随后写 64-bit largesize）；sample offset 使用 `co64`，并以 64-bit
+`fseeko/ftello` 处理。这样 30 分钟约 6 GB 的单文件可以跨过 4 GiB 边界。
+
+### Writer 指标
+
+每秒与最终汇总分别输出 capture/decode/process/encode/enqueue/write FPS，编码、
+入队和落盘 MB/s，以及：
+
+- queue current/capacity、average、maximum、full、dropped、oversized；
+- writer write latency average/P95/P99/max 和超过 50/100/200/500 ms 的次数；
+- logical write calls、bytes per call、writer error count 和 `recording_failed`；
+- JPEG enqueue copy 时间；该时间计入 processing total，writer I/O 时间不计入。
+
+`frame_buffers` 理论值包含 32 x 384 KiB 的队列池。主机
+`encoded_frame_queue_bounded_lifecycle` 覆盖 copy ownership、FIFO metadata、
+满队列 drop、oversize、槽复用和 close/drain/wakeup；
+`video_recorder_variable_timestamps` 同时验证立即 finalize 会排空队列、真实 PTS
+生成 `stts`，以及 extended-size `mdat`。当前主机回归为 11/11 通过，ARM Release
+构建通过。
+
+### 真实板端验证（2026-08-25）
+
+测试平台为 T113-S3/Linux 5.4、真实 USB MJPEG 摄像头、生产 G2D compositor、
+Cedar decode/encode，录像目标为 exFAT U 盘 `/mnt/usb/sda`。每个长测前均重启，
+避免把既有 Cedar/G2D teardown 固定残留带入下一轮；本轮未修改该已知 teardown
+问题。
+
+| 测试 | encoded / enqueued / written | 应用丢帧 | queue avg/max | writer max | 结果 |
+| --- | ---: | ---: | ---: | ---: | --- |
+| 10 s | 271 / 271 / 271 | 0 | 1.47 / 12 | 394.343 ms | 28.57 FPS，排空成功 |
+| 60 s | 1704 / 1704 / 1704 | 0 | 2.66 / 22 | 763.496 ms | 28.62 FPS，排空成功 |
+| 5 min | 8545 / 8545 / 8545 | 0 | 2.61 / 20 | 694.852 ms | 28.53 FPS，299.488 s |
+| 15 min | 25571 / 25569 / 25569 | 2 | 1.85 / 32 | 821.873 ms | 28.43 FPS，899.532 s |
+| 30 min | 51221 / 51221 / 51221 | 0 | 2.54 / 25 | 783.772 ms | 28.46 FPS，1799.525 s |
+
+15 分钟测试在约 75 秒遇到 821.873 ms U 盘长尾，队列达到 32/32，producer 按
+设计丢弃当前 2 帧后继续运行；队列随后回到稳态且余下约 14 分钟没有新增应用
+丢帧。这是 drop-newest 非阻塞路径的真实板端覆盖，不是异常退出。
+
+30 分钟 MP4 为 6,296,818,209 bytes。解析结果为 51,221 个 `stsz` sample、
+51,221 个 `co64` offset、50,516 个 `stts` run；首帧 offset 40，末帧 offset
+6,295,674,769、size 124,111 bytes。末帧已从大于 4 GiB 的位置直接抽取并确认是
+1280x720 JPEG，HUD 合成正常。`mdat` largesize 为 `0x0000000177424448`，文件在
+跨 4 GiB 后继续稳定写入约 9 分钟并正常生成 `moov`。
+
+真实 VehicleState 回放使用
+`/mnt/usb/sda/log/session_20260820_173335`：10 秒视频得到 277/277/277 帧、
+9.534 秒，queue avg/max 1.82/21、应用丢帧 0；回放全程 CAN 1238、LapPro 516、
+VehicleState 411 条均写入且无 drop/error。抽取中间帧确认 motor RPM、torque、
+HV voltage/current/power 和 G 值随真实 snapshot 更新。
+
+`/dev/full` 运行时故障注入在首帧触发 writer failure 后，录像停止但视频处理继续
+到测试结束：10 秒处理 286 帧、30.00 FPS，`video_fault=no`、
+`recording_failed=yes`、进程正常退出；最终二进制 3 秒复测同样为 30.00 FPS，
+finalize 错误只记录一次。测试专用软链接和 `.idx` 已清理。
+
+长测期间未发现 OOM、G2D/VE error、D-state、fd/dma-buf 随帧增长或新的循环泄漏。
+30 分钟 max RSS 为 16,060 KiB；运行中 `MemAvailable` 约 16--17 MiB，并未随时长
+持续下降。60 秒相对改造前的 23.01 FPS/1369 帧提升到 28.62 FPS/1704 帧，V4L2
+sequence lost 从 414 降到 81；主要收益来自 U 盘长尾不再阻塞视频处理线程。
