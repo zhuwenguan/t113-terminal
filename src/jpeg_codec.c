@@ -162,18 +162,20 @@ static void jpeg_native_context_close(JpegNativeContext *context)
     free(context);
 }
 
-static bool jpeg_native_decoder_init(JpegDecoder *decoder, uint32_t width)
+static bool jpeg_native_decoder_init(JpegDecoder *decoder, uint32_t width,
+                                     uint32_t height)
 {
 #if !defined(__arm__) && !defined(__aarch64__)
     (void)decoder;
     (void)width;
+    (void)height;
     return false;
 #else
     JpegNativeContext *context;
     CedarVideoStreamInfo stream_info;
     CedarVConfig config;
 
-    if (decoder == NULL || width == 0U) {
+    if (decoder == NULL || width == 0U || height == 0U) {
         return false;
     }
     if (jpeg_native_vdecoder_library == NULL) {
@@ -249,7 +251,7 @@ static bool jpeg_native_decoder_init(JpegDecoder *decoder, uint32_t width)
     memset(&stream_info, 0, sizeof(stream_info));
     stream_info.eCodecFormat = CEDAR_VIDEO_CODEC_FORMAT_MJPEG;
     stream_info.nWidth = (int)width;
-    stream_info.nHeight = 720;
+    stream_info.nHeight = (int)height;
     stream_info.nFrameRate = 30;
     stream_info.nFrameDuration = 33333;
     memset(&config, 0, sizeof(config));
@@ -260,7 +262,7 @@ static bool jpeg_native_decoder_init(JpegDecoder *decoder, uint32_t width)
         return false;
     }
     context->width = width;
-    context->height = 720U;
+    context->height = height;
     decoder->native_context = context;
     decoder->native_initialized = true;
     return true;
@@ -427,8 +429,16 @@ static bool jpeg_native_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
         return false;
     }
     frame->format = jpeg_native_pixel_format(picture->ePixelFormat);
-    frame->width = (uint32_t)picture->nWidth;
-    frame->height = (uint32_t)picture->nHeight;
+    frame->width = picture->nLeftOffset >= 0 &&
+                   picture->nRightOffset > picture->nLeftOffset &&
+                   picture->nRightOffset <= picture->nWidth ?
+                   (uint32_t)(picture->nRightOffset - picture->nLeftOffset) :
+                   (uint32_t)picture->nWidth;
+    frame->height = picture->nTopOffset >= 0 &&
+                    picture->nBottomOffset > picture->nTopOffset &&
+                    picture->nBottomOffset <= picture->nHeight ?
+                    (uint32_t)(picture->nBottomOffset - picture->nTopOffset) :
+                    (uint32_t)picture->nHeight;
     frame->stride[0] = (uint32_t)picture->nLineStride;
     frame->stride[1] = frame->format == JPEG_DECODED_FORMAT_NV12 ||
                        frame->format == JPEG_DECODED_FORMAT_NV21 ?
@@ -443,6 +453,15 @@ static bool jpeg_native_decode(JpegDecoder *decoder, const uint8_t *jpeg_data,
     frame->plane[2] = (uint8_t *)picture->pData2;
     frame->opaque = picture;
     context->held_picture = picture;
+    if (!decoder->native_frame_logged) {
+        LOG_INFO("JPEG native picture: format=%d size=%ux%u stride=%u "
+                 "crop=%d,%d-%d,%d",
+                 (int)frame->format, frame->width, frame->height,
+                 frame->stride[0], picture->nLeftOffset,
+                 picture->nTopOffset, picture->nRightOffset,
+                 picture->nBottomOffset);
+        decoder->native_frame_logged = true;
+    }
     if (frame->format == JPEG_DECODED_FORMAT_UNKNOWN) {
         (void)context->return_picture(context->decoder, picture);
         context->held_picture = NULL;
@@ -799,9 +818,9 @@ static bool jpeg_codec_prepare_error(JpegCodecApi *api,
     return true;
 }
 
-int jpeg_decoder_init(JpegDecoder *decoder, uint32_t width)
+int jpeg_decoder_init(JpegDecoder *decoder, uint32_t width, uint32_t height)
 {
-    if (decoder == NULL || width == 0U) {
+    if (decoder == NULL || width == 0U || height == 0U) {
         errno = EINVAL;
         return -1;
     }
@@ -815,7 +834,7 @@ int jpeg_decoder_init(JpegDecoder *decoder, uint32_t width)
         return -1;
     }
     decoder->row_capacity = (size_t)width * 3U;
-    if (jpeg_native_decoder_init(decoder, width)) {
+    if (jpeg_native_decoder_init(decoder, width, height)) {
         decoder->initialized = true;
         return 0;
     }

@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     fclose(file);
     memset(&decoder, 0, sizeof(decoder));
     memset(&frame, 0, sizeof(frame));
-    if (jpeg_decoder_init(&decoder, 1280U) < 0 ||
+    if (jpeg_decoder_init(&decoder, 1280U, 720U) < 0 ||
         video_frame_init(&frame, 1280U, 720U) < 0) {
         fprintf(stderr, "decoder/frame init failed: %s\n", strerror(errno));
         jpeg_decoder_close(&decoder);

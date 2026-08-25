@@ -853,9 +853,10 @@ static void *video_pipeline_thread(void *context)
                 }
                 pipeline->stats.reconnects++;
                 pipeline->have_camera_sequence = false;
-                LOG_INFO("Video: V4L2 MJPEG %ux%u @ %u FPS started",
+                LOG_INFO("Video: V4L2 MJPEG %ux%u @ %u FPS started, buffers=%u",
                          pipeline->capture.width, pipeline->capture.height,
-                         pipeline->capture.fps);
+                         pipeline->capture.fps,
+                         pipeline->capture.buffer_count);
             }
             frame_start_us = video_pipeline_now_us();
             capture_result = video_capture_dequeue(&pipeline->capture,
@@ -984,9 +985,7 @@ int video_pipeline_init(VideoPipeline *pipeline,
     int result;
 
     if (pipeline == NULL || config == NULL || config->width == 0U ||
-        config->height == 0U || config->fps == 0U ||
-        ((uint64_t)config->width * HUD_BASE_HEIGHT) !=
-        ((uint64_t)config->height * HUD_BASE_WIDTH)) {
+        config->height == 0U || config->fps == 0U) {
         errno = EINVAL;
         return -1;
     }
@@ -1010,7 +1009,8 @@ int video_pipeline_init(VideoPipeline *pipeline,
     if (!config->mock_camera) {
         uint64_t decoder_init_start_us = video_pipeline_now_us();
 
-        if (jpeg_decoder_init(&pipeline->decoder, config->width) < 0) {
+        if (jpeg_decoder_init(&pipeline->decoder, config->width,
+                              config->height) < 0) {
             pipeline->stats.decoder_init_time_us +=
                 video_pipeline_now_us() - decoder_init_start_us;
             video_pipeline_stop(pipeline);

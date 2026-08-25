@@ -264,6 +264,7 @@ int main(void)
 {
     test_render_at_size(HUD_BASE_WIDTH, HUD_BASE_HEIGHT);
     test_render_at_size(640U, 360U);
+    test_render_at_size(800U, 600U);
     test_yuv_compose_with_stride_and_crop();
     test_render_to_external_argb_surface();
     return 0;

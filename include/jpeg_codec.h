@@ -118,7 +118,7 @@ typedef struct {
     bool initialized;
 } JpegEncoder;
 
-int jpeg_decoder_init(JpegDecoder *decoder, uint32_t width);
+int jpeg_decoder_init(JpegDecoder *decoder, uint32_t width, uint32_t height);
 void jpeg_decoder_close(JpegDecoder *decoder);
 bool jpeg_decoder_decode_timed(JpegDecoder *decoder, const uint8_t *jpeg_data,
                                size_t jpeg_size, VideoFrame *destination,

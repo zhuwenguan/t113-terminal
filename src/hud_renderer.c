@@ -694,9 +694,7 @@ static int hud_renderer_init_common(HudRenderer *renderer, uint32_t width,
 {
     size_t bytes;
 
-    if (renderer == NULL || width == 0U || height == 0U ||
-        ((uint64_t)width * HUD_BASE_HEIGHT) !=
-        ((uint64_t)height * HUD_BASE_WIDTH)) {
+    if (renderer == NULL || width == 0U || height == 0U) {
         errno = EINVAL;
         return -1;
     }
