@@ -200,6 +200,19 @@ else()
 endif()
 
 if (BUILD_TESTING)
+    add_library(video_lifecycle_fault_preload SHARED
+        tests/video_lifecycle_fault_preload.c
+    )
+    target_compile_options(video_lifecycle_fault_preload PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(video_lifecycle_fault_preload PRIVATE
+        Threads::Threads
+        ${CMAKE_DL_LIBS}
+    )
+
     add_library(video_writer_fault_preload SHARED
         tests/video_writer_fault_preload.c
     )
