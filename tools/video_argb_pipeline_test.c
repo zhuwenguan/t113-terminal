@@ -23,11 +23,6 @@
 #define PIPELINE_DEFAULT_SAMPLE_INTERVAL 1000U
 #define PIPELINE_DEFAULT_PROGRESS_INTERVAL 100U
 #define PIPELINE_G2D_DEVICE "/dev/g2d"
-#define PIPELINE_CEDAR_DEVICE "/dev/cedar_dev"
-#define PIPELINE_CEDAR_ENGINE_REQ 0x206
-#define PIPELINE_CEDAR_ENGINE_REL 0x207
-#define PIPELINE_CEDAR_FREE_IOMMU_ADDR 0x503
-#define PIPELINE_CEDAR_UNMAP_DMA_BUF 0x505
 
 typedef enum {
     PIPELINE_MODE_E = 0,
@@ -83,11 +78,6 @@ typedef struct {
     uint8_t *physical_address;
     int dma_buf_fd;
 } PipelineCedarInput;
-
-typedef struct {
-    int fd;
-    uint32_t iommu_addr;
-} PipelineIommuParam;
 
 typedef uint32_t (*PipelineIonVir2PhyFn)(void *memory);
 
@@ -453,12 +443,10 @@ static bool pipeline_fd_is_dma_buf(int fd)
 }
 
 static void pipeline_buffer_release(const IonApi *ion, PipelineBuffer *buffer,
-                                    int cedar_fd, ResourceMonitor *monitor,
-                                    uint64_t frame)
+                                    ResourceMonitor *monitor, uint64_t frame)
 {
     int fd;
     size_t size;
-    PipelineIommuParam iommu;
 
     if (buffer->ion.memory == NULL) {
         return;
@@ -468,31 +456,6 @@ static void pipeline_buffer_release(const IonApi *ion, PipelineBuffer *buffer,
     printf("buffer release begin name=%s size=%zu ion_handle=%p "
            "dma_buf_fd=%d owner=%s\n", buffer->name, size,
            buffer->ion.memory, fd, buffer->owner);
-    if (cedar_fd >= 0) {
-        memset(&iommu, 0, sizeof(iommu));
-        iommu.fd = fd;
-        iommu.iommu_addr = buffer->iommu_addr;
-        if (ioctl(cedar_fd, PIPELINE_CEDAR_FREE_IOMMU_ADDR, &iommu) != 0) {
-            fprintf(stderr, "buffer release name=%s FREE_IOMMU_ADDR failed "
-                    "fd=%d errno=%d (%s)\n", buffer->name, fd, errno,
-                    strerror(errno));
-        } else {
-            printf("buffer iommu release name=%s dma_buf_fd=%d "
-                   "iommu_addr=0x%08" PRIx32 " owner=Cedar\n", buffer->name,
-                   fd, iommu.iommu_addr);
-        }
-        if (ioctl(cedar_fd, PIPELINE_CEDAR_UNMAP_DMA_BUF, &iommu) != 0) {
-            fprintf(stderr, "buffer release name=%s UNMAP_DMA_BUF failed "
-                    "fd=%d errno=%d (%s)\n", buffer->name, fd, errno,
-                    strerror(errno));
-        } else {
-            printf("buffer dma-buf unmap name=%s dma_buf_fd=%d "
-                   "owner=Cedar\n", buffer->name, fd);
-        }
-    } else {
-        fprintf(stderr, "buffer release name=%s skipped FREE_IOMMU_ADDR: "
-                "cedar cleanup fd unavailable\n", buffer->name);
-    }
     ion_buffer_free(ion, &buffer->ion);
     printf("buffer release complete name=%s old_dma_buf_fd=%d\n",
            buffer->name, fd);
@@ -1000,14 +963,12 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
     PipelineBuffer intermediate;
     PipelineBuffer final_argb;
     PipelineCedarInput cedar_input;
-    int cedar_cleanup_fd = -1;
     int g2d_fd = -1;
     bool ion_opened = false;
     bool input_allocated = false;
     bool success = false;
     bool monitor_finished = false;
     bool baseline_valid = false;
-    bool cedar_engine_acquired = false;
     ResourceSample baseline;
     ResourceSample shutdown;
     ResourceMonitor monitor;
@@ -1075,16 +1036,41 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
                "physical-address fallback=disabled\n");
     }
 
+    if (!pipeline_load_encoder_api(&encoder_api)) {
+        goto cleanup;
+    }
+    encoder = encoder_api.create(CEDAR_VENC_CODEC_JPEG);
+    if (encoder == NULL) {
+        fprintf(stderr, "VideoEncCreate JPEG failed\n");
+        goto cleanup;
+    }
+    memset(&encoder_config, 0, sizeof(encoder_config));
+    encoder_config.nInputWidth = 1280U;
+    encoder_config.nInputHeight = 720U;
+    encoder_config.nDstWidth = 1280U;
+    encoder_config.nDstHeight = 720U;
+    encoder_config.nStride = PIPELINE_STRIDE;
+    encoder_config.eInputFormat = CEDAR_VENC_PIXEL_ARGB;
+    if (encoder_api.set_parameter(encoder, 0x200,
+                                  &(int){PIPELINE_QUALITY}) != 0 ||
+        encoder_api.init(encoder, &encoder_config) != 0) {
+        fprintf(stderr, "Cedar JPEG ARGB init failed\n");
+        goto cleanup;
+    }
+    memset(&buffer_param, 0, sizeof(buffer_param));
+    buffer_param.nBufferNum = 1U;
+    buffer_param.nSizeY = PIPELINE_ARGB_BYTES;
+    if (encoder_api.alloc_input(encoder, &buffer_param) != 0) {
+        fprintf(stderr, "Cedar persistent ARGB input allocation failed\n");
+        goto cleanup;
+    }
+    input_allocated = true;
+
     if (!ion_load(&ion) || ion.open() != 0) {
         fprintf(stderr, "cannot open board ION allocator\n");
         goto cleanup;
     }
     ion_opened = true;
-    cedar_cleanup_fd = open(PIPELINE_CEDAR_DEVICE, O_RDONLY | O_CLOEXEC);
-    if (cedar_cleanup_fd < 0) {
-        fprintf(stderr, "cannot open %s for IOMMU cleanup: %s\n",
-                PIPELINE_CEDAR_DEVICE, strerror(errno));
-    }
     if (options->mode == PIPELINE_MODE_F) {
         if (!pipeline_buffer_alloc(&ion, &camera, "yuv_source", "pipeline",
                                    image_size_for_format(yuv_format, 1280U,
@@ -1150,34 +1136,6 @@ static bool pipeline_run(const PipelineOptions *options, unsigned int round)
                 strerror(errno));
         goto cleanup;
     }
-    if (!pipeline_load_encoder_api(&encoder_api)) {
-        goto cleanup;
-    }
-    encoder = encoder_api.create(CEDAR_VENC_CODEC_JPEG);
-    if (encoder == NULL) {
-        fprintf(stderr, "VideoEncCreate JPEG failed\n");
-        goto cleanup;
-    }
-    memset(&encoder_config, 0, sizeof(encoder_config));
-    encoder_config.nInputWidth = 1280U;
-    encoder_config.nInputHeight = 720U;
-    encoder_config.nDstWidth = 1280U;
-    encoder_config.nDstHeight = 720U;
-    encoder_config.nStride = PIPELINE_STRIDE;
-    encoder_config.eInputFormat = CEDAR_VENC_PIXEL_ARGB;
-    if (encoder_api.set_parameter(encoder, 0x200, &(int){PIPELINE_QUALITY}) != 0 ||
-        encoder_api.init(encoder, &encoder_config) != 0) {
-        fprintf(stderr, "Cedar JPEG ARGB init failed\n");
-        goto cleanup;
-    }
-    memset(&buffer_param, 0, sizeof(buffer_param));
-    buffer_param.nBufferNum = 1U;
-    buffer_param.nSizeY = PIPELINE_ARGB_BYTES;
-    if (encoder_api.alloc_input(encoder, &buffer_param) != 0) {
-        fprintf(stderr, "Cedar persistent ARGB input allocation failed\n");
-        goto cleanup;
-    }
-    input_allocated = true;
     resource_monitor_sample(&monitor, 0U, true);
 
     for (frame = 0U; frame < options->frames; ++frame) {
@@ -1331,46 +1289,20 @@ cleanup:
         close(g2d_fd);
         g2d_fd = -1;
     }
-    /* Cedar may retain the VE-side dma-buf attachment until Destroy.  Drop
-     * that owner before releasing the ION nodes themselves. */
+    hud_renderer_close(&hud_renderer);
+    if (ion_opened) {
+        pipeline_buffer_release(&ion, &final_argb, &monitor, stats.frames);
+        pipeline_buffer_release(&ion, &intermediate, &monitor, stats.frames);
+        pipeline_buffer_release(&ion, &hud, &monitor, stats.frames);
+        pipeline_buffer_release(&ion, &camera, &monitor, stats.frames);
+        ion.close();
+    }
     if (encoder != NULL) {
         pipeline_close_encoder(&encoder_api, encoder, input_allocated,
                                &cedar_input);
         encoder = NULL;
     }
     pipeline_unload_encoder_api(&encoder_api);
-    hud_renderer_close(&hud_renderer);
-    if (ion_opened) {
-        if (cedar_cleanup_fd >= 0 &&
-            ioctl(cedar_cleanup_fd, PIPELINE_CEDAR_ENGINE_REQ, 0) == 0) {
-            cedar_engine_acquired = true;
-            printf("Cedar cleanup owner=ENGINE_REQ\n");
-        } else if (cedar_cleanup_fd >= 0) {
-            fprintf(stderr, "Cedar cleanup ENGINE_REQ failed errno=%d (%s)\n",
-                    errno, strerror(errno));
-        }
-        pipeline_buffer_release(&ion, &final_argb, cedar_cleanup_fd,
-                                &monitor, stats.frames);
-        pipeline_buffer_release(&ion, &intermediate, cedar_cleanup_fd,
-                                &monitor, stats.frames);
-        pipeline_buffer_release(&ion, &hud, cedar_cleanup_fd, &monitor,
-                                stats.frames);
-        pipeline_buffer_release(&ion, &camera, cedar_cleanup_fd, &monitor,
-                                stats.frames);
-        if (cedar_engine_acquired) {
-            if (ioctl(cedar_cleanup_fd, PIPELINE_CEDAR_ENGINE_REL, 0) != 0) {
-                fprintf(stderr, "Cedar cleanup ENGINE_REL failed errno=%d "
-                        "(%s)\n", errno, strerror(errno));
-            } else {
-                printf("Cedar cleanup owner=ENGINE_REL\n");
-            }
-        }
-        ion.close();
-    }
-    if (cedar_cleanup_fd >= 0) {
-        close(cedar_cleanup_fd);
-        cedar_cleanup_fd = -1;
-    }
     ion_unload(&ion);
     if (baseline_valid && resource_monitor_collect(&shutdown, stats.frames)) {
         printf("resource round=%u shutdown\n", round + 1U);

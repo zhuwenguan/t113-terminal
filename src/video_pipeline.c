@@ -980,6 +980,7 @@ static void *video_pipeline_thread(void *context)
 int video_pipeline_init(VideoPipeline *pipeline,
                         const VideoPipelineConfig *config)
 {
+    VideoCompositorMode compositor_mode;
     int result;
 
     if (pipeline == NULL || config == NULL || config->width == 0U ||
@@ -991,7 +992,9 @@ int video_pipeline_init(VideoPipeline *pipeline,
     }
     memset(pipeline, 0, sizeof(*pipeline));
     pipeline->capture.fd = -1;
+    pipeline->compositor.g2d_fd = -1;
     pipeline->config = *config;
+    compositor_mode = config->compositor_mode;
     result = pthread_mutex_init(&pipeline->mutex, NULL);
     if (result != 0) {
         errno = result;
@@ -999,16 +1002,7 @@ int video_pipeline_init(VideoPipeline *pipeline,
     }
     pipeline->initialized = true;
     if (video_frame_init(&pipeline->camera_frame, config->width,
-                         config->height) < 0 ||
-        video_compositor_init_mode(&pipeline->compositor, config->width,
-                                   config->height,
-                                   config->compositor_mode) < 0 ||
-        (video_compositor_active_mode(&pipeline->compositor) ==
-             VIDEO_COMPOSITOR_MODE_G2D ?
-         hud_renderer_init_external(&pipeline->hud, config->width,
-                                    config->height) :
-         hud_renderer_init(&pipeline->hud, config->width,
-                           config->height)) < 0) {
+                         config->height) < 0) {
         video_pipeline_stop(pipeline);
         errno = ENOMEM;
         return -1;
@@ -1025,6 +1019,36 @@ int video_pipeline_init(VideoPipeline *pipeline,
         pipeline->stats.decoder_init_time_us +=
             video_pipeline_now_us() - decoder_init_start_us;
         pipeline->decoder_ready = true;
+        if (!jpeg_decoder_is_native(&pipeline->decoder) &&
+            compositor_mode != VIDEO_COMPOSITOR_MODE_CPU) {
+            if (compositor_mode == VIDEO_COMPOSITOR_MODE_G2D) {
+                video_pipeline_stop(pipeline);
+                errno = ENODEV;
+                return -1;
+            }
+            compositor_mode = VIDEO_COMPOSITOR_MODE_CPU;
+            LOG_WARN("Video compositor: native Cedar decoder unavailable; "
+                     "using CPU fallback");
+        }
+    } else if (compositor_mode != VIDEO_COMPOSITOR_MODE_CPU) {
+        video_pipeline_stop(pipeline);
+        errno = EINVAL;
+        return -1;
+    }
+    /* libawion maps every G2D allocation into the VE IOMMU at palloc time.
+     * Keep the native decoder's VE session alive across those allocations;
+     * a later first VeInitialize invalidates the allocator's attachments. */
+    if (video_compositor_init_mode(&pipeline->compositor, config->width,
+                                   config->height, compositor_mode) < 0 ||
+        (video_compositor_active_mode(&pipeline->compositor) ==
+             VIDEO_COMPOSITOR_MODE_G2D ?
+         hud_renderer_init_external(&pipeline->hud, config->width,
+                                    config->height) :
+         hud_renderer_init(&pipeline->hud, config->width,
+                           config->height)) < 0) {
+        video_pipeline_stop(pipeline);
+        errno = ENOMEM;
+        return -1;
     }
     if (config->record_path != NULL && config->record_path[0] != '\0') {
         bool argb_recording = video_compositor_active_mode(
@@ -1104,19 +1128,23 @@ void video_pipeline_stop(VideoPipeline *pipeline)
     if (pipeline->recorder_ready) {
         (void)video_recorder_finalize(&pipeline->recorder);
         video_pipeline_refresh_recorder_stats(pipeline);
-        video_recorder_close(&pipeline->recorder);
-        pipeline->recorder_ready = false;
     }
     video_capture_close(&pipeline->capture);
-    if (pipeline->decoder_ready) {
-        jpeg_decoder_close(&pipeline->decoder);
-        pipeline->decoder_ready = false;
-    }
     video_frame_close(&pipeline->camera_frame);
     hud_renderer_close(&pipeline->hud);
     pipeline->stats.g2d_healthy_at_end =
         video_compositor_is_g2d_healthy(&pipeline->compositor);
+    /* The allocator's 0x503 teardown must run before the last VE session is
+     * destroyed, otherwise the kernel retains the dma-buf attachments. */
     video_compositor_close(&pipeline->compositor);
+    if (pipeline->recorder_ready) {
+        video_recorder_close(&pipeline->recorder);
+        pipeline->recorder_ready = false;
+    }
+    if (pipeline->decoder_ready) {
+        jpeg_decoder_close(&pipeline->decoder);
+        pipeline->decoder_ready = false;
+    }
     if (pipeline->initialized) {
         pthread_mutex_destroy(&pipeline->mutex);
     }
