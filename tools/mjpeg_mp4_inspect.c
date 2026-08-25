@@ -27,6 +27,28 @@ static uint64_t read_be64(const uint8_t *value)
     return ((uint64_t)read_be32(value) << 32U) | read_be32(value + 4U);
 }
 
+static int compare_u32(const void *left, const void *right)
+{
+    uint32_t a = *(const uint32_t *)left;
+    uint32_t b = *(const uint32_t *)right;
+
+    return a < b ? -1 : a > b ? 1 : 0;
+}
+
+static uint32_t percentile_u32(const uint32_t *values, uint32_t count,
+                               uint32_t percentile)
+{
+    uint64_t rank = ((uint64_t)percentile * count + 99U) / 100U;
+
+    if (values == NULL || count == 0U || percentile == 0U) {
+        return 0U;
+    }
+    if (rank > count) {
+        rank = count;
+    }
+    return values[rank - 1U];
+}
+
 static bool read_at(FILE *file, uint64_t offset, void *data, size_t size)
 {
     return offset <= (uint64_t)INT64_MAX &&
@@ -143,6 +165,8 @@ int main(int argc, char *argv[])
     uint64_t offset = 0U;
     uint64_t duration_sum = 0U;
     uint64_t timing_sample_count = 0U;
+    uint32_t *sample_durations = NULL;
+    uint32_t duration_index = 0U;
     uint32_t timescale;
     uint32_t movie_duration;
     uint32_t timing_entries;
@@ -220,9 +244,19 @@ int main(int argc, char *argv[])
         fprintf(stderr, "inconsistent table sizes/counts\n");
         goto done;
     }
+    if ((uint64_t)sample_count * sizeof(*sample_durations) > SIZE_MAX) {
+        fprintf(stderr, "too many timing samples\n");
+        goto done;
+    }
+    sample_durations = malloc((size_t)sample_count * sizeof(*sample_durations));
+    if (sample_durations == NULL) {
+        fprintf(stderr, "cannot allocate timing samples\n");
+        goto done;
+    }
     for (index = 0U; index < timing_entries; ++index) {
         uint32_t count = read_be32(stts + 16U + (size_t)index * 8U);
         uint32_t duration = read_be32(stts + 20U + (size_t)index * 8U);
+        uint32_t repeat;
 
         if (count == 0U || duration == 0U) {
             fprintf(stderr, "non-monotonic PTS entry=%u\n", index);
@@ -230,8 +264,13 @@ int main(int argc, char *argv[])
         }
         timing_sample_count += count;
         duration_sum += (uint64_t)count * duration;
+        for (repeat = 0U; repeat < count && duration_index < sample_count;
+             ++repeat) {
+            sample_durations[duration_index++] = duration;
+        }
     }
-    if (timing_sample_count != sample_count || duration_sum != movie_duration) {
+    if (timing_sample_count != sample_count || duration_index != sample_count ||
+        duration_sum != movie_duration) {
         fprintf(stderr, "duration/sample count mismatch\n");
         goto done;
     }
@@ -273,8 +312,23 @@ int main(int argc, char *argv[])
            read_be32(stsz + 20U + (size_t)(sample_count / 2U) * 4U),
            read_be64(co64 + 16U + (size_t)(sample_count - 1U) * 8U),
            read_be32(stsz + 20U + (size_t)(sample_count - 1U) * 4U));
+    qsort(sample_durations, sample_count, sizeof(*sample_durations),
+          compare_u32);
+    printf("frame_interval avg=%.3fms p50=%.3fms p95=%.3fms p99=%.3fms "
+           "max=%.3fms\n",
+           (double)duration_sum / (double)sample_count /
+               (double)timescale * 1000.0,
+           (double)percentile_u32(sample_durations, sample_count, 50U) /
+               (double)timescale * 1000.0,
+           (double)percentile_u32(sample_durations, sample_count, 95U) /
+               (double)timescale * 1000.0,
+           (double)percentile_u32(sample_durations, sample_count, 99U) /
+               (double)timescale * 1000.0,
+           (double)sample_durations[sample_count - 1U] /
+               (double)timescale * 1000.0);
     result = EXIT_SUCCESS;
 done:
+    free(sample_durations);
     free(movie);
     fclose(file);
     return result;
