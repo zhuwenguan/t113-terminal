@@ -1,0 +1,35 @@
+From: t113-terminal maintainers
+Subject: [PATCH] sunxi: g2d: balance clock prepare references
+
+g2d_clock_enable() uses clk_prepare_enable() for all three G2D clocks,
+but g2d_clock_disable() only calls clk_disable().  Every open/last-release
+cycle therefore leaves one prepare reference on each clock.
+
+Use the paired clk_disable_unprepare() helper.  The same disable function
+is shared by last release and system suspend, so both paths are balanced
+with open and resume respectively.
+
+---
+ drivers/char/sunxi_g2d/g2d_rcq/g2d.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/char/sunxi_g2d/g2d_rcq/g2d.c b/drivers/char/sunxi_g2d/g2d_rcq/g2d.c
+--- a/drivers/char/sunxi_g2d/g2d_rcq/g2d.c
++++ b/drivers/char/sunxi_g2d/g2d_rcq/g2d.c
+@@ -444,11 +444,11 @@ static int g2d_clock_enable(__g2d_info_t *info)
+ static int g2d_clock_disable(const __g2d_info_t *info)
+ {
+ 	if (info->clk)
+-		clk_disable(info->clk);
++		clk_disable_unprepare(info->clk);
+ 	if (info->bus_clk)
+-		clk_disable(info->bus_clk);
++		clk_disable_unprepare(info->bus_clk);
+ 	if (info->mbus_clk)
+-		clk_disable(info->mbus_clk);
++		clk_disable_unprepare(info->mbus_clk);
+ 	if (info->reset)
+ 		reset_control_assert(info->reset);
+ 	return 0;
+-- 
+2.43.0
