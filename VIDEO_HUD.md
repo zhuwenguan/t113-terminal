@@ -47,9 +47,11 @@ HUD mock：
 - `jpeg_codec`：T113 板端通过 `libjpegdecode.so` 注册 JPEG 插件后，使用
   `libvdecoder.so` 的常驻解码器；开发机使用 libjpeg；帧缓冲预分配，摄像头
   输入失败可重连。旧 `libjpegdecode.so` GetFrame 路径保留为兼容回退。
-- `hud_renderer`：保留 1280x720 设计基准坐标，按短边统一缩放并居中到
-  800x600，避免 16:9 到 4:3 的非等比拉伸；静态层启动时生成，动态层每帧
-  使用一次 VehicleState snapshot。
+- `hud_renderer`：以 800x600 作为原生 4:3 HUD 设计画布。生产录像为
+  800x600 时使用 `scale=1`、`offset=(0,0)`，顶部状态条和底部三组面板均贴合
+  画布边界，不使用 1280x720 letterbox。其他分辨率才按该 800x600 画布统一
+  等比缩放并居中；静态层启动时生成，动态层每帧使用一次 VehicleState
+  snapshot。
 - `video_compositor`：RGBA mock/兼容路径原地 alpha blending；T113 原生路径
   直接在 Cedar YUV picture 上叠加 HUD，避免解码后全帧 YUV→RGBA。
 - `video_encoder`：通过板端 `libvencoder.so` 的 Cedar API 创建一个常驻

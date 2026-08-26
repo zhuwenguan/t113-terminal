@@ -7,8 +7,11 @@
 #include "vehicle_state.h"
 #include "video_frame.h"
 
-#define HUD_BASE_WIDTH 1280U
-#define HUD_BASE_HEIGHT 720U
+/* The production camera and recorder are native 800x600.  Keep the HUD
+ * design in that same 4:3 coordinate space so the production surface has no
+ * letterbox band or runtime layout translation. */
+#define HUD_BASE_WIDTH 800U
+#define HUD_BASE_HEIGHT 600U
 #define HUD_MAX_REGIONS 12U
 
 typedef enum {

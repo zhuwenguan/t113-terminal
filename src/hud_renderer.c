@@ -136,13 +136,15 @@ static void hud_layer_set_static_regions(const HudRenderer *renderer,
                                          HudLayer *layer)
 {
     static const HudRegion regions[] = {
-        { 20U, 10U, 240U, 40U },
-        { 24U, 64U, 252U, 354U },
-        { 988U, 30U, 268U, 180U },
-        { 988U, 237U, 268U, 269U },
-        { 24U, 535U, 350U, 157U },
-        { 460U, 535U, 360U, 157U },
-        { 850U, 535U, 406U, 157U }
+        { 15U, 0U, 145U, 25U },
+        { 15U, 40U, 158U, 221U },
+        /* Include the right ornament above the timing panel without
+         * overlapping the left status region in the CPU compositor. */
+        { 618U, 14U, 168U, 118U },
+        { 618U, 148U, 168U, 168U },
+        { 15U, 484U, 219U, 98U },
+        { 288U, 484U, 225U, 98U },
+        { 531U, 484U, 254U, 98U }
     };
 
     hud_layer_set_regions_from_base(renderer, layer, regions,
@@ -152,19 +154,40 @@ static void hud_layer_set_static_regions(const HudRenderer *renderer,
 static void hud_layer_set_dynamic_regions(const HudRenderer *renderer,
                                           HudLayer *layer)
 {
-    static const HudRegion regions[] = {
-        { 20U, 10U, 240U, 40U },
-        { 35U, 95U, 265U, 275U },
-        { 1105U, 55U, 140U, 100U },
-        { 1035U, 250U, 190U, 210U },
-        { 1100U, 465U, 110U, 30U },
-        { 120U, 548U, 255U, 95U },
-        { 520U, 550U, 290U, 90U },
-        { 860U, 550U, 370U, 70U }
+    static const HudRegion native_regions[] = {
+        /* Restore only pixels that can change between snapshots.  Keeping
+         * these regions tight avoids copying every complete panel each frame. */
+        { 15U, 0U, 140U, 25U },
+        { 27U, 68U, 137U, 180U },
+        { 690U, 32U, 90U, 60U },
+        { 640U, 168U, 125U, 136U },
+        { 27U, 492U, 193U, 83U },
+        { 305U, 493U, 180U, 45U },
+        { 542U, 498U, 242U, 45U }
     };
+    static const HudRegion compatibility_regions[] = {
+        /* At scaled-down compatibility sizes the fixed one-pixel font can be
+         * wider than its transformed design bounds.  Restore whole groups so
+         * stale glyphs cannot survive between snapshots. */
+        { 15U, 0U, 770U, 25U },
+        { 15U, 40U, 158U, 221U },
+        { 618U, 19U, 168U, 113U },
+        { 618U, 148U, 168U, 168U },
+        { 15U, 484U, 219U, 98U },
+        { 288U, 484U, 225U, 98U },
+        { 531U, 484U, 254U, 98U }
+    };
+    const HudRegion *regions = native_regions;
+    size_t region_count = sizeof(native_regions) / sizeof(native_regions[0]);
 
-    hud_layer_set_regions_from_base(renderer, layer, regions,
-                                     sizeof(regions) / sizeof(regions[0]));
+    if (renderer->width != HUD_BASE_WIDTH ||
+        renderer->height != HUD_BASE_HEIGHT) {
+        regions = compatibility_regions;
+        region_count = sizeof(compatibility_regions) /
+                       sizeof(compatibility_regions[0]);
+    }
+
+    hud_layer_set_regions_from_base(renderer, layer, regions, region_count);
 }
 
 static void hud_pixel(HudLayer *layer, int x, int y, HudColor color)
@@ -451,53 +474,56 @@ static void hud_render_static_layer(HudRenderer *renderer, HudLayer *layer,
         hud_layer_clear(layer);
     }
     /* Top status line intentionally has no panel to keep the road visible. */
-    hud_panel(renderer, layer, 24, 64, 252, 354);
-    hud_static_text(renderer, layer, 40, 76, "ELECTRIC SYSTEM");
-    hud_static_text(renderer, layer, 40, 100, "MOTOR RPM");
-    hud_static_text(renderer, layer, 40, 127, "TORQUE");
-    hud_fill_rect(renderer, layer, 40, 150, 220, 1, hud_cyan);
-    hud_static_text(renderer, layer, 40, 164, "HV VOLT");
-    hud_static_text(renderer, layer, 40, 191, "HV CURR");
-    hud_static_text(renderer, layer, 40, 218, "HV POWER");
-    hud_fill_rect(renderer, layer, 40, 245, 220, 1, hud_cyan);
-    hud_static_text(renderer, layer, 40, 258, "SOC");
-    hud_draw_segment_outline(renderer, layer, 40, 310, 16, 12, 12);
-    hud_static_text(renderer, layer, 40, 340, "LV VOLT");
+    hud_panel(renderer, layer, 15, 40, 158, 221);
+    hud_static_text(renderer, layer, 25, 50, "ELECTRIC SYSTEM");
+    hud_static_text(renderer, layer, 27, 72, "MOTOR RPM");
+    hud_static_text(renderer, layer, 27, 94, "TORQUE");
+    hud_fill_rect(renderer, layer, 27, 114, 134, 1, hud_cyan);
+    hud_static_text(renderer, layer, 27, 124, "HV VOLT");
+    hud_static_text(renderer, layer, 27, 146, "HV CURR");
+    hud_static_text(renderer, layer, 27, 168, "HV POWER");
+    hud_fill_rect(renderer, layer, 27, 188, 134, 1, hud_cyan);
+    hud_static_text(renderer, layer, 27, 198, "SOC");
+    hud_draw_segment_outline(renderer, layer, 27, 215, 16, 5, 8);
+    hud_static_text(renderer, layer, 27, 237, "LV VOLT");
 
-    hud_panel(renderer, layer, 988, 30, 268, 180);
-    hud_static_text(renderer, layer, 1004, 45, "LAP TIME");
-    hud_static_text(renderer, layer, 1004, 82, "BEST");
-    hud_static_text(renderer, layer, 1004, 119, "DELTA");
+    hud_panel(renderer, layer, 618, 19, 168, 113);
+    hud_static_text(renderer, layer, 630, 28, "LAP TIME");
+    hud_static_text(renderer, layer, 630, 51, "BEST");
+    hud_static_text(renderer, layer, 630, 74, "DELTA");
 
-    hud_panel(renderer, layer, 988, 237, 268, 269);
-    hud_static_text(renderer, layer, 1004, 252, "LATERAL G");
-    hud_static_text(renderer, layer, 1004, 468, "LONG G");
-    hud_draw_circle(renderer, layer, 1122, 365, 92, hud_cyan);
-    hud_draw_circle(renderer, layer, 1122, 365, 46, hud_muted);
-    hud_draw_line(renderer, layer, 1028, 365, 1216, 365, hud_muted);
-    hud_draw_line(renderer, layer, 1122, 271, 1122, 459, hud_muted);
+    hud_panel(renderer, layer, 618, 148, 168, 168);
+    hud_static_text(renderer, layer, 630, 158, "LATERAL G");
+    hud_static_text(renderer, layer, 630, 293, "LONG G");
+    hud_draw_circle(renderer, layer, 702, 228, 58, hud_cyan);
+    hud_draw_circle(renderer, layer, 702, 228, 29, hud_muted);
+    hud_draw_line(renderer, layer, 644, 228, 760, 228, hud_muted);
+    hud_draw_line(renderer, layer, 702, 170, 702, 286, hud_muted);
 
-    hud_panel(renderer, layer, 24, 535, 350, 157);
-    hud_static_text(renderer, layer, 40, 550, "THROTTLE");
-    hud_static_text(renderer, layer, 40, 615, "BRAKE");
-    hud_draw_segment_outline(renderer, layer, 126, 553, 12, 13, 16);
-    hud_draw_segment_outline(renderer, layer, 126, 618, 12, 13, 16);
+    hud_panel(renderer, layer, 15, 484, 219, 98);
+    hud_static_text(renderer, layer, 27, 496, "THROTTLE");
+    hud_static_text(renderer, layer, 27, 544, "BRAKE");
+    hud_draw_segment_outline(renderer, layer, 27, 512, 12, 7, 8);
+    hud_draw_segment_outline(renderer, layer, 27, 560, 12, 7, 8);
 
-    hud_panel(renderer, layer, 460, 535, 360, 157);
-    hud_static_text(renderer, layer, 525, 650, "KM/H");
-    hud_static_text(renderer, layer, 720, 575, "STATE");
+    hud_panel(renderer, layer, 288, 484, 225, 98);
+    hud_static_text(renderer, layer, 328, 556, "KM/H");
+    hud_static_text(renderer, layer, 450, 509, "STATE");
 
-    hud_panel(renderer, layer, 850, 535, 406, 157);
-    hud_static_text(renderer, layer, 866, 550, "MOTOR RPM");
-    hud_draw_segment_outline(renderer, layer, 866, 598, 20, 14, 18);
+    hud_panel(renderer, layer, 531, 484, 254, 98);
+    hud_static_text(renderer, layer, 546, 496, "MOTOR RPM");
+    hud_draw_segment_outline(renderer, layer, 546, 524, 20, 9, 11);
     for (index = 0; index <= 5; ++index) {
         char tick[8];
         (void)snprintf(tick, sizeof(tick), "%uK", index * 2U);
-        (void)hud_draw_text(renderer, layer, 866 + index * 72, 654, tick, 1,
+        (void)hud_draw_text(renderer, layer, 546 + index * 40, 559, tick, 1,
                             hud_muted);
     }
-    hud_fill_rect(renderer, layer, 32, 30, 130, 2, hud_cyan);
-    hud_fill_rect(renderer, layer, 1115, 22, 125, 2, hud_cyan);
+    /* Keep both ornaments inside the top status region so CPU and G2D paths
+     * blend the same pixels.  Their y positions leave the status glyphs
+     * aligned around y=13 without creating a transparent top band. */
+    hud_fill_rect(renderer, layer, 20, 18, 81, 2, hud_cyan);
+    hud_fill_rect(renderer, layer, 697, 14, 78, 2, hud_cyan);
     hud_layer_set_static_regions(renderer, layer);
 }
 
@@ -526,43 +552,43 @@ static void hud_render_dynamic_values(HudRenderer *renderer, HudLayer *layer,
         state = &empty_state;
     }
 
-    hud_value(renderer, layer, 40, 21, "LAP", hud_white);
+    hud_value(renderer, layer, 25, 13, "LAP", hud_white);
     if (state != NULL && state->lap_valid) {
         (void)snprintf(value, sizeof(value), "%u", state->lap_number);
     } else {
         (void)snprintf(value, sizeof(value), "--");
     }
-    hud_value(renderer, layer, 76, 21, value, hud_white);
+    hud_value(renderer, layer, 48, 13, value, hud_white);
 
     valid = hud_finite(state, VEHICLE_STATE_VALID_MOTOR_RPM, state->motor_rpm);
     hud_format_number(value, sizeof(value), valid, state->motor_rpm, "%.0f",
                       "RPM");
-    hud_value(renderer, layer, 170, 99, value, hud_white);
+    hud_value(renderer, layer, 85, 72, value, hud_white);
     valid = hud_finite(state, VEHICLE_STATE_VALID_TORQUE_NM, state->torque_nm);
     hud_format_number(value, sizeof(value), valid, state->torque_nm, "%.0f",
                       "NM");
-    hud_value(renderer, layer, 170, 126, value, hud_white);
+    hud_value(renderer, layer, 85, 94, value, hud_white);
     valid = hud_finite(state, VEHICLE_STATE_VALID_HV_VOLTAGE_V,
                        state->hv_voltage_v);
     hud_format_number(value, sizeof(value), valid, state->hv_voltage_v, "%.0f",
                       "V");
-    hud_value(renderer, layer, 170, 163, value, hud_white);
+    hud_value(renderer, layer, 85, 124, value, hud_white);
     valid = hud_finite(state, VEHICLE_STATE_VALID_HV_CURRENT_A,
                        state->hv_current_a);
     hud_format_number(value, sizeof(value), valid, state->hv_current_a, "%.0f",
                       "A");
-    hud_value(renderer, layer, 170, 190, value, hud_white);
+    hud_value(renderer, layer, 85, 146, value, hud_white);
     valid = hud_finite(state, VEHICLE_STATE_VALID_HV_POWER_W,
                        state->hv_power_w);
     hud_format_number(value, sizeof(value), valid, state->hv_power_w / 1000.0,
                       "%.1f", "KW");
-    hud_value(renderer, layer, 170, 217, value, hud_white);
+    hud_value(renderer, layer, 85, 168, value, hud_white);
     valid = hud_finite(state, VEHICLE_STATE_VALID_HV_SOC_PERCENT,
                        state->hv_soc_percent);
     hud_format_number(value, sizeof(value), valid, state->hv_soc_percent,
                       "%.0f", "%");
-    hud_value(renderer, layer, 170, 257, value, hud_green);
-    hud_draw_progress(renderer, layer, 40, 310, 16, 12, 12,
+    hud_value(renderer, layer, 85, 198, value, hud_green);
+    hud_draw_progress(renderer, layer, 27, 215, 16, 5, 8,
                       state != NULL ? state->hv_soc_percent : 0.0,
                       valid && state->hv_soc_percent < 20.0 ? hud_red :
                       (valid && state->hv_soc_percent < 40.0 ? hud_yellow :
@@ -571,35 +597,35 @@ static void hud_render_dynamic_values(HudRenderer *renderer, HudLayer *layer,
                        state->lv_voltage_v);
     hud_format_number(value, sizeof(value), valid, state->lv_voltage_v, "%.1f",
                       "V");
-    hud_value(renderer, layer, 170, 339, value, hud_white);
+    hud_value(renderer, layer, 85, 237, value, hud_white);
 
     hud_format_time(value, sizeof(value), state != NULL && state->lap_valid,
                     state != NULL ? state->lap_time_s : 0.0);
-    hud_value(renderer, layer, 1112, 59, value, hud_white);
+    hud_value(renderer, layer, 695, 37, value, hud_white);
     hud_format_time(value, sizeof(value), state != NULL && state->lap_valid &&
                     state->best_lap_time_s > 0.0,
                     state != NULL ? state->best_lap_time_s : 0.0);
-    hud_value(renderer, layer, 1112, 96, value, hud_white);
+    hud_value(renderer, layer, 695, 60, value, hud_white);
     valid = state != NULL && state->lap_valid && isfinite(state->delta_time_s);
     hud_format_number(value, sizeof(value), valid, state->delta_time_s, "%+.2f",
                       "");
-    hud_value(renderer, layer, 1112, 133, value, !valid ? hud_white :
+    hud_value(renderer, layer, 695, 83, value, !valid ? hud_white :
               (state->delta_time_s < -0.02 ? hud_green :
                (state->delta_time_s > 0.02 ? hud_red : hud_white)));
 
     valid = hud_finite(state, VEHICLE_STATE_VALID_ACC_Y_MPS2, state->acc_y);
     lateral_g = valid ? state->acc_y / 9.80665 : 0.0;
     hud_format_number(value, sizeof(value), valid, lateral_g, "%.2f", "");
-    hud_value(renderer, layer, 1150, 252, value, hud_white);
+    hud_value(renderer, layer, 695, 174, value, hud_white);
     valid = hud_finite(state, VEHICLE_STATE_VALID_ACC_X_MPS2, state->acc_x);
     longitudinal_g = valid ? state->acc_x / 9.80665 : 0.0;
     hud_format_number(value, sizeof(value), valid, longitudinal_g, "%+.2f", "");
-    hud_value(renderer, layer, 1114, 469, value, hud_white);
+    hud_value(renderer, layer, 695, 293, value, hud_white);
     if (valid || hud_finite(state, VEHICLE_STATE_VALID_ACC_Y_MPS2, state->acc_y)) {
-        int dot_x = 1122 + (int)lround(hud_clamp_percent((lateral_g + 1.0) * 50.0) /
-                                      100.0 * 82.0);
-        int dot_y = 365 - (int)lround(hud_clamp_percent((longitudinal_g + 1.0) *
-                                      50.0) / 100.0 * 82.0);
+        int dot_x = 702 + (int)lround(hud_clamp_percent((lateral_g + 1.0) * 50.0) /
+                                      100.0 * 51.0);
+        int dot_y = 228 - (int)lround(hud_clamp_percent((longitudinal_g + 1.0) *
+                                      50.0) / 100.0 * 51.0);
         hud_fill_rect(renderer, layer, dot_x - 5, dot_y - 5, 10, 10, hud_cyan);
     }
 
@@ -607,33 +633,33 @@ static void hud_render_dynamic_values(HudRenderer *renderer, HudLayer *layer,
                        state->throttle_percent);
     hud_format_number(value, sizeof(value), valid, state->throttle_percent,
                       "%.0f", "%");
-    hud_value(renderer, layer, 300, 554, value, hud_green);
-    hud_draw_progress(renderer, layer, 126, 553, 12, 13, 16,
+    hud_value(renderer, layer, 180, 496, value, hud_green);
+    hud_draw_progress(renderer, layer, 27, 512, 12, 7, 8,
                       state != NULL ? state->throttle_percent : 0.0,
                       hud_green, valid);
     valid = hud_finite(state, VEHICLE_STATE_VALID_BRAKE_PERCENT,
                        state->brake_percent);
     hud_format_number(value, sizeof(value), valid, state->brake_percent,
                       "%.0f", "%");
-    hud_value(renderer, layer, 300, 619, value, hud_red);
-    hud_draw_progress(renderer, layer, 126, 618, 12, 13, 16,
+    hud_value(renderer, layer, 180, 544, value, hud_red);
+    hud_draw_progress(renderer, layer, 27, 560, 12, 7, 8,
                       state != NULL ? state->brake_percent : 0.0,
                       hud_red, valid);
 
     valid = hud_finite(state, VEHICLE_STATE_VALID_SPEED_KMH, state->speed_kmh);
     hud_format_number(value, sizeof(value), valid, state->speed_kmh, "%.0f", "");
-    hud_value(renderer, layer, 535, 563, value, hud_white);
+    hud_value(renderer, layer, 310, 497, value, hud_white);
     if (state != NULL && hud_has(state, VEHICLE_STATE_VALID_DRIVE_STATE)) {
-        hud_value(renderer, layer, 720, 599,
+        hud_value(renderer, layer, 450, 524,
                   hud_drive_state_name(state->drive_state), hud_cyan);
     } else {
-        hud_value(renderer, layer, 720, 599, "--", hud_cyan);
+        hud_value(renderer, layer, 450, 524, "--", hud_cyan);
     }
 
     valid = hud_finite(state, VEHICLE_STATE_VALID_MOTOR_RPM, state->motor_rpm);
     hud_format_number(value, sizeof(value), valid, state->motor_rpm, "%.0f", "");
-    hud_value(renderer, layer, 866, 563, value, hud_white);
-    hud_draw_progress(renderer, layer, 866, 598, 20, 14, 18,
+    hud_value(renderer, layer, 546, 502, value, hud_white);
+    hud_draw_progress(renderer, layer, 546, 524, 20, 9, 11,
                       state != NULL ? state->motor_rpm / 100.0 : 0.0,
                       valid && state->motor_rpm >= 8000.0 ? hud_red :
                       (valid && state->motor_rpm >= 5000.0 ? hud_yellow : hud_cyan),
@@ -680,8 +706,8 @@ static const HudLayer *hud_renderer_render_dynamic_layer(
     stage_start = hud_renderer_now_us();
     hud_render_dynamic_values(renderer, layer, state);
     if (recording) {
-        hud_draw_circle(renderer, layer, 182, 28, 6, hud_red);
-        hud_value(renderer, layer, 194, 21, "REC", hud_red);
+        hud_draw_circle(renderer, layer, 114, 18, 4, hud_red);
+        hud_value(renderer, layer, 121, 13, "REC", hud_red);
     }
     hud_layer_set_dynamic_regions(renderer, layer);
     if (timing != NULL) {
@@ -866,8 +892,8 @@ const HudLayer *hud_renderer_render_frame_to_surface(
     stage_start = hud_renderer_now_us();
     hud_render_dynamic_values(renderer, layer, state);
     if (recording) {
-        hud_draw_circle(renderer, layer, 182, 28, 6, hud_red);
-        hud_value(renderer, layer, 194, 21, "REC", hud_red);
+        hud_draw_circle(renderer, layer, 114, 18, 4, hud_red);
+        hud_value(renderer, layer, 121, 13, "REC", hud_red);
     }
     /* G2D blends the complete surface, not the CPU compositor region list. */
     layer->region_count = 1U;
