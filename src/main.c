@@ -393,6 +393,12 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
                 LOG_ERROR("Invalid --video-seconds value");
                 return -1;
             }
+            if (options->video_seconds >
+                VIDEO_RECORDER_MAX_DURATION_SECONDS) {
+                LOG_ERROR("Invalid --video-seconds value; maximum is %u",
+                          VIDEO_RECORDER_MAX_DURATION_SECONDS);
+                return -1;
+            }
             options->video = true;
             continue;
         }

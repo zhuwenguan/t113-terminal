@@ -443,6 +443,11 @@ if (BUILD_TESTING)
     add_test(NAME video_recorder_variable_timestamps
              COMMAND test_video_recorder_timestamps)
 
+    add_test(NAME video_seconds_above_recorder_limit_rejected
+             COMMAND t113_terminal --video-seconds 3601)
+    set_tests_properties(video_seconds_above_recorder_limit_rejected
+                         PROPERTIES WILL_FAIL TRUE)
+
     add_executable(test_jpeg_codec
         tests/test_jpeg_codec.c
         src/jpeg_codec.c
