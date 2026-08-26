@@ -1,6 +1,25 @@
 # 800×600@30 T113 overnight validation — 2026-08-26/27
 
-## Final verdict
+## 2026-08-27 product-requirement clarification
+
+The product owner confirmed that one hour is the required maximum duration.
+For the supported `--video-seconds <= 3600` scope, the product verdict is:
+
+- **800×600@30:** `PASS WITH CONDITIONS`
+- **Suitable as the formal default recording format:** `YES`
+- **Video performance work:** `FREEZE VIDEO PERFORMANCE WORK`
+
+The condition is now enforced by commit `c5e18b4`: the CLI rejects values
+above 3,600 before video or hardware initialization.  Host tests (13/13), an
+ARM build, board-side rejection of 3,601, and a normal five-second board
+recording all passed.  The normal smoke produced 99 application/MP4 frames,
+monotonic PTS, no residual `.idx`, and exact clock/DMA/ION baseline recovery.
+
+The original two-hour stress verdict below remains part of the audit record.
+It proves that the old build silently truncated unsupported requests; it is no
+longer a supported product scenario after the explicit CLI rejection.
+
+## Original two-hour stress verdict
 
 - **G2D clock P0:** `G2D CLOCK P0 VERIFIED`
 - **DMA/ION teardown:** `VERIFIED`
