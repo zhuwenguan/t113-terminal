@@ -19,6 +19,7 @@ static pthread_once_t fault_symbols_once = PTHREAD_ONCE_INIT;
 static FaultRealFwrite fault_real_fwrite;
 static FaultRealFflush fault_real_fflush;
 static atomic_ulong fault_target_write_calls;
+static atomic_ulong fault_injection_count;
 
 static void fault_load_symbols(void)
 {
@@ -82,6 +83,8 @@ size_t fwrite(const void *data, size_t size, size_t count, FILE *stream)
     const char *mode;
     unsigned long call;
     unsigned long after;
+    unsigned long every;
+    unsigned long maximum;
 
     (void)pthread_once(&fault_symbols_once, fault_load_symbols);
     if (fault_real_fwrite == NULL) {
@@ -95,6 +98,16 @@ size_t fwrite(const void *data, size_t size, size_t count, FILE *stream)
                                      memory_order_relaxed) + 1UL;
     after = fault_environment_ulong("T113_FAULT_AFTER_CALLS");
     if (call <= after) {
+        return fault_real_fwrite(data, size, count, stream);
+    }
+    every = fault_environment_ulong("T113_FAULT_EVERY_CALLS");
+    if (every > 0UL && (call - after - 1UL) % every != 0UL) {
+        return fault_real_fwrite(data, size, count, stream);
+    }
+    maximum = fault_environment_ulong("T113_FAULT_MAX_INJECTIONS");
+    if (maximum > 0UL &&
+        atomic_fetch_add_explicit(&fault_injection_count, 1UL,
+                                  memory_order_relaxed) >= maximum) {
         return fault_real_fwrite(data, size, count, stream);
     }
 
