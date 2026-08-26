@@ -55,6 +55,8 @@ typedef struct {
     uint32_t height;
     double scale_x;
     double scale_y;
+    int offset_x;
+    int offset_y;
     HudLayer static_layer;
     HudLayer dynamic_layer;
     HudLayer external_dynamic_layer;

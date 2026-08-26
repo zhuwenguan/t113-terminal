@@ -8,7 +8,7 @@ cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-t113.cmake \
 cmake --build build -j2
 ```
 
-主程序固定使用 `/dev/video0`、V4L2 MJPEG、1280x720、30 FPS 请求值。
+主程序固定使用 `/dev/video0`、原生 V4L2 MJPEG、800x600、30 FPS 请求值。
 
 ## 运行
 
@@ -47,7 +47,9 @@ HUD mock：
 - `jpeg_codec`：T113 板端通过 `libjpegdecode.so` 注册 JPEG 插件后，使用
   `libvdecoder.so` 的常驻解码器；开发机使用 libjpeg；帧缓冲预分配，摄像头
   输入失败可重连。旧 `libjpegdecode.so` GetFrame 路径保留为兼容回退。
-- `hud_renderer`：1280x720 基准坐标，静态层启动时生成，动态层每帧使用一次 VehicleState snapshot。
+- `hud_renderer`：保留 1280x720 设计基准坐标，按短边统一缩放并居中到
+  800x600，避免 16:9 到 4:3 的非等比拉伸；静态层启动时生成，动态层每帧
+  使用一次 VehicleState snapshot。
 - `video_compositor`：RGBA mock/兼容路径原地 alpha blending；T113 原生路径
   直接在 Cedar YUV picture 上叠加 HUD，避免解码后全帧 YUV→RGBA。
 - `video_encoder`：通过板端 `libvencoder.so` 的 Cedar API 创建一个常驻

@@ -74,12 +74,14 @@ static const uint8_t hud_slash[7] = {0x01,0x02,0x04,0x08,0x10,0x00,0x00};
 
 static int hud_scaled_x(const HudRenderer *renderer, int value)
 {
-    return (int)lround((double)value * renderer->scale_x);
+    return renderer->offset_x +
+           (int)lround((double)value * renderer->scale_x);
 }
 
 static int hud_scaled_y(const HudRenderer *renderer, int value)
 {
-    return (int)lround((double)value * renderer->scale_y);
+    return renderer->offset_y +
+           (int)lround((double)value * renderer->scale_y);
 }
 
 static int hud_font_scale(const HudRenderer *renderer, int scale)
@@ -692,6 +694,9 @@ static const HudLayer *hud_renderer_render_dynamic_layer(
 static int hud_renderer_init_common(HudRenderer *renderer, uint32_t width,
                                     uint32_t height, bool allocate_layers)
 {
+    double scale;
+    int scaled_width;
+    int scaled_height;
     size_t bytes;
 
     if (renderer == NULL || width == 0U || height == 0U) {
@@ -707,8 +712,16 @@ static int hud_renderer_init_common(HudRenderer *renderer, uint32_t width,
     bytes = (size_t)width * height * VIDEO_FRAME_CHANNELS;
     renderer->width = width;
     renderer->height = height;
-    renderer->scale_x = (double)width / HUD_BASE_WIDTH;
-    renderer->scale_y = (double)height / HUD_BASE_HEIGHT;
+    scale = (double)width / HUD_BASE_WIDTH;
+    if ((double)height / HUD_BASE_HEIGHT < scale) {
+        scale = (double)height / HUD_BASE_HEIGHT;
+    }
+    scaled_width = (int)lround(HUD_BASE_WIDTH * scale);
+    scaled_height = (int)lround(HUD_BASE_HEIGHT * scale);
+    renderer->scale_x = scale;
+    renderer->scale_y = scale;
+    renderer->offset_x = ((int)width - scaled_width) / 2;
+    renderer->offset_y = ((int)height - scaled_height) / 2;
     renderer->static_layer.width = width;
     renderer->static_layer.height = height;
     renderer->static_layer.stride = width * VIDEO_FRAME_CHANNELS;

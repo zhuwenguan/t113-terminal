@@ -3,6 +3,7 @@
 #include "video_frame.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -111,6 +112,30 @@ static void test_render_at_size(uint32_t width, uint32_t height)
     assert(count_opaque_pixels(dynamic) > 0U);
     video_frame_close(&output);
     video_frame_close(&camera);
+    hud_renderer_close(&renderer);
+}
+
+static void test_800x600_preserves_hud_aspect_ratio(void)
+{
+    HudRenderer renderer;
+    const HudLayer *static_layer;
+    const HudRegion *left_panel;
+
+    memset(&renderer, 0, sizeof(renderer));
+    assert(hud_renderer_init(&renderer, 800U, 600U) == 0);
+    assert(fabs(renderer.scale_x - 0.625) < 0.000001);
+    assert(fabs(renderer.scale_y - renderer.scale_x) < 0.000001);
+    assert(renderer.offset_x == 0);
+    assert(renderer.offset_y == 75);
+
+    static_layer = hud_renderer_static_layer(&renderer);
+    assert(static_layer != NULL);
+    assert_regions_in_bounds(static_layer);
+    left_panel = &static_layer->regions[1];
+    assert(left_panel->x == 15U);
+    assert(left_panel->y == 115U);
+    assert(left_panel->width == 158U);
+    assert(left_panel->height == 221U);
     hud_renderer_close(&renderer);
 }
 
@@ -260,12 +285,61 @@ static void test_render_to_external_argb_surface(void)
     free(pixels);
 }
 
+static void test_render_to_external_800x600_surface(void)
+{
+    const uint32_t width = 800U;
+    const uint32_t height = 600U;
+    const uint32_t stride = width * VIDEO_FRAME_CHANNELS + 16U;
+    HudRenderer renderer;
+    HudSurface surface;
+    VehicleState state;
+    const HudLayer *layer;
+    uint8_t *pixels;
+    const uint8_t *left_panel_pixel;
+    const uint8_t *recording_pixel;
+
+    memset(&renderer, 0, sizeof(renderer));
+    memset(&surface, 0, sizeof(surface));
+    memset(&state, 0, sizeof(state));
+    pixels = calloc(1U, (size_t)stride * height);
+    assert(pixels != NULL);
+    surface.pixels = pixels;
+    surface.width = width;
+    surface.height = height;
+    surface.stride_bytes = stride;
+    surface.pixel_format = HUD_PIXEL_FORMAT_ARGB8888;
+
+    assert(hud_renderer_init_external(&renderer, width, height) == 0);
+    layer = hud_renderer_render_frame_to_surface(&renderer, &state, true,
+                                                 &surface, NULL);
+    assert(layer != NULL);
+    assert(layer->region_count == 1U);
+    assert(layer->regions[0].width == width);
+    assert(layer->regions[0].height == height);
+    left_panel_pixel = pixels + (size_t)115U * stride + (size_t)15U * 4U;
+    assert(left_panel_pixel[3] != 0U);
+    recording_pixel = pixels + (size_t)93U * stride + (size_t)118U * 4U;
+    assert(recording_pixel[3] != 0U);
+    assert(pixels[3] == 0U);
+    assert(pixels[(size_t)(height - 1U) * stride + 3U] == 0U);
+
+    layer = hud_renderer_render_frame_to_surface(&renderer, &state, false,
+                                                 &surface, NULL);
+    assert(layer != NULL);
+    assert(recording_pixel[3] == 0U);
+
+    hud_renderer_close(&renderer);
+    free(pixels);
+}
+
 int main(void)
 {
     test_render_at_size(HUD_BASE_WIDTH, HUD_BASE_HEIGHT);
     test_render_at_size(640U, 360U);
     test_render_at_size(800U, 600U);
+    test_800x600_preserves_hud_aspect_ratio();
     test_yuv_compose_with_stride_and_crop();
     test_render_to_external_argb_surface();
+    test_render_to_external_800x600_surface();
     return 0;
 }
