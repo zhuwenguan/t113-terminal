@@ -152,6 +152,9 @@ target_include_directories(race_common PUBLIC common/include)
 target_compile_options(race_common PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(race_common PUBLIC Threads::Threads)
 
+add_executable(race_state_dump tools/race_state_dump.c)
+target_link_libraries(race_state_dump PRIVATE race_common)
+
 add_executable(t113_terminal
     src/console_log.c
     src/main.c
@@ -257,7 +260,8 @@ if (RACE_BUILD_FUTURE_DAEMONS)
     target_link_libraries(race_telemetry PRIVATE race_common)
 endif()
 
-install(TARGETS race_core race_video RUNTIME DESTINATION bin)
+install(TARGETS race_core race_video race_state_dump RUNTIME DESTINATION bin)
+install(DIRECTORY common/include/race DESTINATION include)
 
 if (BUILD_TESTING)
     add_executable(test_shared_state tests/test_shared_state.c)
