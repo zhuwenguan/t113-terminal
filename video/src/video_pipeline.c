@@ -3,7 +3,7 @@
 
 #include "video_pipeline.h"
 #include "console_log.h"
-#include "tools/resource_monitor.h"
+#include "resource_monitor.h"
 
 #include <errno.h>
 #include <inttypes.h>

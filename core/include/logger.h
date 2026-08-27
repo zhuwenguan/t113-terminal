@@ -10,7 +10,7 @@
 
 #include "can_receiver.h"
 #include "lappro.h"
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 #define LOGGER_MOUNT_POINT "/mnt/usb/sda"
 #define LOGGER_LOG_DIRECTORY "/mnt/usb/sda/log"

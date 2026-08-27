@@ -7,7 +7,7 @@
 
 #include "gps_track.h"
 #include "lappro.h"
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 typedef enum {
     ACCEL_TEST_IDLE = 0,

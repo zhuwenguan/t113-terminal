@@ -6,7 +6,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 #define HMI_DEFAULT_DEVICE_PATH "/dev/ttyS1"
 #define HMI_BAUD_RATE 115200U

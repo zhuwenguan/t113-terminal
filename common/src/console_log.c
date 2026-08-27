@@ -1,7 +1,7 @@
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
-#include "console_log.h"
+#include <race/console_log.h>
 
 #include <stdio.h>
 #include <stdarg.h>

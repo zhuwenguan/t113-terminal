@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 #define VEHICLE_STATE_LAPPRO_FRESHNESS_TIMEOUT_US 1000000ULL
 

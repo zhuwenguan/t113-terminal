@@ -4,7 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 #include "video_frame.h"
 
 /* The production camera and recorder are native 800x600.  Keep the HUD

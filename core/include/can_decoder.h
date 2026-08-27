@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 #include "can_receiver.h"
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 /* CAN IDs are centralized here; add future signals as the matrix expands. */
 #define CAN_DECODER_ID_UNASSIGNED 0xffffffffU

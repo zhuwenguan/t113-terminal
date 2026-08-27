@@ -8,7 +8,7 @@
 #include "gps_track.h"
 #include "lap_timer.h"
 #include "lappro.h"
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 typedef struct {
     RaceEventMode mode;

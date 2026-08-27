@@ -9,7 +9,7 @@
 #include <pthread.h>
 
 #include "gps_track.h"
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 #define LAP_TIMER_TRACE_QUEUE_CAPACITY 256U
 #define LAP_TIMER_REFERENCE_CAPACITY (GPS_TRACK_MAX_POINTS + 2U)

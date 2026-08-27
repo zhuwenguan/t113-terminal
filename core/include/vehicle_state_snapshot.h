@@ -7,7 +7,7 @@
 
 #include <pthread.h>
 
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 #define VEHICLE_STATE_SNAPSHOT_HZ 20U
 #define VEHICLE_STATE_SNAPSHOT_PERIOD_US 50000ULL

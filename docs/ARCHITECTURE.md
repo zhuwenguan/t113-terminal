@@ -31,15 +31,25 @@ process.
 - `race_web` and `race_telemetry`: disabled-by-default skeletons. They contain no
   HTTP, WebSocket, MQTT, TCP or 4G implementation.
 
-Source modules remain in `src/` during phase 1 to reduce path-only churn. The
-`core/`, `video/`, `logger/`, `web/` and `telemetry/` directories state process
-ownership; physical source relocation can follow after board validation.
+The source tree is physically organized by ownership:
+
+```text
+common/          cross-process ABI, IPC, time and shared logging support
+core/src/        CAN, LapPro, state, algorithms, logger and core entry point
+core/include/    core-private module interfaces
+video/src/       capture, HUD, G2D, codec, recorder and video pipeline
+video/include/   video-private module interfaces and vendor ABIs
+logger/ web/ telemetry/  future daemon boundaries and skeletons
+```
+
+The legacy `t113_terminal` target assembles `core` and `video` sources only for
+rollback/A-B comparison. Production daemon targets use their own directories.
 
 ## Shared VehicleState ABI
 
-`common/include/race/vehicle_state.h` is the only authoritative definition.
-The old include is a compatibility forwarding header. `librace_common.a`
-provides SHM and monotonic-clock utilities.
+`common/include/race/vehicle_state.h` is the only authoritative definition;
+all code includes it directly. `librace_common.a` provides logging, SHM and
+monotonic-clock utilities.
 
 `RaceSharedState` contains magic `0x52414345`, ABI version, header size, total
 size, VehicleState size, an atomic sequence, flags, `publish_mono_us`, and the

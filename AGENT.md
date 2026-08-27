@@ -6,7 +6,7 @@
 - 本地开发环境运行在 WSL 中。
 - 项目使用 `arm-linux-gnueabihf-gcc` 进行 ARM 交叉编译。
 - CMake 工具链文件为 `toolchain-t113.cmake`。
-- 程序入口为 `src/main.c`，构建目标名为 `t113_terminal`。
+- 核心程序入口为 `core/src/main.c`；旧的 A/B 回退目标名为 `t113_terminal`。
 
 ## 当前开发阶段：双 CAN + LapPro 统一 APP
 
@@ -35,7 +35,7 @@
 - Replay 同时兼容当前 logger 生成的 `can_*.csv`、`lappro_*.csv` 及完整字段格式；多组 logger 文件按共同会话后缀确定性配对并选择字典序最新的一组，没有共同会话时拒绝混配；不读取 `vehicle_state.csv`，非法行跳过并告警。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
 - 当前默认目标地址为 `B0:A6:04:20:DF:3A`，位于 `LapProConfig` 中，可替换；默认地址类型为 LE public。
-- 当前已知 ATT 参数集中定义在 `src/lappro.c`：
+- 当前已知 ATT 参数集中定义在 `core/src/lappro.c`：
   - FF01 Notify value `0x002A`
   - FF01 CCCD `0x002B`
   - FF02 Write value `0x002D`
@@ -50,19 +50,14 @@
 ./build/t113_terminal [-v|--verbose]
 ```
 
-- 当前代码结构保持精简：
-  - `src/main.c`：APP 生命周期、CAN/LapPro/logger 汇合和退出清理。
-  - `src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理，只生成并分发 `CanMessage`。
-  - `src/can_decoder.c`：集中管理 CAN ID/signal 定义，解析并累计更新 `VehicleState`。
-  - `src/gps_track.c`：GPS 经纬度到局部 XY、固定容量轨迹缓存和虚拟起点候选搜索。
-  - `src/lap_timer.c`：从重复轨迹学习参考圈、虚拟起终点、圈时间和 Delta。
-  - `src/accel_test.c`：静止起步、直线轨迹确认和 75m 加速计时。
-  - `src/race_event.c`：双检测器、事件状态机和模式锁定。
-  - `src/logger.c`：统一 `LogRecord` 固定队列、批量写入三类 CSV。
-  - `src/replay.c`：Replay CSV 流式读取、按 `timestamp_us` 归并和速度控制。
-  - `src/lappro.c`：LapPro worker、ATT、认证、JSON、GPS 状态更新。
-  - `src/lappro_transport.c`：Transport 编解码、CRC 和分片自测。
-  - `src/lappro_crypto.c`：SHA-256、HMAC-SHA256、AES-256-CTR 和固定向量自测。
+- 当前代码结构：
+  - `core/src/main.c`：APP 生命周期、CAN/LapPro/logger 汇合和退出清理。
+  - `core/src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理，只生成并分发 `CanMessage`。
+  - `core/src/can_decoder.c`：集中管理 CAN ID/signal 定义，解析并累计更新 `VehicleState`。
+  - `core/src/gps_track.c`、`lap_timer.c`、`accel_test.c`、`race_event.c`：赛道和加速算法。
+  - `core/src/logger.c`、`replay.c`、`lappro*.c`：存储、回放与 LapPro。
+  - `video/src/`：Camera、HUD、G2D、JPEG/MP4 和视频 pipeline。
+  - `common/`：跨进程 ABI、共享内存、时钟及公共日志支持。
 
 ### LapPro 实机验证状态
 
@@ -182,7 +177,7 @@ ssh root@"$T113_HOST" 'cat /tmp/gdbserver.log'
 ## 修改约定
 
 - 保持 CMake 配置与交叉编译工具链可用。
-- 新增功能时优先修改 `src/`，不要把生成文件提交到源码目录。
+- 新增功能按归属修改 `core/src/`、`video/src/` 或 `common/src/`，不要把生成文件提交到源码目录。
 - 修改后应至少检查 CMake 配置和本地可用的构建步骤；如果交叉编译器或目标板不可用，应明确说明未完成的验证项。
 - 不要提交 SSH 私钥、密码、令牌或包含敏感信息的本地配置。
 

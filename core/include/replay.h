@@ -6,7 +6,7 @@
 
 #include "can_receiver.h"
 #include "lappro.h"
-#include "vehicle_state.h"
+#include <race/vehicle_state.h>
 
 typedef enum {
     REPLAY_CAN0 = 0,
