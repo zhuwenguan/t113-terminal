@@ -122,7 +122,7 @@ static void main_vehicle_state_snapshot_sink(uint64_t timestamp_us,
 #ifdef RACE_CORE_DAEMON
     if (can_context->shared_state.mapping != NULL &&
         race_shared_state_publish(&can_context->shared_state, state,
-                                  timestamp_us) < 0) {
+                                  main_monotonic_us()) < 0) {
         LOG_WARN("Shared VehicleState publish failed: %s", strerror(errno));
     }
 #endif
