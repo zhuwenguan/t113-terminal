@@ -216,8 +216,14 @@ else()
 endif()
 
 # Phase 1 daemons. race_core deliberately reuses the validated vehicle-data
-# sources; race_video reuses the validated 800x600 pipeline without redesign.
-get_target_property(RACE_CORE_SOURCES t113_terminal SOURCES)
+# sources, but it must not even link camera/G2D/encoder code: video is a real
+# process fault boundary, not merely a runtime command-line distinction.
+set(RACE_CORE_SOURCES
+    src/console_log.c src/main.c src/can_receiver.c src/can_decoder.c
+    src/gps_track.c src/lap_timer.c src/accel_test.c src/race_event.c
+    src/logger.c src/replay.c src/vehicle_state_clock.c
+    src/vehicle_state_snapshot.c src/hmi.c src/lappro.c
+    src/lappro_transport.c src/lappro_crypto.c)
 add_executable(race_core ${RACE_CORE_SOURCES})
 target_compile_definitions(race_core PRIVATE RACE_CORE_DAEMON=1)
 target_include_directories(race_core PRIVATE

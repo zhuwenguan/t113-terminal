@@ -17,8 +17,10 @@
 #include "replay.h"
 #include "vehicle_state_snapshot.h"
 #include "vehicle_state_clock.h"
+#ifndef RACE_CORE_DAEMON
 #include "video_capture.h"
 #include "video_pipeline.h"
+#endif
 #ifdef RACE_CORE_DAEMON
 #include <race/shared_state.h>
 #endif
@@ -40,6 +42,7 @@ typedef struct {
     bool replay;
     char replay_directory[PATH_MAX];
     double replay_speed;
+#ifndef RACE_CORE_DAEMON
     bool video;
     bool video_only;
     bool hud_demo;
@@ -49,6 +52,7 @@ typedef struct {
     char video_frame[PATH_MAX];
     uint32_t video_seconds;
     VideoCompositorMode video_compositor_mode;
+#endif
 } MainOptions;
 
 static uint64_t main_monotonic_us(void)
@@ -138,7 +142,7 @@ static void main_replay_vehicle_state_snapshot_sink(uint64_t timestamp_us,
     }
 }
 
-static bool main_video_state_getter(VehicleState *state, void *context)
+static bool main_vehicle_state_getter(VehicleState *state, void *context)
 {
     MainCanContext *can_context = context;
     uint64_t timestamp_us;
@@ -154,6 +158,7 @@ static bool main_video_state_getter(VehicleState *state, void *context)
     return true;
 }
 
+#ifndef RACE_CORE_DAEMON
 static bool main_hud_demo_state_getter(VehicleState *state, void *context)
 {
     (void)context;
@@ -195,7 +200,9 @@ static bool main_hud_demo_state_getter(VehicleState *state, void *context)
     state->drive_state = VEHICLE_DRIVE_STATE_DRIVE;
     return true;
 }
+#endif
 
+#ifndef RACE_CORE_DAEMON
 static bool main_parse_uint32(const char *text, uint32_t *value)
 {
     char *end;
@@ -223,6 +230,7 @@ static bool main_copy_option_path(char *destination, size_t destination_size,
     (void)snprintf(destination, destination_size, "%s", source);
     return true;
 }
+#endif
 
 static void main_can_message_sink(const CanMessage *message, void *context)
 {
@@ -312,9 +320,11 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
     }
     memset(options, 0, sizeof(*options));
     options->replay_speed = 1.0;
+#ifndef RACE_CORE_DAEMON
     options->video_compositor_mode = VIDEO_COMPOSITOR_MODE_AUTO;
     (void)snprintf(options->camera_path, sizeof(options->camera_path), "%s",
                    VIDEO_CAPTURE_DEFAULT_DEVICE);
+#endif
     for (argument_index = 1; argument_index < argc; ++argument_index) {
         if (strcmp(argv[argument_index], "-v") == 0 ||
             strcmp(argv[argument_index], "--verbose") == 0) {
@@ -351,6 +361,7 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
             }
             continue;
         }
+#ifndef RACE_CORE_DAEMON
         if (strcmp(argv[argument_index], "--video") == 0) {
             options->video = true;
             continue;
@@ -443,7 +454,12 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
             options->video_frame[0] = '\0';
             continue;
         }
+#endif
 
+#ifdef RACE_CORE_DAEMON
+        LOG_ERROR("Usage: %s [-v|--verbose] [--replay <directory>] "
+                  "[--replay-speed <number>]", argv[0]);
+#else
         LOG_ERROR("Usage: %s [-v|--verbose] [--replay <directory>] "
                   "[--replay-speed <number>] [--video] [--camera <path>] "
                   "[--video-only] "
@@ -452,6 +468,7 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
                   "[--video-compositor auto|g2d|cpu] "
                   "[--hud-demo|--hud-demo-no-frame]",
                   argv[0]);
+#endif
         return -1;
     }
 
@@ -470,30 +487,32 @@ int main(int argc, char *argv[])
     LapProConfig lappro_config;
     LapPro lappro;
     VehicleStateSnapshotter snapshotter;
+#ifndef RACE_CORE_DAEMON
     VideoPipeline video_pipeline;
+#endif
     static MainCanContext can_context;
     MainOptions options;
     bool lappro_ready = false;
     bool logger_ready = false;
     bool hmi_ready = false;
     bool snapshotter_ready = false;
+#ifndef RACE_CORE_DAEMON
     bool video_ready = false;
+#endif
     int context_mutex_result;
     int result;
 
     memset(&can_context, 0, sizeof(can_context));
     memset(&snapshotter, 0, sizeof(snapshotter));
+#ifndef RACE_CORE_DAEMON
     memset(&video_pipeline, 0, sizeof(video_pipeline));
+#endif
     can_decoder_init(&can_context.decoder);
     console_log_init();
     if (main_parse_arguments(argc, argv, &options) < 0) {
         return EXIT_FAILURE;
     }
 #ifdef RACE_CORE_DAEMON
-    if (options.video || options.video_only || options.hud_demo) {
-        LOG_ERROR("race_core does not accept video options; run race_video");
-        return EXIT_FAILURE;
-    }
     if (race_shared_state_writer_open(&can_context.shared_state, NULL) < 0) {
         LOG_ERROR("Cannot create %s: %s", RACE_SHARED_STATE_NAME,
                   strerror(errno));
@@ -508,6 +527,9 @@ int main(int argc, char *argv[])
     if (context_mutex_result != 0) {
         LOG_ERROR("Cannot initialize VehicleState mutex: %s",
                   strerror(context_mutex_result));
+#ifdef RACE_CORE_DAEMON
+        race_shared_state_close(&can_context.shared_state);
+#endif
         return EXIT_FAILURE;
     }
     if (logger_init(&logger) < 0) {
@@ -529,6 +551,7 @@ int main(int argc, char *argv[])
                     logger_ready ? logger_get_session_directory(&logger)
                                  : NULL);
 
+#ifndef RACE_CORE_DAEMON
     if (options.video_record && options.video_output[0] == '\0') {
         const char *session_directory = logger_ready ?
             logger_get_session_directory(&logger) : NULL;
@@ -558,7 +581,7 @@ int main(int argc, char *argv[])
             VIDEO_COMPOSITOR_MODE_CPU : options.video_compositor_mode;
         video_config.get_state = options.hud_demo ?
                                  main_hud_demo_state_getter :
-                                 main_video_state_getter;
+                                 main_vehicle_state_getter;
         video_config.state_context = &can_context;
         if (video_pipeline_init(&video_pipeline, &video_config) < 0 ||
             video_pipeline_start(&video_pipeline) < 0) {
@@ -592,6 +615,7 @@ int main(int argc, char *argv[])
         pthread_mutex_destroy(&can_context.mutex);
         return video_ready ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+#endif
 
     if (options.replay) {
         ReplayConfig replay_config;
@@ -602,14 +626,16 @@ int main(int argc, char *argv[])
         replay_config.can_sink = main_can_message_sink;
         replay_config.lappro_sink = main_lappro_sample_sink;
         replay_config.sink_context = &can_context;
-        replay_config.vehicle_state_getter = main_video_state_getter;
+        replay_config.vehicle_state_getter = main_vehicle_state_getter;
         replay_config.vehicle_state_snapshot_sink =
             main_replay_vehicle_state_snapshot_sink;
         result = replay_run(&replay_config);
+        #ifndef RACE_CORE_DAEMON
         if (video_ready) {
             video_pipeline_stop(&video_pipeline);
             video_pipeline_print_stats(&video_pipeline);
         }
+        #endif
         race_event_close(&can_context.race_event);
         if (logger_ready) {
             logger_stop(&logger);
@@ -620,6 +646,9 @@ int main(int argc, char *argv[])
         }
         sync();
         pthread_mutex_destroy(&can_context.mutex);
+#ifdef RACE_CORE_DAEMON
+        race_shared_state_close(&can_context.shared_state);
+#endif
         if (result < 0) {
             LOG_ERROR("Replay stopped with an error");
             return EXIT_FAILURE;
@@ -641,10 +670,12 @@ int main(int argc, char *argv[])
     }
 
     if (can_receiver_init(&receiver, interfaces) < 0) {
+#ifndef RACE_CORE_DAEMON
         if (video_ready) {
             video_pipeline_stop(&video_pipeline);
             video_pipeline_print_stats(&video_pipeline);
         }
+#endif
         if (lappro_ready) {
             lappro_stop(&lappro);
         }
@@ -656,6 +687,9 @@ int main(int argc, char *argv[])
             hmi_close(&hmi);
         }
         pthread_mutex_destroy(&can_context.mutex);
+#ifdef RACE_CORE_DAEMON
+        race_shared_state_close(&can_context.shared_state);
+#endif
         return EXIT_FAILURE;
     }
 
@@ -679,10 +713,12 @@ int main(int argc, char *argv[])
     if (lappro_ready) {
         lappro_stop(&lappro);
     }
+    #ifndef RACE_CORE_DAEMON
     if (video_ready) {
         video_pipeline_stop(&video_pipeline);
         video_pipeline_print_stats(&video_pipeline);
     }
+    #endif
     race_event_close(&can_context.race_event);
     if (logger_ready) {
         logger_stop(&logger);

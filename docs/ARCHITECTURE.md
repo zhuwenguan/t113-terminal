@@ -21,7 +21,8 @@ process.
 
 - `race_core`: dual SocketCAN RX/parser, LapPro Bluetooth/GPS/IMU, authoritative
   VehicleState, lap/delta/accel, timestamps, race events, HMI and the currently
-  validated logger. It rejects video command-line options.
+  validated logger. It is built without camera, G2D, HUD, JPEG, encoder, MP4 or
+  video-pipeline objects, so video is an actual binary/process fault boundary.
 - `race_video`: V4L2 capture, JPEG/MJPEG decode, G2D, HUD, compositor, JPEG
   encode, MP4 writer, frame queues and existing DMA/ION teardown.
 - `race_logger`: reserved storage fault domain. It is a disabled-by-default
@@ -43,8 +44,9 @@ provides SHM and monotonic-clock utilities.
 `RaceSharedState` contains magic `0x52414345`, ABI version, header size, total
 size, VehicleState size, an atomic sequence, flags, `publish_mono_us`, and the
 state. The object name is `/race_vehicle_state`. Core is the single writer; all
-other processes map it read-only. A reader rejects bad magic/version/sizes with
-`EPROTO`.
+other processes map it read-only. A writer-held advisory POSIX file lock rejects
+a concurrently started second core with `EBUSY`. A reader rejects bad
+magic/version/sizes with `EPROTO`.
 
 Consistency uses a 32-bit lock-free C11 atomic seqlock. Core marks `seq` odd,
 executes a full fence, copies state/timestamp, then release-stores an even
