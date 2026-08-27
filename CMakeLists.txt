@@ -5,6 +5,10 @@ project(t113_terminal
     LANGUAGES C
 )
 
+# The VehicleState ABI is authoritative here for every legacy and daemon
+# target during the staged migration.
+include_directories(${CMAKE_SOURCE_DIR}/common/include)
+
 add_executable(g2d_smoke_test
     tools/g2d_smoke_test.c
 )
@@ -140,6 +144,14 @@ endif()
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+add_library(race_common STATIC
+    common/src/ipc_shm.c
+    common/src/time_utils.c
+)
+target_include_directories(race_common PUBLIC common/include)
+target_compile_options(race_common PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(race_common PUBLIC Threads::Threads)
+
 add_executable(t113_terminal
     src/console_log.c
     src/main.c
@@ -171,6 +183,7 @@ add_executable(t113_terminal
 target_include_directories(t113_terminal PRIVATE
     ${CMAKE_SOURCE_DIR}
     include
+    common/include
     ${T113_JPEG_INCLUDE_DIR}
 )
 
@@ -200,6 +213,11 @@ else()
 endif()
 
 if (BUILD_TESTING)
+    add_executable(test_shared_state tests/test_shared_state.c)
+    target_link_libraries(test_shared_state PRIVATE race_common)
+    target_compile_options(test_shared_state PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME shared_state_abi_consistency_and_freshness
+             COMMAND test_shared_state)
     add_library(video_lifecycle_fault_preload SHARED
         tests/video_lifecycle_fault_preload.c
     )

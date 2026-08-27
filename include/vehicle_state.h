@@ -1,6 +1,10 @@
 #ifndef T113_VEHICLE_STATE_H
 #define T113_VEHICLE_STATE_H
 
+/* Legacy include path; the authoritative cross-process ABI lives in common. */
+#include <race/vehicle_state.h>
+#if 0
+
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -114,4 +118,5 @@ typedef struct {
     uint8_t reserved[32];
 } VehicleState;
 
+#endif
 #endif
