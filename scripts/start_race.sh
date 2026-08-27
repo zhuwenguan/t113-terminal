@@ -22,7 +22,11 @@ start_daemon race_core "$@"
 ready=0
 i=0
 while [ "$i" -lt 50 ]; do
-    if [ -e /dev/shm/race_vehicle_state ]; then ready=1; break; fi
+    if [ -e /dev/shm/race_vehicle_state ] &&
+       "$RACE_BIN_DIR/race_state_dump" 2>/dev/null | grep -q 'stale=no'; then
+        ready=1
+        break
+    fi
     if ! kill -0 "$(cat "$RACE_RUN_DIR/race_core.pid")" 2>/dev/null; then
         echo "race_core exited; see $RACE_LOG_DIR/race_core.log" >&2
         exit 1
