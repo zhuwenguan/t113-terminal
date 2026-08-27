@@ -212,6 +212,53 @@ else()
     target_link_libraries(t113_terminal PRIVATE m)
 endif()
 
+# Phase 1 daemons. race_core deliberately reuses the validated vehicle-data
+# sources; race_video reuses the validated 800x600 pipeline without redesign.
+get_target_property(RACE_CORE_SOURCES t113_terminal SOURCES)
+add_executable(race_core ${RACE_CORE_SOURCES})
+target_compile_definitions(race_core PRIVATE RACE_CORE_DAEMON=1)
+target_include_directories(race_core PRIVATE
+    ${CMAKE_SOURCE_DIR} include common/include ${T113_JPEG_INCLUDE_DIR})
+target_compile_options(race_core PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(race_core PRIVATE race_common Threads::Threads ${CMAKE_DL_LIBS})
+
+set(RACE_VIDEO_SOURCES
+    video/main.c
+    src/console_log.c src/video_frame.c src/encoded_frame_queue.c
+    src/jpeg_codec.c src/video_encoder.c src/video_capture.c
+    src/hud_renderer.c src/video_compositor.c src/video_recorder.c
+    src/video_pipeline.c)
+add_executable(race_video ${RACE_VIDEO_SOURCES})
+target_include_directories(race_video PRIVATE
+    ${CMAKE_SOURCE_DIR} include common/include ${T113_JPEG_INCLUDE_DIR})
+target_compile_options(race_video PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(race_video PRIVATE race_common Threads::Threads ${CMAKE_DL_LIBS})
+
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)" OR
+    CMAKE_C_COMPILER MATCHES "(arm|aarch64)-linux")
+    target_compile_options(race_core PRIVATE -mfpu=neon -mfloat-abi=hard)
+    target_compile_options(race_video PRIVATE -mfpu=neon -mfloat-abi=hard)
+endif()
+if (EXISTS "${T113_LIBM_STATIC}")
+    target_link_libraries(race_core PRIVATE "${T113_LIBM_STATIC}")
+    target_link_libraries(race_video PRIVATE "${T113_LIBM_STATIC}")
+else()
+    target_link_libraries(race_core PRIVATE m)
+    target_link_libraries(race_video PRIVATE m)
+endif()
+
+option(RACE_BUILD_FUTURE_DAEMONS "Build logger/web/telemetry skeletons" OFF)
+if (RACE_BUILD_FUTURE_DAEMONS)
+    add_executable(race_logger logger/main.c)
+    add_executable(race_web web/main.c)
+    add_executable(race_telemetry telemetry/main.c)
+    target_link_libraries(race_logger PRIVATE race_common)
+    target_link_libraries(race_web PRIVATE race_common)
+    target_link_libraries(race_telemetry PRIVATE race_common)
+endif()
+
+install(TARGETS race_core race_video RUNTIME DESTINATION bin)
+
 if (BUILD_TESTING)
     add_executable(test_shared_state tests/test_shared_state.c)
     target_link_libraries(test_shared_state PRIVATE race_common)

@@ -19,6 +19,9 @@
 #include "vehicle_state_clock.h"
 #include "video_capture.h"
 #include "video_pipeline.h"
+#ifdef RACE_CORE_DAEMON
+#include <race/shared_state.h>
+#endif
 
 typedef struct {
     pthread_mutex_t mutex;
@@ -28,6 +31,9 @@ typedef struct {
     VehicleState vehicle_state;
     VehicleStateClock clock;
     Hmi *hmi;
+#ifdef RACE_CORE_DAEMON
+    RaceSharedStateHandle shared_state;
+#endif
 } MainCanContext;
 
 typedef struct {
@@ -113,6 +119,13 @@ static void main_vehicle_state_snapshot_sink(uint64_t timestamp_us,
     if (can_context->hmi != NULL) {
         (void)hmi_update(can_context->hmi, timestamp_us, state);
     }
+#ifdef RACE_CORE_DAEMON
+    if (can_context->shared_state.mapping != NULL &&
+        race_shared_state_publish(&can_context->shared_state, state,
+                                  timestamp_us) < 0) {
+        LOG_WARN("Shared VehicleState publish failed: %s", strerror(errno));
+    }
+#endif
 }
 
 static void main_replay_vehicle_state_snapshot_sink(uint64_t timestamp_us,
@@ -476,6 +489,20 @@ int main(int argc, char *argv[])
     if (main_parse_arguments(argc, argv, &options) < 0) {
         return EXIT_FAILURE;
     }
+#ifdef RACE_CORE_DAEMON
+    if (options.video || options.video_only || options.hud_demo) {
+        LOG_ERROR("race_core does not accept video options; run race_video");
+        return EXIT_FAILURE;
+    }
+    if (race_shared_state_writer_open(&can_context.shared_state, NULL) < 0) {
+        LOG_ERROR("Cannot create %s: %s", RACE_SHARED_STATE_NAME,
+                  strerror(errno));
+        return EXIT_FAILURE;
+    }
+    LOG_INFO("Shared VehicleState ready: name=%s version=%u size=%zu",
+             RACE_SHARED_STATE_NAME, RACE_SHM_VERSION,
+             sizeof(RaceSharedState));
+#endif
     vehicle_state_clock_init(&can_context.clock, options.replay);
     context_mutex_result = pthread_mutex_init(&can_context.mutex, NULL);
     if (context_mutex_result != 0) {
@@ -666,6 +693,9 @@ int main(int argc, char *argv[])
     }
     sync();
     pthread_mutex_destroy(&can_context.mutex);
+#ifdef RACE_CORE_DAEMON
+    race_shared_state_close(&can_context.shared_state);
+#endif
 
     if (result < 0) {
         LOG_ERROR("CAN receiver stopped with an error");
