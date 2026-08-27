@@ -60,7 +60,9 @@ int race_shared_state_publish(RaceSharedStateHandle *h, const VehicleState *stat
     seq = atomic_load_explicit(&h->mapping->seq, memory_order_relaxed);
     if (seq & 1U) seq++;
     atomic_store_explicit(&h->mapping->seq, seq + 1U, memory_order_relaxed);
-    atomic_thread_fence(memory_order_release);
+    /* Full fence is intentional: the odd marker must become observable before
+     * any non-atomic payload store can become observable on weakly ordered ARM. */
+    atomic_thread_fence(memory_order_seq_cst);
     memcpy(&h->mapping->state, state, sizeof(*state));
     h->mapping->publish_mono_us = published;
     atomic_store_explicit(&h->mapping->seq, seq + 2U, memory_order_release);
@@ -77,7 +79,7 @@ int race_shared_state_read(const RaceSharedStateHandle *h, VehicleState *state,
         if (before & 1U) continue;
         memcpy(state, &h->mapping->state, sizeof(*state));
         timestamp = h->mapping->publish_mono_us;
-        atomic_thread_fence(memory_order_acquire);
+        atomic_thread_fence(memory_order_seq_cst);
         if (before == atomic_load_explicit(&h->mapping->seq, memory_order_acquire)) {
             if (published) *published = timestamp;
             if (sequence) *sequence = before;
