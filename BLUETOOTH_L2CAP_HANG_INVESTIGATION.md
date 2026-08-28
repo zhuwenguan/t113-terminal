@@ -387,6 +387,47 @@ ctest --test-dir build --output-on-failure
 | 修复后 SSH freeze | 未知 |
 | frame/drop/RSS/ION/DMA/MP4 | 未执行 |
 
+### 2026-08-29 板端一分钟录制补测
+
+板端重启后完成了两次尝试：
+
+1. 第一次未形成有效录制：CAN `awlink0` 未启用，应用在约 1 s 后以 `rc=1`
+   退出，MP4 仅 589 B。
+2. 按仓库测试脚本启用 `awlink0/1` 500 kbit/s loopback 后重试成功。
+
+有效测试目录：`/mnt/usb/sda/bluetooth_l2cap_record_1min_20260829_retry`。
+
+```text
+binary: /mnt/UDISK/t113_terminal.e4704c2
+kernel: Linux kickpi 5.4.61 #1 SMP PREEMPT armv7l
+app_rc: 0
+video_bytes: 96480246
+frames: 1785
+duration: 59.537411 s
+fps: 29.981149
+jpeg_markers: 1785/1785
+tail: moov
+pts_monotonic: yes
+camera/lost/decoded/processed/encoded/written: 1785/2/1785/1785/1785/1785
+g2d: healthy=yes fatal=no video_fault=no recording_failed=no
+writer: full=0 dropped=0 failed=no errors=0
+max_rss: 9584 KB
+```
+
+本次 SSH 在测试及结果收集期间保持在线。`kernel.before` 与 `kernel.after` 的
+增量只有 Cedar 时钟启停和 CAN link ready，没有新增 RCU stall、soft lockup、BUG、
+Bluetooth/L2CAP、HCI 或 RTL warning。`hci0` 保持 `UP RUNNING`，HCI errors 为 0。
+
+LapPro 目标在本次测试中不可达，旧二进制分别在约 40.6 s 和 82.9 s 报
+`L2CAP connect failed: Connection refused`；没有建立 notification 连接。该过程
+没有触发新的 L2CAP stall，但也没有覆盖正常 disconnect/reconnect。
+
+注意：本次使用的是提交 `a4c3765` 之前的
+`t113_terminal.e4704c2`，二进制中没有新的 `[BT]` generation 日志，因此本次结果
+只能作为“旧二进制 + G2D + Cedar + MP4 的一分钟录制通过”，不能作为本次 LapPro
+socket owner 修复已在板端生效的证据。需要先构建并部署包含新日志的二进制，再执行
+Bluetooth-only 和完整链路验证。
+
 ## 9. 修复后的板端执行顺序
 
 所有测试都必须接 UART，并在测试开始前执行 `dmesg -n 8`：
