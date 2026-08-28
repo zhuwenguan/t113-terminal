@@ -137,6 +137,7 @@ png:    wall_avg 2.232 ms, p95 2.906 ms, p99 3.110 ms
 - 60 秒真实 `/dev/video0` + G2D + MP4：已通过，1785 帧、30 FPS、0 lost/app_drop，HUD total 平均 1.947 ms；MP4 59.505478 秒、PTS 单调。
 - 1 小时真实录像：按用户要求在约 19 分钟处停止，文件已用 sidecar index 恢复收尾到 U 盘 `/mnt/usb/sda/t113_hud_png_v2_3600.mp4`；可播放检查通过，33280 帧、1135.212711 秒、JPEG markers 33280/33280、`moov` 在文件尾。本次不作为完整 1 小时通过项；原始残留索引保留为 `t113_hud_png_v2_3600.partial.idx`。
 - V3 1 分钟真实录像：U 盘目录 `/mnt/usb/sda/t113_hud_png_v3_1min_20260828/`，V3 原始 PNG、G2D 和 MP4 Writer 均正常；1786 帧、59.537433 秒、29.997934 FPS、PTS 单调、JPEG markers 1786/1786、`moov` 在文件尾、无 `.idx` 残留。最终统计 `app_drop=0`、Writer `dropped=0/full=0`，HUD 平均 2.029 ms（clear=0.781、draw=0.986、sync=0.255）。本次期间摄像头启动阶段记录 1 次 sequence gap，未造成应用帧丢弃。
+- V3 layout2 1 分钟真实录像：同一 U 盘目录中的 `hud_v3_layout2_1min.mp4`；本次将 G 表上移至 `(12,360)`，RPM 画布下移至 `(140,480)`，中央 gear frame 上移至 `(320,420)`，三者按 V3 实际 alpha 边界留出间隔。录像 1785 帧、59.505467 秒、29.997244 FPS、PTS 单调、JPEG markers 1785/1785、`moov` 在文件尾、无 `.idx` 残留；`app_drop=0`、Writer `dropped=0/full=0`，HUD 平均 2.077 ms（clear=0.830、draw=0.983、sync=0.256），G2D healthy=yes。U 盘写入期间出现少量存储延迟峰值（最大 885.904 ms），未造成 Writer 丢帧或收尾失败。
 - V3 录制后资源检查：无残留视频/检查进程；DMA-BUF 为 1 个、4,915,200 bytes、仅显示设备附着；ION system heap 为 1 个 buffer、4,915,200 bytes；G2D 相关时钟未保持开启；U 盘仍以 rw 挂载。
 - 多次开始/停止：本轮已完成 10 秒、60 秒两次独立启动和一次 U 盘 10 秒 smoke test；本次中止暴露的 core `video-only` TERM 收尾问题已补上信号处理，后续停止会走 `video_pipeline_stop()` 和 Writer finalize。
 - 完整的 APP 退出/重启及所有 dma-buf/ION/G2D clock 基线核对需长测结束后落盘；在此之前不标记为通过。
