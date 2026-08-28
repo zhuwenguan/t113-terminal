@@ -1118,6 +1118,66 @@ int video_recorder_finalize(VideoRecorder *recorder)
     return recorder->writer_result;
 }
 
+int video_recorder_recover_file(const char *path, uint32_t width,
+                                uint32_t height, uint32_t fps)
+{
+    VideoRecorder recorder;
+    FILE *file = NULL;
+    FILE *index_file = NULL;
+    char index_path[sizeof(recorder.index_path)];
+    off_t file_size;
+    off_t index_size;
+    uint64_t sample_count;
+    int result;
+
+    if (path == NULL || path[0] == '\0' || width == 0U || height == 0U ||
+        fps == 0U || strlen(path) >= sizeof(recorder.path) ||
+        strlen(path) + 4U >= sizeof(index_path) ||
+        width > UINT16_MAX || height > UINT16_MAX) {
+        errno = EINVAL;
+        return -1;
+    }
+    memset(&recorder, 0, sizeof(recorder));
+    if (snprintf(index_path, sizeof(index_path), "%s.idx", path) >=
+        (int)sizeof(index_path)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    file = fopen(path, "rb+");
+    index_file = fopen(index_path, "rb+");
+    if (file == NULL || index_file == NULL ||
+        fseeko(file, 0, SEEK_END) != 0 ||
+        (file_size = ftello(file)) < 40 ||
+        fseeko(index_file, 0, SEEK_END) != 0 ||
+        (index_size = ftello(index_file)) <= 0 ||
+        (uint64_t)index_size % sizeof(VideoRecorderPendingSample) != 0U) {
+        int saved_errno = errno != 0 ? errno : EINVAL;
+
+        if (file != NULL) fclose(file);
+        if (index_file != NULL) fclose(index_file);
+        errno = saved_errno;
+        return -1;
+    }
+    sample_count = (uint64_t)index_size /
+                   sizeof(VideoRecorderPendingSample);
+    if (sample_count == 0U || sample_count > UINT32_MAX) {
+        fclose(file);
+        fclose(index_file);
+        errno = EOVERFLOW;
+        return -1;
+    }
+    recorder.file = file;
+    recorder.index_file = index_file;
+    recorder.mdat_size_offset = 32U;
+    recorder.media_bytes = (uint64_t)file_size - 40U;
+    recorder.frame_count = sample_count;
+    recorder.width = width;
+    recorder.height = height;
+    recorder.fps = fps;
+    result = video_recorder_mux_finalize(&recorder);
+    return result;
+}
+
 void video_recorder_close(VideoRecorder *recorder)
 {
     if (recorder == NULL) {

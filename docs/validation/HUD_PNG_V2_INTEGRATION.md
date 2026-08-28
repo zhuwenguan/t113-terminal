@@ -135,8 +135,8 @@ png:    wall_avg 2.232 ms, p95 2.906 ms, p99 3.110 ms
 - 资源/格式/缺图/重复释放：已在 ARMv7 T113 通过。
 - 10 秒真实 `/dev/video0` + G2D + MP4：已通过。
 - 60 秒真实 `/dev/video0` + G2D + MP4：已通过，1785 帧、30 FPS、0 lost/app_drop，HUD total 平均 1.947 ms；MP4 59.505478 秒、PTS 单调。
-- 1 小时真实录像：已改为写入 U 盘 `/mnt/usb/sda/t113_hud_png_v2_3600.mp4`，当前后台长测仍在进行；完成后检查 MP4、RSS、FD、dma-buf、ION 和 G2D clock 基线。此前 `/mnt/UDISK` 失败是该分区被测试 MP4 写满，不是 PNG 解码或编码链路错误；已删除的仅是本轮生成的测试 MP4，日志保留。
-- 多次开始/停止：本轮已完成 10 秒、60 秒两次独立启动和一次 U 盘 10 秒 smoke test；1 小时录像作为后续第三次长测继续观察。
+- 1 小时真实录像：按用户要求在约 19 分钟处停止，文件已用 sidecar index 恢复收尾到 U 盘 `/mnt/usb/sda/t113_hud_png_v2_3600.mp4`；可播放检查通过，33280 帧、1135.212711 秒、JPEG markers 33280/33280、`moov` 在文件尾。本次不作为完整 1 小时通过项；原始残留索引保留为 `t113_hud_png_v2_3600.partial.idx`。
+- 多次开始/停止：本轮已完成 10 秒、60 秒两次独立启动和一次 U 盘 10 秒 smoke test；本次中止暴露的 core `video-only` TERM 收尾问题已补上信号处理，后续停止会走 `video_pipeline_stop()` 和 Writer finalize。
 - 完整的 APP 退出/重启及所有 dma-buf/ION/G2D clock 基线核对需长测结束后落盘；在此之前不标记为通过。
 
-已知限制：`VehicleState` 当前没有电机温度字段，右上 TEMP 显示 `-- C`，没有伪造数据；制动压力单位尚未由车辆协议确认，因此默认按百分比，`brake_pressure_max` 已配置化；内置 AA atlas 是无 freetype 依赖的固定宽度嵌入字形，若产品需要更高字形覆盖度，下一步可替换为经许可的嵌入字体 atlas。
+已知限制：`VehicleState` 当前没有电机温度字段，右上 TEMP 显示 `-- C`，没有伪造数据；制动压力单位尚未由车辆协议确认，因此默认按百分比，`brake_pressure_max` 已配置化；内置 AA atlas 是无 freetype 依赖的固定宽度嵌入字形，若产品需要更高字形覆盖度，下一步可替换为经许可的嵌入字体 atlas；本次长测停止前 U 盘写入出现间歇性约 1.35 秒峰值，Writer 未触发 full/drop，但导致 sidecar index 末端有缓存差异，恢复工具按已提交索引生成可播放文件。

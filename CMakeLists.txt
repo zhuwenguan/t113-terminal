@@ -182,6 +182,24 @@ target_include_directories(race_common PUBLIC ${RACE_COMMON_INCLUDE_DIR})
 target_compile_options(race_common PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(race_common PUBLIC Threads::Threads)
 
+add_executable(mjpeg_mp4_recover
+    tools/mjpeg_mp4_recover.c
+    video/src/encoded_frame_queue.c
+    video/src/video_recorder.c
+    video/src/video_encoder.c
+    video/src/jpeg_codec.c
+    video/src/video_frame.c
+)
+target_include_directories(mjpeg_mp4_recover PRIVATE
+    ${RACE_COMMON_LEGACY_INCLUDE_DIR}
+    ${RACE_VIDEO_INCLUDE_DIR}
+    ${T113_JPEG_INCLUDE_DIR}
+)
+target_compile_options(mjpeg_mp4_recover PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(mjpeg_mp4_recover PRIVATE
+    race_common Threads::Threads ${CMAKE_DL_LIBS}
+)
+
 add_executable(race_state_dump tools/race_state_dump.c)
 target_link_libraries(race_state_dump PRIVATE race_common)
 

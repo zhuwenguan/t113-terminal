@@ -20,6 +20,7 @@
 #ifndef RACE_CORE_DAEMON
 #include "video_capture.h"
 #include "video_pipeline.h"
+#include <signal.h>
 #endif
 #ifdef RACE_CORE_DAEMON
 #include <race/shared_state.h>
@@ -56,6 +57,30 @@ typedef struct {
     HudStyle hud_style;
 #endif
 } MainOptions;
+
+#ifndef RACE_CORE_DAEMON
+static volatile sig_atomic_t main_stop_requested;
+
+static void main_handle_signal(int signal_number)
+{
+    (void)signal_number;
+    main_stop_requested = 1;
+}
+
+static int main_install_signals(void)
+{
+    struct sigaction action;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = main_handle_signal;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGINT, &action, NULL) < 0 ||
+        sigaction(SIGTERM, &action, NULL) < 0) {
+        return -1;
+    }
+    return 0;
+}
+#endif
 
 static uint64_t main_monotonic_us(void)
 {
@@ -544,6 +569,13 @@ int main(int argc, char *argv[])
     if (main_parse_arguments(argc, argv, &options) < 0) {
         return EXIT_FAILURE;
     }
+#ifndef RACE_CORE_DAEMON
+    if (main_install_signals() < 0) {
+        LOG_ERROR("Cannot install video termination handlers: %s",
+                  strerror(errno));
+        return EXIT_FAILURE;
+    }
+#endif
 #ifdef RACE_CORE_DAEMON
     if (race_shared_state_writer_open(&can_context.shared_state, NULL) < 0) {
         LOG_ERROR("Cannot create %s: %s", RACE_SHARED_STATE_NAME,
@@ -630,7 +662,7 @@ int main(int argc, char *argv[])
         struct timespec wait_time = { 0, 100000000L };
         uint32_t wait_iterations = options.video_seconds * 10U + 10U;
 
-        while (wait_iterations-- > 0U) {
+        while (!main_stop_requested && wait_iterations-- > 0U) {
             (void)nanosleep(&wait_time, NULL);
         }
         if (video_ready) {

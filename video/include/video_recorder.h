@@ -129,6 +129,9 @@ bool video_recorder_write_frame(VideoRecorder *recorder,
                                 const VideoFrame *frame);
 bool video_recorder_supports_native_yuv(const VideoRecorder *recorder);
 int video_recorder_finalize(VideoRecorder *recorder);
+/* Completes an interrupted local MJPEG file from its sidecar sample index. */
+int video_recorder_recover_file(const char *path, uint32_t width,
+                                uint32_t height, uint32_t fps);
 void video_recorder_close(VideoRecorder *recorder);
 bool video_recorder_is_recording(const VideoRecorder *recorder);
 bool video_recorder_has_failed(const VideoRecorder *recorder);
