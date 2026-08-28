@@ -14,8 +14,8 @@ void hud_layout_default(HudLayout *layout)
      * clear gap for the gear frame above it. */
     layout->rpm_arc = (HudRect){ 140, 480, 520U, 170U };
     layout->center_gear = (HudRect){ 320, 420, 160U, 110U };
-    /* Move the G meter up so its full panel clears the RPM alpha bounds. */
-    layout->g_meter = (HudRect){ 12, 360, 160U, 160U };
+    /* Keep the G meter on the left, centered vertically in the 600 px frame. */
+    layout->g_meter = (HudRect){ 12, 220, 160U, 160U };
     layout->pedal_bar = (HudRect){ 668, 408, 120U, 180U };
     layout->status_pill = (HudRect){ 246, 12, 100U, 28U };
     layout->warning_status = (HudRect){ 246, 12, 100U, 28U };

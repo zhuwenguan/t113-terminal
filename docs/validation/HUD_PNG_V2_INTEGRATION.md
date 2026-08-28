@@ -37,11 +37,11 @@ PNG HUD 已接入现有 `VehicleState -> HUD -> G2D -> 摄像头/编码/Writer` 
 | static | `right_top_panel` | 568 | 12 | 220 | 120 | 固定 |
 | static | `rpm_arc_bg` | 140 | 480 | 520 | 170 | 固定；有效轮廓落在画面底部 |
 | static | `center_gear_frame` | 320 | 420 | 160 | 110 | 固定；避开 RPM 有效轮廓 |
-| static | `g_meter_bg` | 12 | 360 | 160 | 160 | 固定；相对原布局上移约 68 px |
+| static | `g_meter_bg` | 12 | 220 | 160 | 160 | 固定；左侧垂直居中 |
 | static | `pedal_bar_bg` | 668 | 408 | 120 | 180 | 固定 |
 | dynamic | `rpm_arc_fill` | 140 | 480 | 520 | 170 | 24 段量化；填充经过中央档位框时分左右裁剪 |
 | dynamic | pedal fills | 668 | 408 | 120 | 180 | 从底向上裁剪；油门蓝、制动红 |
-| dynamic | `g_meter_dot` | — | — | 32 | 32 | 中心 `(92,440)`，Gmax=1.5，半径=52，Y 轴取反 |
+| dynamic | `g_meter_dot` | — | — | 32 | 32 | 中心 `(92,300)`，Gmax=1.5，半径=52，Y 轴取反 |
 | dynamic | text/status | 见代码配置 | 见代码配置 | — | — | 等宽固定步进、AA coverage |
 
 静态层在启动时预合成。G2D/ION 路径首次遇到新的 surface 指针时复制一次 800×600 静态模板，后续帧只恢复 7 个动态区域，再直接在 caller-owned HudSurface 上绘制动态层；CPU compositor 路径使用常驻 static/dynamic buffer。PNG 不会在帧循环中打开、读取或解码。

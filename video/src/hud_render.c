@@ -561,32 +561,12 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
     if (state != NULL && state->drive_state == VEHICLE_DRIVE_STATE_READY) {
         flag_state = "READY";
     }
-    (void)snprintf(value, sizeof(value), "%02u / --",
-                   state != NULL && state->lap_valid ? state->lap_number : 0U);
-    if (state == NULL || !state->lap_valid) (void)snprintf(value, sizeof(value), "-- / --");
-    hud_png_draw_right_text(renderer, layer, 219, 29, value,
-                            renderer->layout.text_size_small, hud_png_white);
-    valid = state != NULL && state->lap_valid && isfinite(state->delta_time_s);
-    hud_png_format_value(value, sizeof(value), valid, "%+.2f",
-                         valid ? state->delta_time_s : 0.0, "");
-    hud_png_draw_right_text(renderer, layer, 219, 52, value,
-                            renderer->layout.text_size_small,
-                            !valid ? hud_png_muted :
-                            (state->delta_time_s < 0.0 ? hud_png_green :
-                             (state->delta_time_s > 0.0 ? hud_png_red :
-                              hud_png_white)));
-    hud_png_format_time(value, sizeof(value), state != NULL && state->lap_valid,
-                        state != NULL ? state->lap_time_s : 0.0);
-    hud_png_draw_right_text(renderer, layer, 219, 75, value,
-                            renderer->layout.text_size_small, hud_png_white);
-    hud_png_draw_right_text(renderer, layer, 219, 98, flag_state,
-                            renderer->layout.text_size_small, hud_png_cyan);
-
+    /* The left panel is the vehicle-status block. */
     valid = hud_png_valid(state, VEHICLE_STATE_VALID_HV_SOC_PERCENT,
                           state != NULL ? state->hv_soc_percent : 0.0);
     hud_png_format_value(value, sizeof(value), valid, "%.0f",
                          valid ? state->hv_soc_percent : 0.0, "%");
-    hud_png_draw_right_text(renderer, layer, 775, 28, value,
+    hud_png_draw_right_text(renderer, layer, 219, 28, value,
                             renderer->layout.text_size_value,
                             valid && state->hv_soc_percent < 20.0 ?
                             hud_png_red : hud_png_white);
@@ -594,18 +574,40 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
                           state != NULL ? state->hv_voltage_v : 0.0);
     hud_png_format_value(value, sizeof(value), valid, "%.0f",
                          valid ? state->hv_voltage_v : 0.0, "V");
-    hud_png_draw_right_text(renderer, layer, 775, 51, value,
+    hud_png_draw_right_text(renderer, layer, 219, 51, value,
                             renderer->layout.text_size_value, hud_png_white);
     valid = hud_png_valid(state, VEHICLE_STATE_VALID_LV_VOLTAGE_V,
                           state != NULL ? state->lv_voltage_v : 0.0);
     hud_png_format_value(value, sizeof(value), valid, "%.1f",
                          valid ? state->lv_voltage_v : 0.0, "V");
-    hud_png_draw_right_text(renderer, layer, 775, 74, value,
+    hud_png_draw_right_text(renderer, layer, 219, 74, value,
                             renderer->layout.text_size_value, hud_png_white);
     /* VehicleState currently has no motor-temperature field.  Keep the
      * supplied TEMP row honest instead of inventing a value. */
-    hud_png_draw_right_text(renderer, layer, 775, 97, "-- C",
+    hud_png_draw_right_text(renderer, layer, 219, 97, "-- C",
                             renderer->layout.text_size_value, hud_png_muted);
+
+    /* The right panel is the lap/timing block. */
+    (void)snprintf(value, sizeof(value), "%02u / --",
+                   state != NULL && state->lap_valid ? state->lap_number : 0U);
+    if (state == NULL || !state->lap_valid) (void)snprintf(value, sizeof(value), "-- / --");
+    hud_png_draw_right_text(renderer, layer, 775, 29, value,
+                            renderer->layout.text_size_small, hud_png_white);
+    valid = state != NULL && state->lap_valid && isfinite(state->delta_time_s);
+    hud_png_format_value(value, sizeof(value), valid, "%+.2f",
+                         valid ? state->delta_time_s : 0.0, "");
+    hud_png_draw_right_text(renderer, layer, 775, 52, value,
+                            renderer->layout.text_size_small,
+                            !valid ? hud_png_muted :
+                            (state->delta_time_s < 0.0 ? hud_png_green :
+                             (state->delta_time_s > 0.0 ? hud_png_red :
+                              hud_png_white)));
+    hud_png_format_time(value, sizeof(value), state != NULL && state->lap_valid,
+                        state != NULL ? state->lap_time_s : 0.0);
+    hud_png_draw_right_text(renderer, layer, 775, 75, value,
+                            renderer->layout.text_size_small, hud_png_white);
+    hud_png_draw_right_text(renderer, layer, 775, 98, flag_state,
+                            renderer->layout.text_size_small, hud_png_cyan);
 
     {
         const char *gear = state != NULL &&
