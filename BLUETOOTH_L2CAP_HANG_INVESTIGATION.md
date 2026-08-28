@@ -428,6 +428,59 @@ LapPro 目标在本次测试中不可达，旧二进制分别在约 40.6 s 和 8
 socket owner 修复已在板端生效的证据。需要先构建并部署包含新日志的二进制，再执行
 Bluetooth-only 和完整链路验证。
 
+### 2026-08-29 PNG HUD + 全链路一分钟录制
+
+在上一次录制测试后，外置 USB 存储已掉线，因此本次输出改写入内部 UDISK：
+`/mnt/UDISK/hud_full_lifecycle_1min_20260829/video.mp4`。测试启动了 Camera、Cedar、
+G2D、PNG HUD、硬件 JPEG Encoder、MP4 Writer、CAN loopback 和 LapPro 连接管理；
+测试命令为：
+
+```text
+./../t113_terminal.e4704c2 --video --camera /dev/video0 \
+  --video-record /mnt/UDISK/hud_full_lifecycle_1min_20260829/video.mp4 \
+  --video-seconds 60 --video-compositor g2d
+```
+
+PNG HUD 资源全部成功加载并进入合成路径：`loaded=15/15`、`failed=0`、
+`asset memory=3437760 bytes`、`ready=yes`。G2D 统计为 `healthy=yes`、
+`fatal=no`、`video_fault=no`、`recording_failed=no`，HUD 合成耗时约 2.39 ms，
+blend 耗时约 4.99 ms。
+
+```text
+binary: /mnt/UDISK/t113_terminal.e4704c2
+kernel: Linux kickpi 5.4.61 #1 SMP PREEMPT armv7l
+app_rc: 0
+video_bytes: 119073479
+frames: 1785
+duration: 59.505244 s
+fps: 29.997356
+jpeg_markers: 1785/1785
+tail: moov
+pts_monotonic: yes
+camera/lost/decoded/processed/encoded/enqueued/written: 1785/0/1785/1785/1785/1785/1785
+g2d: healthy=yes fatal=no video_fault=no recording_failed=no
+writer: full=0 dropped=0 failed=no errors=0
+max_rss: 12876 KB
+```
+
+MP4 检查通过：首、中、尾帧均可读取，帧间隔平均约 33.336 ms，最大约 39.556 ms，
+文件尾为 `moov`。应用退出 `rc=0`，测试结束时 SSH 仍在线，未残留应用或 CAN 生成器
+进程。测试区间的 UART/dmesg 增量没有新增 RCU stall、soft lockup、BUG、Oops、panic、
+Bluetooth/L2CAP、HCI 或 RTL 关键告警；heartbeat 未冻结。
+
+CAN loopback 期间出现 error frame 统计（CAN0=44、CAN1=700），但没有 bus-off，
+接口仍可用。这属于测试配置产生的噪声，不能作为 Bluetooth/L2CAP 故障证据。
+
+LapPro 目标仍返回 `L2CAP connect failed: Connection refused`，所以本次没有建立
+notification 数据连接，也没有覆盖成功连接后的 disconnect/reconnect。测试使用的是
+提交 `a4c3765` 之前的旧二进制，不能证明新的 socket owner 修复已部署。目录中虽然
+放置了 1 个 TTF 文件，但旧二进制没有输出 TTF 使用日志；因此本次确认的是“PNG HUD
+全链路录制通过”，不是动态 TTF 路径的独立验证。
+
+板端测试目录同时保留了 `app.log`、`kernel.before`、`kernel.after`、资源清单和
+`meta.before/meta.after`，便于后续复核。测试结束后 `awlink0/1` 已恢复 DOWN；内部
+UDISK 使用率约 95%（余量约 11.4 MB），后续部署前应先转移该 119 MB MP4 和日志。
+
 ## 9. 修复后的板端执行顺序
 
 所有测试都必须接 UART，并在测试开始前执行 `dmesg -n 8`：
