@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 static void assert_layer_bounds(const HudLayer *layer)
@@ -113,6 +114,13 @@ static size_t count_alpha_rect(const HudLayer *layer, uint32_t x, uint32_t y,
     return count;
 }
 
+static void wait_for_hud_text_refresh(void)
+{
+    struct timespec delay = { 0, 120000000L };
+
+    assert(nanosleep(&delay, NULL) == 0);
+}
+
 static VehicleState make_state(double rpm, double throttle, double brake,
                                double lateral_g, double longitudinal_g)
 {
@@ -152,18 +160,25 @@ static void test_png_renderer(const char *asset_dir,
                               HudPixelFormat format)
 {
     HudRenderer renderer;
+    HudRenderer reference_renderer;
     HudSurface surface;
+    HudSurface reference_surface;
     const HudLayer *dynamic;
     VehicleState states[4];
     uint8_t *pixels;
+    uint8_t *reference_pixels;
     size_t index;
+    uint32_t row;
 
     memset(&renderer, 0, sizeof(renderer));
+    memset(&reference_renderer, 0, sizeof(reference_renderer));
     memset(&surface, 0, sizeof(surface));
+    memset(&reference_surface, 0, sizeof(reference_surface));
     pixels = calloc(1U, HUD_BASE_WIDTH * HUD_BASE_HEIGHT * 4U);
     assert(pixels != NULL);
     assert(hud_renderer_init_style(&renderer, HUD_BASE_WIDTH, HUD_BASE_HEIGHT,
-                                   HUD_STYLE_PNG, asset_dir, format) == 0);
+                                   HUD_STYLE_PNG, asset_dir,
+                                   HUD_DEFAULT_FONT_PATH, format) == 0);
     assert(renderer.style == HUD_STYLE_PNG);
     assert(hud_renderer_png_assets_ready(&renderer));
     assert(hud_renderer_asset_memory(&renderer) > 0U);
@@ -203,6 +218,41 @@ static void test_png_renderer(const char *asset_dir,
         assert_layer_bounds(hud_renderer_static_layer(&renderer));
         assert(layer->pixels == pixels);
     }
+
+    /* Reusing the native external surface must clear the RPM text below the
+     * gear frame as well as the gear value itself.  Render a long value first
+     * and a short value second, then compare against a fresh renderer. */
+    if (format == HUD_PIXEL_FORMAT_ARGB8888) {
+        VehicleState long_rpm = make_state(9999.0, 0.0, 0.0, 0.0, 0.0);
+        VehicleState short_rpm = make_state(1.0, 0.0, 0.0, 0.0, 0.0);
+
+        wait_for_hud_text_refresh();
+        assert(hud_renderer_render_frame_to_surface(&renderer, &long_rpm,
+                                                    true, &surface, NULL) != NULL);
+        wait_for_hud_text_refresh();
+        assert(hud_renderer_render_frame_to_surface(&renderer, &short_rpm,
+                                                    true, &surface, NULL) != NULL);
+        reference_pixels = calloc(1U, HUD_BASE_WIDTH * HUD_BASE_HEIGHT * 4U);
+        assert(reference_pixels != NULL);
+        reference_surface = surface;
+        reference_surface.pixels = reference_pixels;
+        assert(hud_renderer_init_style(&reference_renderer,
+                                       HUD_BASE_WIDTH, HUD_BASE_HEIGHT,
+                                       HUD_STYLE_PNG, asset_dir,
+                                       HUD_DEFAULT_FONT_PATH, format) == 0);
+        assert(hud_renderer_render_frame_to_surface(&reference_renderer,
+                                                    &short_rpm, true,
+                                                    &reference_surface,
+                                                    NULL) != NULL);
+        for (row = 0U; row < HUD_BASE_HEIGHT; ++row) {
+            assert(memcmp(pixels + (size_t)row * surface.stride_bytes,
+                          reference_pixels + (size_t)row *
+                              reference_surface.stride_bytes,
+                          HUD_BASE_WIDTH * 4U) == 0);
+        }
+        hud_renderer_close(&reference_renderer);
+        free(reference_pixels);
+    }
     hud_renderer_close(&renderer);
     hud_renderer_close(&renderer);
     free(pixels);
@@ -219,7 +269,8 @@ static void test_missing_assets(const char *asset_dir)
     assert(pixels != NULL);
     memset(pixels, 0, 800U * 600U * 4U);
     assert(hud_renderer_init_style(&renderer, 800U, 600U, HUD_STYLE_PNG,
-                                   asset_dir, HUD_PIXEL_FORMAT_RGBA8888) == 0);
+                                   asset_dir, HUD_DEFAULT_FONT_PATH,
+                                   HUD_PIXEL_FORMAT_RGBA8888) == 0);
     assert(!hud_renderer_png_assets_ready(&renderer));
     surface.pixels = pixels;
     surface.width = 800U;
@@ -271,7 +322,7 @@ static void test_single_missing_asset(const char *asset_dir)
     pixels = calloc(1U, 800U * 600U * 4U);
     assert(pixels != NULL);
     assert(hud_renderer_init_style(&renderer, 800U, 600U, HUD_STYLE_PNG,
-                                   temporary_dir,
+                                   temporary_dir, HUD_DEFAULT_FONT_PATH,
                                    HUD_PIXEL_FORMAT_RGBA8888) == 0);
     assert(!hud_renderer_png_assets_ready(&renderer));
     surface.pixels = pixels;

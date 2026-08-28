@@ -320,6 +320,7 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
                                         pipeline->config.height,
                                         pipeline->config.hud_style,
                                         pipeline->config.hud_asset_path,
+                                        pipeline->config.hud_font_path,
                                         HUD_PIXEL_FORMAT_RGBA8888) < 0) {
                 LOG_ERROR("Video: CPU compositor fallback HUD allocation failed");
                 video_pipeline_note_application_drop(pipeline);
@@ -1046,6 +1047,7 @@ int video_pipeline_init(VideoPipeline *pipeline,
         hud_renderer_init_style(
             &pipeline->hud, config->width, config->height, config->hud_style,
             config->hud_asset_path,
+            config->hud_font_path,
             video_compositor_active_mode(&pipeline->compositor) ==
                 VIDEO_COMPOSITOR_MODE_G2D ? HUD_PIXEL_FORMAT_ARGB8888 :
                                              HUD_PIXEL_FORMAT_RGBA8888) < 0) {

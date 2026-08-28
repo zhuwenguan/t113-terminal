@@ -9,8 +9,8 @@
 
 #include <race/vehicle_state.h>
 
-#define VEHICLE_STATE_SNAPSHOT_HZ 20U
-#define VEHICLE_STATE_SNAPSHOT_PERIOD_US 50000ULL
+#define VEHICLE_STATE_SNAPSHOT_HZ 10U
+#define VEHICLE_STATE_SNAPSHOT_PERIOD_US 100000ULL
 
 typedef bool (*VehicleStateSnapshotProvider)(uint64_t timestamp_us,
                                               VehicleState *state,

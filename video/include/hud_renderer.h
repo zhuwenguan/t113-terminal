@@ -7,6 +7,7 @@
 #include <race/vehicle_state.h>
 #include "hud_assets.h"
 #include "hud_layout.h"
+#include "hud_resources.h"
 #include "hud_text.h"
 #include "video_frame.h"
 
@@ -84,6 +85,12 @@ typedef struct {
     HudAssets assets;
     HudTextAtlas text_atlas;
     HudLayout layout;
+    /* Numeric/label text is held for the human-readable HUD refresh rate;
+     * graphical instruments still use the current video-frame state. */
+    VehicleState text_state;
+    uint64_t text_state_last_refresh_us;
+    bool text_state_initialized;
+    bool text_state_valid;
     double filtered_lateral_g;
     double filtered_longitudinal_g;
     bool filtered_g_initialized;
@@ -99,6 +106,7 @@ int hud_renderer_init_external(HudRenderer *renderer, uint32_t width,
 int hud_renderer_init_style(HudRenderer *renderer, uint32_t width,
                             uint32_t height, HudStyle style,
                             const char *asset_dir,
+                            const char *font_path,
                             HudPixelFormat surface_format);
 const char *hud_style_name(HudStyle style);
 bool hud_style_parse(const char *value, HudStyle *style);

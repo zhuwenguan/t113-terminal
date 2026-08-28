@@ -92,7 +92,8 @@ static int benchmark_style(const char *asset_dir, HudStyle style,
         return -1;
     }
     if (hud_renderer_init_style(&renderer, HUD_BASE_WIDTH, HUD_BASE_HEIGHT,
-                                style, asset_dir, HUD_PIXEL_FORMAT_ARGB8888) < 0) {
+                                style, asset_dir, HUD_DEFAULT_FONT_PATH,
+                                HUD_PIXEL_FORMAT_ARGB8888) < 0) {
         fprintf(stderr, "benchmark: cannot initialize %s HUD\n",
                 hud_style_name(style));
         free(samples);

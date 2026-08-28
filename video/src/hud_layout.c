@@ -13,7 +13,11 @@ void hud_layout_default(HudLayout *layout)
      * canvas down keeps that arc close to the bottom edge while leaving a
      * clear gap for the gear frame above it. */
     layout->rpm_arc = (HudRect){ 140, 480, 520U, 170U };
-    layout->center_gear = (HudRect){ 320, 420, 160U, 110U };
+    /* Keep the gear/RPM box on the same 12 px left margin as the other
+     * left-side panels.  The speed plate occupies the open center-right gap
+     * just above the RPM strip. */
+    layout->speed_plate = (HudRect){ 320, 420, 160U, 60U };
+    layout->center_gear = (HudRect){ 12, 420, 160U, 110U };
     /* Keep the G meter on the left, centered vertically in the 600 px frame. */
     layout->g_meter = (HudRect){ 12, 220, 160U, 160U };
     layout->pedal_bar = (HudRect){ 668, 408, 120U, 180U };
@@ -32,7 +36,10 @@ void hud_layout_default(HudLayout *layout)
     layout->pedal_segments = 10U;
     layout->brake_pressure_max = 100.0;
     layout->brake_input_is_pressure = false;
-    layout->text_size_small = 1;
-    layout->text_size_value = 2;
-    layout->text_size_gear = 8;
+    /* Real 800x600 pixel sizes for the single hud.ttf face. */
+    layout->text_size_small = 16;
+    layout->text_size_value = 24;
+    layout->text_size_speed = 42;
+    layout->text_size_rpm = 20;
+    layout->text_size_gear = 72;
 }

@@ -84,7 +84,8 @@ int main(int argc, char **argv)
     memset(&renderer, 0, sizeof(renderer));
     memset(&frame, 0, sizeof(frame));
     if (hud_renderer_init_style(&renderer, 800U, 600U, HUD_STYLE_PNG,
-                                asset_dir, HUD_PIXEL_FORMAT_RGBA8888) < 0 ||
+                                asset_dir, HUD_DEFAULT_FONT_PATH,
+                                HUD_PIXEL_FORMAT_RGBA8888) < 0 ||
         video_frame_init(&frame, 800U, 600U) < 0) {
         hud_renderer_close(&renderer);
         return EXIT_FAILURE;

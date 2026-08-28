@@ -2,6 +2,8 @@
 
 ## 结果摘要
 
+本文保留 PNG HUD V3 资源接入和此前板端录像的历史记录；当前 TTF 字体、glyph cache、对齐和最新性能验收以 [`HUD_TTF_INTEGRATION.md`](HUD_TTF_INTEGRATION.md) 为准。
+
 PNG HUD 已接入现有 `VehicleState -> HUD -> G2D -> 摄像头/编码/Writer` 链路。默认样式为 `png`，旧实现保留为 `legacy`，也支持 `none`。
 
 启动参数：
@@ -21,7 +23,7 @@ PNG HUD 已接入现有 `VehicleState -> HUD -> G2D -> 摄像头/编码/Writer` 
 - `video/src/hud_blend.c`: 边界裁剪、straight-alpha over、BGRA/ARGB 读写、源 alpha bbox 加速。
 - `video/src/hud_layout.c`: 800×600 布局和 RPM/G/踏板/文字配置。
 - `video/src/hud_render.c`: 业务状态格式化和动态层绘制；不读文件、不解码、不分配每帧内存。
-- `video/src/hud_text.c`: 启动阶段生成固定宽度 glyph coverage atlas，动态帧只组合缓存字形。
+- `video/src/hud_text.c`: 启动阶段加载单一 `assets/fonts/hud.ttf`，预热 FreeType gray glyph cache；动态帧只查找缓存并进行 coverage alpha blend。
 - `tests/test_hud_png.c`: 资源尺寸、单张缺图降级、通道转换、alpha 混合、重复 close 测试。
 - `tools/hud_png_snapshot.c`: 固定状态截图生成。
 - `tools/hud_png_benchmark.c`: legacy/PNG 热路径基准。
@@ -42,7 +44,7 @@ PNG HUD 已接入现有 `VehicleState -> HUD -> G2D -> 摄像头/编码/Writer` 
 | dynamic | `rpm_arc_fill` | 140 | 480 | 520 | 170 | 24 段量化；填充经过中央档位框时分左右裁剪 |
 | dynamic | pedal fills | 668 | 408 | 120 | 180 | 从底向上裁剪；油门蓝、制动红 |
 | dynamic | `g_meter_dot` | — | — | 32 | 32 | 中心 `(92,300)`，Gmax=1.5，半径=52，Y 轴取反 |
-| dynamic | text/status | 见代码配置 | 见代码配置 | — | — | 等宽固定步进、AA coverage |
+| dynamic | text/status | 见代码配置 | 见代码配置 | — | — | 单一 `hud.ttf`、FreeType metrics、AA coverage |
 
 静态层在启动时预合成。G2D/ION 路径首次遇到新的 surface 指针时复制一次 800×600 静态模板，后续帧只恢复 7 个动态区域，再直接在 caller-owned HudSurface 上绘制动态层；CPU compositor 路径使用常驻 static/dynamic buffer。PNG 不会在帧循环中打开、读取或解码。
 
@@ -85,10 +87,10 @@ V3 warning sprite sheet 的实际单元为：`TEMPERATURE=0`、`BATTERY=1`、`FL
 当前 15 张资源解码后的像素常驻内存为 **3,437,760 bytes**（4 BPP）：
 
 - PNG assets: 3,437,760 bytes
-- 94 个 ASCII/标点 glyph 的 8× coverage atlas: 210,560 bytes
+- FreeType 运行时 glyph cache：按 pixel size + Unicode codepoint 缓存 bitmap、pitch、bearing、advance；不生成内置字体数组。当前 warm cache 约 136,053 bytes。
 - G2D static host template: 1,920,000 bytes
-- G2D PNG HUD 自有常驻合计: **5,568,320 bytes**
-- CPU compositor 另有 dynamic buffer 时: **7,488,320 bytes**
+- G2D PNG HUD 自有常驻合计: **5,493,813 bytes**（以板端日志为准）
+- CPU compositor 另有 dynamic buffer 时：约 **7.41 MB**
 
 这些数值已接入 `VideoPipelineStats.memory_bytes` 和启动日志；ION/G2D surface 本身仍由原有 compositor 统计和释放。
 
@@ -113,7 +115,7 @@ V3 warning sprite sheet 的实际单元为：`TEMPERATURE=0`、`BATTERY=1`、`FL
 
 ```text
 ctest --test-dir build-host --output-on-failure
-15/15 passed
+16/16 passed
 ```
 
 `test_hud_png` 覆盖 RGBA8888 和 ARGB8888 两种 surface、每张 PNG 的尺寸/通道转换、缺失目录降级和重复 close。ARMv7 板端同一测试也通过，缺失资源日志明确列出 15 个文件。
@@ -142,4 +144,4 @@ png:    wall_avg 2.232 ms, p95 2.906 ms, p99 3.110 ms
 - 多次开始/停止：本轮已完成 10 秒、60 秒两次独立启动和一次 U 盘 10 秒 smoke test；本次中止暴露的 core `video-only` TERM 收尾问题已补上信号处理，后续停止会走 `video_pipeline_stop()` 和 Writer finalize。
 - 完整的 APP 退出/重启及所有 dma-buf/ION/G2D clock 基线核对需长测结束后落盘；在此之前不标记为通过。
 
-已知限制：`VehicleState` 当前没有电机温度字段，右上 TEMP 显示 `-- C`，没有伪造数据；制动压力单位尚未由车辆协议确认，因此默认按百分比，`brake_pressure_max` 已配置化；内置 AA atlas 是无 freetype 依赖的固定宽度嵌入字形，若产品需要更高字形覆盖度，下一步可替换为经许可的嵌入字体 atlas；本次长测停止前 U 盘写入出现间歇性约 1.35 秒峰值，Writer 未触发 full/drop，但导致 sidecar index 末端有缓存差异，恢复工具按已提交索引生成可播放文件。
+已知限制：`VehicleState` 当前没有电机温度字段，右上 TEMP 显示 `-- C`，没有伪造数据；制动压力单位尚未由车辆协议确认，因此默认按百分比，`brake_pressure_max` 已配置化；正式 PNG HUD 的动态文字已统一使用 FreeType TTF，旧固定宽度 atlas 不再存在于 `video/src/hud_text.c`；`HUD_STYLE_LEGACY` 仍作为显式 A/B/debug 路径保留；本次长测停止前 U 盘写入出现间歇性约 1.35 秒峰值，Writer 未触发 full/drop，但导致 sidecar index 末端有缓存差异，恢复工具按已提交索引生成可播放文件。

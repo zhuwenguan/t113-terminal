@@ -17,6 +17,18 @@ static const HudTextColor hud_png_red = { 255U, 66U, 72U, 255U };
 static const HudTextColor hud_png_green = { 64U, 230U, 122U, 255U };
 static const HudTextColor hud_png_yellow = { 255U, 210U, 64U, 255U };
 
+/* Layout anchors for dynamic text.  These are top anchors; the renderer turns
+ * them into FreeType baselines using the actual face metrics. */
+#define HUD_STATUS_TEXT_X 278
+#define HUD_STATUS_TEXT_Y 16
+#define HUD_TOP_PANEL_SOC_Y 22
+#define HUD_TOP_PANEL_HV_Y 46
+#define HUD_TOP_PANEL_TEMP_Y 100
+#define HUD_RIGHT_PANEL_LAP_Y 18
+#define HUD_RIGHT_PANEL_DELTA_Y 48
+#define HUD_RIGHT_PANEL_TIMER_Y 78
+#define HUD_TEXT_REFRESH_PERIOD_US 100000ULL
+
 typedef enum {
     /* V3 sprite order: temperature, battery, flag, REC, GPS, connection. */
     HUD_ICON_TEMPERATURE = 0,
@@ -34,6 +46,30 @@ static uint64_t hud_png_now_us(void)
     if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0U;
     return (uint64_t)now.tv_sec * 1000000ULL +
            (uint64_t)now.tv_nsec / 1000ULL;
+}
+
+static const VehicleState *hud_png_latched_text_state(
+    HudRenderer *renderer, const VehicleState *state)
+{
+    uint64_t now_us;
+
+    if (renderer == NULL) return NULL;
+    now_us = hud_png_now_us();
+    if (!renderer->text_state_initialized ||
+        (now_us >= renderer->text_state_last_refresh_us &&
+         now_us - renderer->text_state_last_refresh_us >=
+             HUD_TEXT_REFRESH_PERIOD_US)) {
+        if (state != NULL) {
+            renderer->text_state = *state;
+            renderer->text_state_valid = true;
+        } else {
+            memset(&renderer->text_state, 0, sizeof(renderer->text_state));
+            renderer->text_state_valid = false;
+        }
+        renderer->text_state_last_refresh_us = now_us;
+        renderer->text_state_initialized = true;
+    }
+    return renderer->text_state_valid ? &renderer->text_state : NULL;
 }
 
 static int hud_png_scaled_x(const HudRenderer *renderer, int value)
@@ -101,6 +137,7 @@ static void hud_png_set_static_regions(const HudRenderer *renderer,
         renderer->layout.left_top_panel,
         renderer->layout.right_top_panel,
         renderer->layout.rpm_arc,
+        renderer->layout.speed_plate,
         renderer->layout.center_gear,
         renderer->layout.g_meter,
         renderer->layout.pedal_bar
@@ -116,11 +153,16 @@ static void hud_png_set_dynamic_regions(const HudRenderer *renderer,
     HudRect regions[] = {
         /* Only restore pixels that can contain a changing glyph or fill.
          * The panel and instrument backgrounds remain in static_layer. */
-        { 155, 24, 77U, 88U },
-        { 708, 24, 72U, 90U },
+        /* Cover the complete top-panel value band.  LAP now starts higher at
+         * y=15 and TEMP extends lower at y=100; keep FreeType bearings inside
+         * the restore region so neither change can leave a stale glyph. */
+        { 145, 10, 90U, 120U },
+        { 700, 10, 90U, 120U },
         { renderer->layout.rpm_arc.x,
-          renderer->layout.rpm_arc.y + 60,
-          renderer->layout.rpm_arc.width, 35U },
+          renderer->layout.rpm_arc.y + 55,
+          renderer->layout.rpm_arc.width, 50U },
+        { renderer->layout.speed_plate.x, renderer->layout.speed_plate.y,
+          renderer->layout.speed_plate.width, renderer->layout.speed_plate.height },
         { renderer->layout.g_meter.x + 12,
           renderer->layout.g_meter.y + 12,
           renderer->layout.g_meter.width - 24U,
@@ -128,7 +170,17 @@ static void hud_png_set_dynamic_regions(const HudRenderer *renderer,
         { renderer->layout.center_gear.x + 16,
           renderer->layout.center_gear.y + 10,
           renderer->layout.center_gear.width - 10U, 64U },
-        { 686, 448, 58U, 140U },
+        /* The RPM value is drawn below the gear value at y + 76.  It was
+         * outside the old restore rectangle, so shorter/new glyphs were
+         * composited over the previous frame and produced text ghosts. */
+        { renderer->layout.center_gear.x + 16,
+          renderer->layout.center_gear.y + 70,
+          renderer->layout.center_gear.width - 10U, 36U },
+        /* The two pedal fills have alpha bounds x=16..35/50..69 and
+         * y=36..157 inside the 120x180 canvas at (668,408).  Include the
+         * full bounds so a previous full bar cannot leave its top/left edge
+         * behind when the next state is zero. */
+        { 682, 440, 60U, 130U },
         { 246, 12, 100U, 28U }
     };
 
@@ -194,12 +246,18 @@ static bool hud_png_render_static(HudRenderer *renderer)
     memset(layer->pixels, 0, (size_t)layer->stride * layer->height);
     (void)hud_png_blit(renderer, layer, HUD_ASSET_STATIC_FRAME,
                        renderer->layout.static_frame);
-    (void)hud_png_blit(renderer, layer, HUD_ASSET_LEFT_TOP_PANEL,
-                       renderer->layout.left_top_panel);
+    /* The supplied artwork names describe their original canvas placement:
+     * left_top_panel.png contains LAP/DELTA/TIMER/FLAG, while
+     * right_top_panel.png contains SOC/HV/LV/TEMP.  The production semantic
+     * layout is the opposite, so place the assets on the opposite sides. */
     (void)hud_png_blit(renderer, layer, HUD_ASSET_RIGHT_TOP_PANEL,
+                       renderer->layout.left_top_panel);
+    (void)hud_png_blit(renderer, layer, HUD_ASSET_LEFT_TOP_PANEL,
                        renderer->layout.right_top_panel);
     (void)hud_png_blit(renderer, layer, HUD_ASSET_RPM_ARC_BG,
                        renderer->layout.rpm_arc);
+    (void)hud_png_blit(renderer, layer, HUD_ASSET_NUMBER_HIGHLIGHT_PLATE,
+                       renderer->layout.speed_plate);
     (void)hud_png_blit(renderer, layer, HUD_ASSET_CENTER_GEAR_FRAME,
                        renderer->layout.center_gear);
     (void)hud_png_blit(renderer, layer, HUD_ASSET_G_METER_BG,
@@ -275,29 +333,61 @@ static void hud_png_format_value(char *buffer, size_t size, bool valid,
     }
 }
 
-static void hud_png_draw_text(const HudRenderer *renderer, HudLayer *layer,
+static int hud_png_text_baseline(HudRenderer *renderer, int y, const char *text,
+                                 uint32_t pixel_size)
+{
+    HudTextMetrics metrics;
+
+    if (text == NULL || !hud_text_measure(&renderer->text_atlas, text,
+                                          pixel_size, &metrics)) {
+        return hud_png_scaled_y(renderer, y);
+    }
+    /* Layout coordinates remain top anchors, while the font API receives a
+     * baseline.  This is where FreeType's ascender is intentionally applied;
+     * all glyphs in a row therefore share one baseline. */
+    return hud_png_scaled_y(renderer, y) + metrics.ascent;
+}
+
+static void hud_png_draw_text(HudRenderer *renderer, HudLayer *layer,
                               int x, int y, const char *text, int size,
                               HudTextColor color)
 {
-    if (size > 0) {
-        (void)hud_text_draw(&renderer->text_atlas, layer,
-                            hud_png_scaled_x(renderer, x),
-                            hud_png_scaled_y(renderer, y), text,
-                            hud_png_scaled_size(renderer, size), color);
-    }
+    uint32_t pixel_size;
+
+    if (size <= 0) return;
+    pixel_size = hud_png_scaled_size(renderer, size);
+    (void)hud_text_draw(&renderer->text_atlas, layer,
+                        hud_png_scaled_x(renderer, x),
+                        hud_png_text_baseline(renderer, y, text, pixel_size),
+                        pixel_size, color, HUD_ALIGN_LEFT, text);
 }
 
-static void hud_png_draw_right_text(const HudRenderer *renderer, HudLayer *layer,
+static void hud_png_draw_right_text(HudRenderer *renderer, HudLayer *layer,
                                     int right, int y, const char *text,
                                     int size, HudTextColor color)
 {
-    uint32_t width = hud_text_width(&renderer->text_atlas, text,
-                                    hud_png_scaled_size(renderer, size));
-    int x = hud_png_scaled_x(renderer, right) - (int)width;
+    uint32_t pixel_size;
 
-    (void)hud_text_draw(&renderer->text_atlas, layer, x,
-                        hud_png_scaled_y(renderer, y), text,
-                        hud_png_scaled_size(renderer, size), color);
+    if (size <= 0) return;
+    pixel_size = hud_png_scaled_size(renderer, size);
+    (void)hud_text_draw(&renderer->text_atlas, layer,
+                        hud_png_scaled_x(renderer, right),
+                        hud_png_text_baseline(renderer, y, text, pixel_size),
+                        pixel_size, color, HUD_ALIGN_RIGHT, text);
+}
+
+static void hud_png_draw_center_text(HudRenderer *renderer, HudLayer *layer,
+                                     int center, int y, const char *text,
+                                     int size, HudTextColor color)
+{
+    uint32_t pixel_size;
+
+    if (size <= 0) return;
+    pixel_size = hud_png_scaled_size(renderer, size);
+    (void)hud_text_draw(&renderer->text_atlas, layer,
+                        hud_png_scaled_x(renderer, center),
+                        hud_png_text_baseline(renderer, y, text, pixel_size),
+                        pixel_size, color, HUD_ALIGN_CENTER, text);
 }
 
 static void hud_png_draw_icon(const HudRenderer *renderer, HudLayer *layer,
@@ -333,6 +423,10 @@ static void hud_png_draw_rpm(const HudRenderer *renderer, HudLayer *layer,
     const HudRect *gear = &renderer->layout.center_gear;
     uint32_t gear_left;
     uint32_t gear_right;
+    int gear_start;
+    int gear_end;
+    int rpm_start;
+    int rpm_end;
     bool valid = hud_png_valid(state, VEHICLE_STATE_VALID_MOTOR_RPM,
                                state != NULL ? state->motor_rpm : 0.0);
 
@@ -352,10 +446,24 @@ static void hud_png_draw_rpm(const HudRenderer *renderer, HudLayer *layer,
     /* The supplied RPM fill shares the arc canvas with the gear frame. Keep
      * the center frame as a mask so a full RPM bar cannot paint over the
      * large gear value. */
-    gear_left = gear->x > renderer->layout.rpm_arc.x ?
-                (uint32_t)(gear->x - renderer->layout.rpm_arc.x) : 0U;
-    gear_right = gear_left + gear->width;
-    if (visible_width <= gear_left) {
+    /* Mask only the intersection with the gear frame.  The gear frame is
+     * normally inside the RPM canvas, but the production layout may place it
+     * to the left with only a small overlap at the canvas boundary. */
+    gear_start = gear->x;
+    gear_end = gear_start + (int)gear->width;
+    rpm_start = renderer->layout.rpm_arc.x;
+    rpm_end = rpm_start + (int)renderer->layout.rpm_arc.width;
+    if (gear_start < rpm_end && gear_end > rpm_start) {
+        gear_left = gear_start > rpm_start ?
+                    (uint32_t)(gear_start - rpm_start) : 0U;
+        gear_right = gear_end < rpm_end ?
+                     (uint32_t)(gear_end - rpm_start) :
+                     (uint32_t)(rpm_end - rpm_start);
+    } else {
+        gear_left = 0U;
+        gear_right = 0U;
+    }
+    if (gear_right == 0U || visible_width <= gear_left) {
         (void)hud_png_blit_region(renderer, layer, HUD_ASSET_RPM_ARC_FILL,
                                   (HudRect){ 0, 0, visible_width,
                                              renderer->layout.rpm_arc.height },
@@ -521,7 +629,7 @@ static void hud_png_draw_g(HudRenderer *renderer, HudLayer *layer,
     }
 }
 
-static void hud_png_draw_status(const HudRenderer *renderer, HudLayer *layer,
+static void hud_png_draw_status(HudRenderer *renderer, HudLayer *layer,
                                 const VehicleState *state, bool recording,
                                 uint64_t now_us)
 {
@@ -533,19 +641,22 @@ static void hud_png_draw_status(const HudRenderer *renderer, HudLayer *layer,
         (void)hud_png_blit(renderer, layer, HUD_ASSET_STATUS_PILL,
                            renderer->layout.status_pill);
         hud_png_draw_icon(renderer, layer, HUD_ICON_RECORDING, 251, 14, 24);
-        hud_png_draw_text(renderer, layer, 278, 22, "REC",
+        hud_png_draw_text(renderer, layer, HUD_STATUS_TEXT_X,
+                          HUD_STATUS_TEXT_Y, "REC",
                           renderer->layout.text_size_small, hud_png_red);
     } else if (!gps_ok && ((now_us / 500000ULL) & 1ULL) == 0ULL) {
         (void)hud_png_blit(renderer, layer, HUD_ASSET_STATUS_PILL,
                            renderer->layout.status_pill);
         hud_png_draw_icon(renderer, layer, HUD_ICON_GPS, 251, 14, 24);
-        hud_png_draw_text(renderer, layer, 278, 22, "GPS",
+        hud_png_draw_text(renderer, layer, HUD_STATUS_TEXT_X,
+                          HUD_STATUS_TEXT_Y, "GPS",
                           renderer->layout.text_size_small, hud_png_yellow);
     } else if (!can_ok) {
         (void)hud_png_blit(renderer, layer, HUD_ASSET_STATUS_PILL,
                            renderer->layout.status_pill);
         hud_png_draw_icon(renderer, layer, HUD_ICON_CONNECTION, 251, 14, 24);
-        hud_png_draw_text(renderer, layer, 278, 22, "BMS",
+        hud_png_draw_text(renderer, layer, HUD_STATUS_TEXT_X,
+                          HUD_STATUS_TEXT_Y, "BMS",
                           renderer->layout.text_size_small, hud_png_yellow);
     }
 }
@@ -566,7 +677,7 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
                           state != NULL ? state->hv_soc_percent : 0.0);
     hud_png_format_value(value, sizeof(value), valid, "%.0f",
                          valid ? state->hv_soc_percent : 0.0, "%");
-    hud_png_draw_right_text(renderer, layer, 219, 28, value,
+    hud_png_draw_right_text(renderer, layer, 219, HUD_TOP_PANEL_SOC_Y, value,
                             renderer->layout.text_size_value,
                             valid && state->hv_soc_percent < 20.0 ?
                             hud_png_red : hud_png_white);
@@ -574,7 +685,7 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
                           state != NULL ? state->hv_voltage_v : 0.0);
     hud_png_format_value(value, sizeof(value), valid, "%.0f",
                          valid ? state->hv_voltage_v : 0.0, "V");
-    hud_png_draw_right_text(renderer, layer, 219, 51, value,
+    hud_png_draw_right_text(renderer, layer, 219, HUD_TOP_PANEL_HV_Y, value,
                             renderer->layout.text_size_value, hud_png_white);
     valid = hud_png_valid(state, VEHICLE_STATE_VALID_LV_VOLTAGE_V,
                           state != NULL ? state->lv_voltage_v : 0.0);
@@ -584,41 +695,79 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
                             renderer->layout.text_size_value, hud_png_white);
     /* VehicleState currently has no motor-temperature field.  Keep the
      * supplied TEMP row honest instead of inventing a value. */
-    hud_png_draw_right_text(renderer, layer, 219, 97, "-- C",
+    hud_png_draw_right_text(renderer, layer, 219, HUD_TOP_PANEL_TEMP_Y, "-- C",
                             renderer->layout.text_size_value, hud_png_muted);
 
-    /* The right panel is the lap/timing block. */
-    (void)snprintf(value, sizeof(value), "%02u / --",
-                   state != NULL && state->lap_valid ? state->lap_number : 0U);
-    if (state == NULL || !state->lap_valid) (void)snprintf(value, sizeof(value), "-- / --");
-    hud_png_draw_right_text(renderer, layer, 775, 29, value,
+    /* The right panel is a direct view of VehicleState.  The HUD does not
+     * decide whether lap data is trustworthy or complete; that policy belongs
+     * to the state producer.  VehicleState currently exposes one lap number,
+     * so do not invent a total-laps suffix here. */
+    if (state != NULL) {
+        (void)snprintf(value, sizeof(value), "%02u", state->lap_number);
+    } else {
+        (void)snprintf(value, sizeof(value), "--");
+    }
+    hud_png_draw_right_text(renderer, layer, 775, HUD_RIGHT_PANEL_LAP_Y, value,
                             renderer->layout.text_size_small, hud_png_white);
-    valid = state != NULL && state->lap_valid && isfinite(state->delta_time_s);
+    valid = state != NULL && isfinite(state->delta_time_s);
     hud_png_format_value(value, sizeof(value), valid, "%+.2f",
                          valid ? state->delta_time_s : 0.0, "");
-    hud_png_draw_right_text(renderer, layer, 775, 52, value,
+    hud_png_draw_right_text(renderer, layer, 775, HUD_RIGHT_PANEL_DELTA_Y, value,
                             renderer->layout.text_size_small,
                             !valid ? hud_png_muted :
                             (state->delta_time_s < 0.0 ? hud_png_green :
                              (state->delta_time_s > 0.0 ? hud_png_red :
                               hud_png_white)));
-    hud_png_format_time(value, sizeof(value), state != NULL && state->lap_valid,
+    hud_png_format_time(value, sizeof(value), state != NULL,
                         state != NULL ? state->lap_time_s : 0.0);
-    hud_png_draw_right_text(renderer, layer, 775, 75, value,
+    hud_png_draw_right_text(renderer, layer, 775, HUD_RIGHT_PANEL_TIMER_Y, value,
                             renderer->layout.text_size_small, hud_png_white);
     hud_png_draw_right_text(renderer, layer, 775, 98, flag_state,
                             renderer->layout.text_size_small, hud_png_cyan);
+
+    /* The number plate is deliberately text-only artwork.  Both the primary
+     * speed and its unit are rendered from hud.ttf so no numeric label is
+     * baked into the PNG layer. */
+    valid = hud_png_valid(state, VEHICLE_STATE_VALID_SPEED_KMH,
+                          state != NULL ? state->speed_kmh : 0.0);
+    hud_png_draw_center_text(renderer, layer,
+                             renderer->layout.speed_plate.x +
+                                 (int)renderer->layout.speed_plate.width / 2,
+                             renderer->layout.speed_plate.y + 1, "SPEED",
+                             renderer->layout.text_size_small, hud_png_cyan);
+    hud_png_format_value(value, sizeof(value), valid, "%.0f",
+                         valid ? state->speed_kmh : 0.0, "");
+    hud_png_draw_center_text(renderer, layer,
+                             renderer->layout.speed_plate.x +
+                                 (int)renderer->layout.speed_plate.width / 2,
+                             renderer->layout.speed_plate.y + 10, value,
+                             renderer->layout.text_size_speed,
+                             valid ? hud_png_white : hud_png_muted);
+    hud_png_draw_center_text(renderer, layer,
+                             renderer->layout.speed_plate.x +
+                                 (int)renderer->layout.speed_plate.width / 2,
+                             renderer->layout.speed_plate.y + 45, "km/h",
+                             renderer->layout.text_size_small, hud_png_muted);
 
     {
         const char *gear = state != NULL &&
             (state->valid_mask & VEHICLE_STATE_VALID_DRIVE_STATE) ?
             hud_png_drive_state(state->drive_state) : "--";
-        size_t gear_length = strlen(gear);
-        int gear_x = gear_length >= 3U ? 340 :
-                     (gear_length == 2U ? 360 : 380);
-        hud_png_draw_text(renderer, layer, gear_x,
-                          renderer->layout.center_gear.y + 14, gear,
-                          renderer->layout.text_size_gear, hud_png_white);
+        hud_png_draw_center_text(renderer, layer,
+                                 renderer->layout.center_gear.x +
+                                     (int)renderer->layout.center_gear.width / 2,
+                                 renderer->layout.center_gear.y + 2, gear,
+                                 renderer->layout.text_size_gear, hud_png_white);
+        valid = hud_png_valid(state, VEHICLE_STATE_VALID_MOTOR_RPM,
+                              state != NULL ? state->motor_rpm : 0.0);
+        hud_png_format_value(value, sizeof(value), valid, "%.0f",
+                             valid ? state->motor_rpm : 0.0, " rpm");
+        hud_png_draw_center_text(renderer, layer,
+                                 renderer->layout.center_gear.x +
+                                     (int)renderer->layout.center_gear.width / 2,
+                                 renderer->layout.center_gear.y + 76, value,
+                                 renderer->layout.text_size_rpm,
+                                 valid ? hud_png_cyan : hud_png_muted);
     }
     hud_png_draw_status(renderer, layer, state, recording, now_us);
 }
@@ -628,10 +777,12 @@ static bool hud_png_render_dynamic_layer(HudRenderer *renderer, HudLayer *layer,
                                          bool recording, bool clear,
                                          HudRenderTiming *timing)
 {
+    const VehicleState *text_state;
     uint64_t stage_start;
 
     if (layer == NULL || layer->pixels == NULL) return false;
     if (clear) memset(layer->pixels, 0, (size_t)layer->stride * layer->height);
+    text_state = hud_png_latched_text_state(renderer, state);
     stage_start = hud_png_now_us();
     hud_png_draw_rpm(renderer, layer, state);
     if (timing != NULL) timing->rpm_time_us = hud_png_now_us() - stage_start;
@@ -642,7 +793,7 @@ static bool hud_png_render_dynamic_layer(HudRenderer *renderer, HudLayer *layer,
     hud_png_draw_g(renderer, layer, state);
     if (timing != NULL) timing->g_time_us = hud_png_now_us() - stage_start;
     stage_start = hud_png_now_us();
-    hud_png_render_values(renderer, layer, state, recording);
+    hud_png_render_values(renderer, layer, text_state, recording);
     if (timing != NULL) timing->text_time_us = hud_png_now_us() - stage_start;
     hud_png_set_dynamic_regions(renderer, layer);
     return true;
@@ -651,11 +802,14 @@ static bool hud_png_render_dynamic_layer(HudRenderer *renderer, HudLayer *layer,
 int hud_renderer_init_style(HudRenderer *renderer, uint32_t width,
                             uint32_t height, HudStyle style,
                             const char *asset_dir,
+                            const char *font_path,
                             HudPixelFormat surface_format)
 {
     int result;
     const char *directory = asset_dir != NULL && asset_dir[0] != '\0' ?
-                            asset_dir : "assets/hud";
+                            asset_dir : HUD_DEFAULT_ASSET_DIR;
+    const char *font = font_path != NULL && font_path[0] != '\0' ?
+                       font_path : HUD_DEFAULT_FONT_PATH;
 
     if (style != HUD_STYLE_PNG && style != HUD_STYLE_LEGACY &&
         style != HUD_STYLE_NONE) {
@@ -682,8 +836,27 @@ int hud_renderer_init_style(HudRenderer *renderer, uint32_t width,
                         false) < 0) {
         fprintf(stderr, "HUD PNG: resource initialization failed; using text-only fallback\n");
     }
-    if (hud_text_atlas_init(&renderer->text_atlas) < 0) {
-        fprintf(stderr, "HUD PNG: glyph atlas initialization failed; text disabled\n");
+    if (hud_text_atlas_init(&renderer->text_atlas, font) < 0) {
+        fprintf(stderr, "[HUD][FONT] PNG HUD initialization aborted; text is required\n");
+        hud_renderer_close(renderer);
+        return -1;
+    }
+    {
+        const uint32_t text_sizes[] = {
+            (uint32_t)renderer->layout.text_size_small,
+            (uint32_t)renderer->layout.text_size_value,
+            (uint32_t)renderer->layout.text_size_speed,
+            (uint32_t)renderer->layout.text_size_rpm,
+            (uint32_t)renderer->layout.text_size_gear
+        };
+
+        if (!hud_text_atlas_warm(&renderer->text_atlas, text_sizes,
+                                 sizeof(text_sizes) / sizeof(text_sizes[0]))) {
+            fprintf(stderr, "[HUD][FONT] Failed to warm glyph cache for %s\n",
+                    font);
+            hud_renderer_close(renderer);
+            return -1;
+        }
     }
     hud_png_apply_asset_geometry(renderer);
     if (!hud_png_render_static(renderer)) {

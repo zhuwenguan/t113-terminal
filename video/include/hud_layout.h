@@ -16,6 +16,7 @@ typedef struct {
     HudRect left_top_panel;
     HudRect right_top_panel;
     HudRect rpm_arc;
+    HudRect speed_plate;
     HudRect center_gear;
     HudRect g_meter;
     HudRect pedal_bar;
@@ -34,6 +35,8 @@ typedef struct {
     bool brake_input_is_pressure;
     int text_size_small;
     int text_size_value;
+    int text_size_speed;
+    int text_size_rpm;
     int text_size_gear;
 } HudLayout;
 

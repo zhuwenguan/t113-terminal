@@ -23,6 +23,35 @@ set(T113_HUD_SOURCES
 include_directories(${RACE_COMMON_INCLUDE_DIR})
 include_directories(${CMAKE_SOURCE_DIR}/third_party)
 
+# FreeType is a runtime dependency of the production PNG HUD.  Keep the
+# locations overridable for the T113 SDK/sysroot, while making the dependency
+# explicit instead of silently compiling another font implementation.
+set(T113_FREETYPE_INCLUDE_DIR "" CACHE PATH
+    "FreeType include directory containing ft2build.h")
+set(T113_FREETYPE_LIBRARY "" CACHE FILEPATH
+    "FreeType library for the selected target architecture")
+set(T113_FREETYPE_DEPENDENCIES "" CACHE STRING
+    "Additional libraries required by the selected FreeType build")
+if (NOT T113_FREETYPE_INCLUDE_DIR)
+    find_path(T113_FREETYPE_INCLUDE_DIR ft2build.h
+        PATH_SUFFIXES freetype2)
+endif()
+if (NOT T113_FREETYPE_LIBRARY)
+    find_library(T113_FREETYPE_LIBRARY
+        NAMES freetype freetype.so.6 libfreetype.so.6)
+endif()
+if (NOT T113_FREETYPE_INCLUDE_DIR OR NOT T113_FREETYPE_LIBRARY)
+    message(FATAL_ERROR
+        "FreeType development files are required for the T113 HUD. "
+        "Set T113_FREETYPE_INCLUDE_DIR and T113_FREETYPE_LIBRARY for the "
+        "host or T113 sysroot.")
+endif()
+add_library(t113_freetype INTERFACE)
+target_include_directories(t113_freetype INTERFACE
+    ${T113_FREETYPE_INCLUDE_DIR})
+target_link_libraries(t113_freetype INTERFACE
+    ${T113_FREETYPE_LIBRARY} ${T113_FREETYPE_DEPENDENCIES} m)
+
 add_executable(g2d_smoke_test
     tools/g2d_smoke_test.c
 )
@@ -144,6 +173,11 @@ target_link_libraries(hud_ion_test PRIVATE
     m
 )
 
+target_link_libraries(video_argb_pipeline_test PRIVATE t113_freetype)
+target_link_libraries(hud_ion_test PRIVATE t113_freetype)
+target_link_libraries(hud_png_snapshot PRIVATE t113_freetype)
+target_link_libraries(hud_png_benchmark PRIVATE t113_freetype)
+
 find_path(T113_JPEG_INCLUDE_DIR jpeglib.h
     PATHS
         ${CMAKE_SYSROOT}/usr/include
@@ -262,6 +296,7 @@ if (EXISTS "${T113_LIBM_STATIC}")
 else()
     target_link_libraries(t113_terminal PRIVATE m)
 endif()
+target_link_libraries(t113_terminal PRIVATE t113_freetype)
 
 # Phase 1 daemons. race_core deliberately reuses the validated vehicle-data
 # sources, but it must not even link camera/G2D/encoder code: video is a real
@@ -294,6 +329,7 @@ target_include_directories(race_video PRIVATE
     ${T113_JPEG_INCLUDE_DIR})
 target_compile_options(race_video PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(race_video PRIVATE race_common Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(race_video PRIVATE t113_freetype)
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)" OR
     CMAKE_C_COMPILER MATCHES "(arm|aarch64)-linux")
@@ -322,7 +358,8 @@ install(TARGETS race_core race_video race_state_dump RUNTIME DESTINATION bin)
 install(TARGETS race_common ARCHIVE DESTINATION lib)
 install(DIRECTORY common/include/race DESTINATION include)
 install(DIRECTORY config/ DESTINATION config)
-install(DIRECTORY assets/hud DESTINATION share/t113-terminal)
+install(DIRECTORY assets/hud DESTINATION share/t113-terminal/assets)
+install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
 
 if (BUILD_TESTING)
     add_executable(test_shared_state tests/test_shared_state.c)
@@ -550,6 +587,7 @@ if (BUILD_TESTING)
         -Wpedantic
     )
     target_link_libraries(test_hud_renderer PRIVATE m ${CMAKE_DL_LIBS})
+    target_link_libraries(test_hud_renderer PRIVATE t113_freetype)
     add_test(NAME hud_renderer_layout_and_invalid_state
              COMMAND test_hud_renderer)
 
@@ -560,8 +598,22 @@ if (BUILD_TESTING)
     target_include_directories(test_hud_png PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
     target_compile_options(test_hud_png PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_hud_png PRIVATE m ${CMAKE_DL_LIBS})
+    target_link_libraries(test_hud_png PRIVATE t113_freetype)
     add_test(NAME hud_png_assets_alpha_layout_and_fallback
              COMMAND test_hud_png ${CMAKE_SOURCE_DIR}/assets/hud)
+    set_tests_properties(hud_png_assets_alpha_layout_and_fallback
+                         PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    add_executable(test_hud_text
+        tests/test_hud_text.c
+        video/src/hud_text.c
+        video/src/hud_blend.c
+    )
+    target_include_directories(test_hud_text PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
+    target_compile_options(test_hud_text PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_hud_text PRIVATE t113_freetype)
+    add_test(NAME hud_text_freetype_cache_metrics_alignment_and_antialias
+             COMMAND test_hud_text ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf)
 
     add_executable(test_video_recorder_timestamps
         tests/test_video_recorder_timestamps.c

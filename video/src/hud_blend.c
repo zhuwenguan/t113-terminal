@@ -137,6 +137,10 @@ bool hud_blend_coverage(HudLayer *destination, int destination_x,
         width == 0U || height == 0U || coverage_stride < width) {
         return false;
     }
+    if (destination_x >= (int)destination->width ||
+        destination_y >= (int)destination->height) {
+        return true;
+    }
     source_x_begin = destination_x < 0 ? (uint32_t)(-destination_x) : 0U;
     source_y_begin = destination_y < 0 ? (uint32_t)(-destination_y) : 0U;
     source_x_end = width;

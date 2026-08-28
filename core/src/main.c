@@ -52,6 +52,7 @@ typedef struct {
     char video_output[PATH_MAX];
     char video_frame[PATH_MAX];
     char hud_asset_path[PATH_MAX];
+    char hud_font_path[PATH_MAX];
     uint32_t video_seconds;
     VideoCompositorMode video_compositor_mode;
     HudStyle hud_style;
@@ -353,7 +354,9 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
     (void)snprintf(options->camera_path, sizeof(options->camera_path), "%s",
                    VIDEO_CAPTURE_DEFAULT_DEVICE);
     (void)snprintf(options->hud_asset_path, sizeof(options->hud_asset_path),
-                   "%s", "assets/hud");
+                   "%s", HUD_DEFAULT_ASSET_DIR);
+    (void)snprintf(options->hud_font_path, sizeof(options->hud_font_path),
+                   "%s", HUD_DEFAULT_FONT_PATH);
 #endif
     for (argument_index = 1; argument_index < argc; ++argument_index) {
         if (strcmp(argv[argument_index], "-v") == 0 ||
@@ -486,6 +489,17 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
             options->video = true;
             continue;
         }
+        if (strcmp(argv[argument_index], "--hud-font") == 0) {
+            if (argument_index + 1 >= argc ||
+                !main_copy_option_path(options->hud_font_path,
+                                       sizeof(options->hud_font_path),
+                                       argv[++argument_index])) {
+                LOG_ERROR("Invalid --hud-font path");
+                return -1;
+            }
+            options->video = true;
+            continue;
+        }
         if (strcmp(argv[argument_index], "--no-hud") == 0) {
             options->hud_style = HUD_STYLE_NONE;
             options->video = true;
@@ -522,6 +536,7 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
                   "[--video-seconds <number>] "
                   "[--video-compositor auto|g2d|cpu] "
                   "[--hud-style png|legacy|none] [--hud-assets PATH] "
+                  "[--hud-font PATH] "
                   "[--no-hud] "
                   "[--hud-demo|--hud-demo-no-frame]",
                   argv[0]);
@@ -645,6 +660,7 @@ int main(int argc, char *argv[])
             VIDEO_COMPOSITOR_MODE_CPU : options.video_compositor_mode;
         video_config.hud_style = options.hud_style;
         video_config.hud_asset_path = options.hud_asset_path;
+        video_config.hud_font_path = options.hud_font_path;
         video_config.get_state = options.hud_demo ?
                                  main_hud_demo_state_getter :
                                  main_vehicle_state_getter;

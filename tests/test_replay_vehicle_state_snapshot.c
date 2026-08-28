@@ -166,12 +166,12 @@ int main(void)
     assert(replay_run(&config) == 0);
 
     /* Two 1 kHz raw inputs must remain lossless at the replay callback path;
-     * Vehicle State advances independently at 20 Hz over the same 2-second
+     * Vehicle State advances independently at 10 Hz over the same 2-second
      * source-time interval. */
     assert(counts.can_count == 2001U);
     assert(counts.lappro_count == 2001U);
-    assert(counts.snapshot_count == 40U);
-    assert(counts.first_snapshot_us == 1050000ULL);
+    assert(counts.snapshot_count == 20U);
+    assert(counts.first_snapshot_us == 1100000ULL);
     assert(counts.last_snapshot_us == 3000000ULL);
     assert(counts.state_get_count > 0U);
 
