@@ -351,8 +351,9 @@ static bool video_compositor_copy_yuv420p(VideoCompositor *compositor,
     destination_y = compositor->yuv_input.memory;
     chroma_width = camera->width / 2U;
     chroma_height = camera->height / 2U;
-    destination_u = destination_y + (size_t)camera->width * camera->height;
-    destination_v = destination_u + (size_t)chroma_width * chroma_height;
+    /* T113 G2D_FORMAT_YUV420_PLANAR consumes Y + V + U (YV12 order). */
+    destination_v = destination_y + (size_t)camera->width * camera->height;
+    destination_u = destination_v + (size_t)chroma_width * chroma_height;
     source_u = camera->format == VIDEO_YUV_FORMAT_YV12 ? camera->plane[2] :
                camera->plane[1];
     source_v = camera->format == VIDEO_YUV_FORMAT_YV12 ? camera->plane[1] :

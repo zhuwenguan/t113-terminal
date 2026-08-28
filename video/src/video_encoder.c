@@ -373,6 +373,7 @@ static bool video_encoder_encode_timed(VideoEncoder *encoder,
     uint64_t stage_start_us;
     bool input_added = false;
     bool output_acquired = false;
+    bool encode_succeeded = false;
     bool success = false;
 
     if (timing != NULL) {
@@ -444,6 +445,7 @@ static bool video_encoder_encode_timed(VideoEncoder *encoder,
     if (encoder->api.encode(handle) < 0) {
         goto release_input;
     }
+    encode_succeeded = true;
     if (timing != NULL) {
         timing->hardware_encode_time_us = video_encoder_now_us() - stage_start_us;
     }
@@ -451,7 +453,7 @@ release_input:
     (void)encoder->api.used_input(handle, &input_buffer);
     (void)encoder->api.return_input(handle, &input_buffer);
     input_added = false;
-    if (timing != NULL && timing->hardware_encode_time_us == 0U) {
+    if (!encode_succeeded) {
         goto done;
     }
     memset(&output_buffer, 0, sizeof(output_buffer));
