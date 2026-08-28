@@ -47,6 +47,15 @@ typedef struct {
 typedef void (*LapProSampleSink)(uint64_t timestamp_us,
                                  const LapProState *state, void *context);
 
+typedef enum {
+    LAPPRO_PHASE_DISCONNECTED = 0,
+    LAPPRO_PHASE_CONNECTING,
+    LAPPRO_PHASE_CONNECTED,
+    LAPPRO_PHASE_DISCONNECTING,
+    LAPPRO_PHASE_BACKOFF,
+    LAPPRO_PHASE_STOPPING
+} LapProConnectionPhase;
+
 typedef struct {
     pthread_mutex_t mutex;
     pthread_t thread;
@@ -58,6 +67,8 @@ typedef struct {
     bool initialized;
     bool started;
     bool stop_requested;
+    LapProConnectionPhase phase;
+    uint64_t connection_generation;
     uint64_t last_status_report_us;
 } LapPro;
 

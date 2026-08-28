@@ -17,6 +17,7 @@
 #include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -43,7 +44,9 @@
 #define LAPPRO_HANDLE_NOTIFY_CCCD 0x002BU
 #define LAPPRO_HANDLE_WRITE_VALUE 0x002DU
 
-#define LAPPRO_RECONNECT_DELAY_MS 2000U
+#define LAPPRO_RECONNECT_INITIAL_DELAY_MS 1000U
+#define LAPPRO_RECONNECT_SECOND_DELAY_MS 2000U
+#define LAPPRO_RECONNECT_MAX_DELAY_MS 5000U
 #define LAPPRO_RECEIVE_TIMEOUT_MS 100U
 #define LAPPRO_AUTH_TIMEOUT_US 5000000ULL
 #define LAPPRO_JSON_DELAY_US 500000ULL
@@ -134,6 +137,56 @@ static uint64_t lappro_monotonic_us(void)
            (uint64_t)timestamp.tv_nsec / 1000ULL;
 }
 
+static const char *lappro_phase_name(LapProConnectionPhase phase)
+{
+    switch (phase) {
+    case LAPPRO_PHASE_DISCONNECTED:
+        return "DISCONNECTED";
+    case LAPPRO_PHASE_CONNECTING:
+        return "CONNECTING";
+    case LAPPRO_PHASE_CONNECTED:
+        return "CONNECTED";
+    case LAPPRO_PHASE_DISCONNECTING:
+        return "DISCONNECTING";
+    case LAPPRO_PHASE_BACKOFF:
+        return "BACKOFF";
+    case LAPPRO_PHASE_STOPPING:
+        return "STOPPING";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+static unsigned long lappro_thread_id(void)
+{
+#ifdef SYS_gettid
+    return (unsigned long)syscall(SYS_gettid);
+#else
+    return (unsigned long)(uintptr_t)pthread_self();
+#endif
+}
+
+static void lappro_log_lifecycle(const char *thread_name,
+                                 LapProConnectionPhase phase,
+                                 uint64_t generation, int socket_fd,
+                                 const char *event)
+{
+    uint64_t timestamp_us;
+
+    if (!console_log_enabled(CONSOLE_LOG_INFO)) {
+        return;
+    }
+
+    timestamp_us = lappro_monotonic_us();
+    LOG_INFO("[BT][%llu.%06llu][%s][tid=%lu][state=%s][gen=%llu][fd=%d] %s",
+             (unsigned long long)(timestamp_us / 1000000ULL),
+             (unsigned long long)(timestamp_us % 1000000ULL),
+             thread_name != NULL ? thread_name : "unknown",
+             lappro_thread_id(), lappro_phase_name(phase),
+             (unsigned long long)generation, socket_fd,
+             event != NULL ? event : "");
+}
+
 static uint16_t lappro_to_le16(uint16_t value)
 {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -151,6 +204,33 @@ static bool lappro_should_stop(LapPro *lappro)
     stop = lappro->stop_requested;
     pthread_mutex_unlock(&lappro->mutex);
     return stop;
+}
+
+static void lappro_set_phase(LapPro *lappro, LapProConnectionPhase phase,
+                             uint64_t generation, int socket_fd,
+                             const char *event)
+{
+    pthread_mutex_lock(&lappro->mutex);
+    lappro->phase = phase;
+    if (generation != 0U) {
+        lappro->connection_generation = generation;
+    }
+    pthread_mutex_unlock(&lappro->mutex);
+
+    lappro_log_lifecycle("lappro-bt", phase, generation, socket_fd, event);
+}
+
+static uint64_t lappro_next_generation(LapPro *lappro)
+{
+    uint64_t generation;
+
+    pthread_mutex_lock(&lappro->mutex);
+    generation = ++lappro->connection_generation;
+    if (generation == 0U) {
+        generation = ++lappro->connection_generation;
+    }
+    pthread_mutex_unlock(&lappro->mutex);
+    return generation;
 }
 
 static void lappro_set_active_fd(LapPro *lappro, int fd)
@@ -346,7 +426,7 @@ static int lappro_random_bytes(uint8_t *data, size_t length)
     return 0;
 }
 
-static int lappro_connect(LapPro *lappro)
+static int lappro_connect(LapPro *lappro, uint64_t generation)
 {
     struct lappro_sockaddr_l2 local_address;
     struct lappro_sockaddr_l2 remote_address;
@@ -365,6 +445,13 @@ static int lappro_connect(LapPro *lappro)
     if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &receive_timeout,
                    sizeof(receive_timeout)) < 0) {
         LOG_ERROR("LapPro: cannot set L2CAP receive timeout: %s",
+                  strerror(errno));
+        close(socket_fd);
+        return -1;
+    }
+    if (setsockopt(socket_fd, SOL_SOCKET, SO_SNDTIMEO, &receive_timeout,
+                   sizeof(receive_timeout)) < 0) {
+        LOG_ERROR("LapPro: cannot set L2CAP send timeout: %s",
                   strerror(errno));
         close(socket_fd);
         return -1;
@@ -409,7 +496,8 @@ static int lappro_connect(LapPro *lappro)
         return -1;
     }
 
-    lappro_log("connecting to %s", lappro->config.mac);
+    lappro_log_lifecycle("lappro-bt", LAPPRO_PHASE_CONNECTING, generation,
+                         socket_fd, "connect requested");
     if (connect(socket_fd, (struct sockaddr *)&remote_address,
                 sizeof(remote_address)) < 0 &&
         (errno != EINPROGRESS ||
@@ -438,7 +526,6 @@ static int lappro_connect(LapPro *lappro)
         return -1;
     }
 
-    lappro_log("connected");
     return socket_fd;
 }
 
@@ -1000,11 +1087,26 @@ static int lappro_receive_notifications(lappro_connection *connection)
     return 0;
 }
 
-static void lappro_sleep_before_reconnect(LapPro *lappro)
+static unsigned int lappro_reconnect_delay_ms(unsigned int attempt)
+{
+    if (attempt <= 1U) {
+        return LAPPRO_RECONNECT_INITIAL_DELAY_MS;
+    }
+    if (attempt == 2U) {
+        return LAPPRO_RECONNECT_SECOND_DELAY_MS;
+    }
+    return LAPPRO_RECONNECT_MAX_DELAY_MS;
+}
+
+static void lappro_sleep_before_reconnect(LapPro *lappro,
+                                          uint64_t generation,
+                                          unsigned int delay_ms)
 {
     unsigned int elapsed = 0;
 
-    while (elapsed < LAPPRO_RECONNECT_DELAY_MS &&
+    lappro_set_phase(lappro, LAPPRO_PHASE_BACKOFF, generation, -1,
+                     "waiting before reconnect");
+    while (elapsed < delay_ms &&
            !lappro_should_stop(lappro)) {
         struct timespec delay = {0, 100000000L};
 
@@ -1014,18 +1116,45 @@ static void lappro_sleep_before_reconnect(LapPro *lappro)
     }
 }
 
+static void lappro_close_connection(LapPro *lappro, int socket_fd,
+                                     uint64_t generation, const char *reason)
+{
+    lappro_set_phase(lappro, LAPPRO_PHASE_DISCONNECTING, generation,
+                     socket_fd, reason);
+    lappro_set_connection_state(lappro, false);
+    lappro_log_lifecycle("lappro-bt", LAPPRO_PHASE_DISCONNECTING, generation,
+                         socket_fd, "worker owns shutdown and close");
+    (void)shutdown(socket_fd, SHUT_RDWR);
+    (void)close(socket_fd);
+    lappro_set_active_fd(lappro, -1);
+    lappro_set_phase(lappro, LAPPRO_PHASE_DISCONNECTED, generation, -1,
+                     "socket closed");
+}
+
 static void *lappro_worker(void *context)
 {
     LapPro *lappro = context;
+    unsigned int reconnect_attempt = 0;
+
+    (void)pthread_setname_np(pthread_self(), "lappro-bt");
 
     while (!lappro_should_stop(lappro)) {
+        uint64_t generation = lappro_next_generation(lappro);
+        unsigned int reconnect_delay_ms;
+
+        lappro_set_phase(lappro, LAPPRO_PHASE_CONNECTING, generation, -1,
+                         "connection attempt started");
         lappro_report_status_if_due(lappro);
-        int socket_fd = lappro_connect(lappro);
+        int socket_fd = lappro_connect(lappro, generation);
 
         if (socket_fd >= 0) {
             LapproTransport transport;
             lappro_connection connection;
 
+            if (!lappro_should_stop(lappro)) {
+                lappro_set_phase(lappro, LAPPRO_PHASE_CONNECTED, generation,
+                                 socket_fd, "connected");
+            }
             lappro_transport_init(&transport);
             memset(&connection, 0, sizeof(connection));
             connection.lappro = lappro;
@@ -1043,17 +1172,32 @@ static void *lappro_worker(void *context)
                 }
             }
 
-            lappro_set_connection_state(lappro, false);
-            lappro_set_active_fd(lappro, -1);
-            shutdown(socket_fd, SHUT_RDWR);
-            close(socket_fd);
+            lappro_close_connection(
+                lappro, socket_fd, generation,
+                lappro_should_stop(lappro) ? "stop requested" :
+                                              "disconnect requested");
         }
 
         if (!lappro_should_stop(lappro)) {
-            lappro_sleep_before_reconnect(lappro);
+            if (socket_fd >= 0) {
+                reconnect_attempt = 0;
+            } else if (reconnect_attempt < 3U) {
+                ++reconnect_attempt;
+            }
+            reconnect_delay_ms =
+                lappro_reconnect_delay_ms(reconnect_attempt);
+            if (socket_fd < 0) {
+                lappro_set_phase(lappro, LAPPRO_PHASE_DISCONNECTED,
+                                 generation, -1, "connection attempt failed");
+            }
+            lappro_sleep_before_reconnect(lappro, generation,
+                                          reconnect_delay_ms);
         }
     }
 
+    lappro_log_lifecycle("lappro-bt", LAPPRO_PHASE_STOPPING,
+                         lappro->connection_generation, -1,
+                         "worker exited");
     return NULL;
 }
 
@@ -1088,6 +1232,7 @@ int lappro_init(LapPro *lappro, const LapProConfig *config)
     memset(lappro, 0, sizeof(*lappro));
     lappro->config = *config;
     lappro->active_fd = -1;
+    lappro->phase = LAPPRO_PHASE_DISCONNECTED;
     result = pthread_mutex_init(&lappro->mutex, NULL);
     if (result != 0) {
         errno = result;
@@ -1121,6 +1266,7 @@ int lappro_start(LapPro *lappro)
 void lappro_stop(LapPro *lappro)
 {
     int active_fd;
+    uint64_t generation;
 
     if (lappro == NULL || !lappro->initialized) {
         return;
@@ -1129,11 +1275,11 @@ void lappro_stop(LapPro *lappro)
     pthread_mutex_lock(&lappro->mutex);
     lappro->stop_requested = true;
     active_fd = lappro->active_fd;
+    generation = lappro->connection_generation;
     pthread_mutex_unlock(&lappro->mutex);
 
-    if (active_fd >= 0) {
-        shutdown(active_fd, SHUT_RDWR);
-    }
+    lappro_set_phase(lappro, LAPPRO_PHASE_STOPPING, generation, active_fd,
+                     "stop requested; waiting for worker cleanup");
     if (lappro->started) {
         pthread_join(lappro->thread, NULL);
         lappro->started = false;
