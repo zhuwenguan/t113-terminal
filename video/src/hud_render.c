@@ -96,14 +96,14 @@ static void hud_png_set_regions(const HudRenderer *renderer, HudLayer *layer,
 static void hud_png_set_static_regions(const HudRenderer *renderer,
                                        HudLayer *layer)
 {
-    static const HudRect regions[] = {
-        { 0, 0, 800U, 600U },
-        { 12, 12, 220U, 120U },
-        { 568, 12, 220U, 120U },
-        { 140, 430, 520U, 170U },
-        { 320, 480, 160U, 110U },
-        { 12, 428, 160U, 160U },
-        { 668, 408, 120U, 180U }
+    HudRect regions[] = {
+        renderer->layout.static_frame,
+        renderer->layout.left_top_panel,
+        renderer->layout.right_top_panel,
+        renderer->layout.rpm_arc,
+        renderer->layout.center_gear,
+        renderer->layout.g_meter,
+        renderer->layout.pedal_bar
     };
 
     hud_png_set_regions(renderer, layer, regions,
@@ -113,14 +113,21 @@ static void hud_png_set_static_regions(const HudRenderer *renderer,
 static void hud_png_set_dynamic_regions(const HudRenderer *renderer,
                                         HudLayer *layer)
 {
-    static const HudRect regions[] = {
+    HudRect regions[] = {
         /* Only restore pixels that can contain a changing glyph or fill.
          * The panel and instrument backgrounds remain in static_layer. */
         { 155, 24, 77U, 88U },
         { 708, 24, 72U, 90U },
-        { 164, 495, 473U, 27U },
-        { 24, 440, 136U, 136U },
-        { 336, 490, 150U, 64U },
+        { renderer->layout.rpm_arc.x,
+          renderer->layout.rpm_arc.y + 60,
+          renderer->layout.rpm_arc.width, 35U },
+        { renderer->layout.g_meter.x + 12,
+          renderer->layout.g_meter.y + 12,
+          renderer->layout.g_meter.width - 24U,
+          renderer->layout.g_meter.height - 24U },
+        { renderer->layout.center_gear.x + 16,
+          renderer->layout.center_gear.y + 10,
+          renderer->layout.center_gear.width - 10U, 64U },
         { 686, 448, 58U, 140U },
         { 246, 12, 100U, 28U }
     };
@@ -491,8 +498,10 @@ static void hud_png_draw_g(HudRenderer *renderer, HudLayer *layer,
         renderer->filtered_longitudinal_g += alpha *
             (longitudinal - renderer->filtered_longitudinal_g);
     }
-    center_x = (double)renderer->layout.g_meter.x + 80.0;
-    center_y = (double)renderer->layout.g_meter.y + 80.0;
+    center_x = (double)renderer->layout.g_meter.x +
+               (double)renderer->layout.g_meter.width / 2.0;
+    center_y = (double)renderer->layout.g_meter.y +
+               (double)renderer->layout.g_meter.height / 2.0;
     dot_x = hud_png_scaled_x(renderer, (int)lround(center_x +
         hud_png_clamp(renderer->filtered_lateral_g / renderer->layout.g_max,
                       -1.0, 1.0) * renderer->layout.g_radius));
@@ -605,7 +614,8 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
         size_t gear_length = strlen(gear);
         int gear_x = gear_length >= 3U ? 340 :
                      (gear_length == 2U ? 360 : 380);
-        hud_png_draw_text(renderer, layer, gear_x, 494, gear,
+        hud_png_draw_text(renderer, layer, gear_x,
+                          renderer->layout.center_gear.y + 14, gear,
                           renderer->layout.text_size_gear, hud_png_white);
     }
     hud_png_draw_status(renderer, layer, state, recording, now_us);
