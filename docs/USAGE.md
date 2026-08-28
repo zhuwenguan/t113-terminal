@@ -60,13 +60,22 @@ nohup /mnt/UDISK/t113_terminal > /tmp/t113-terminal.log 2>&1 </dev/null &
 kill -INT $(pidof t113_terminal)
 ```
 
-退出后可手动再执行一次：
+程序退出时会先排空录像 writer、生成 MP4 `moov`、对录像文件执行
+`flush`/`fsync` 并关闭文件，主程序最后再执行一次全局 `sync`。仍建议退出后手动再执行一次：
 
 ```bash
 sync
 ```
 
-不要在程序仍运行时直接拔出 U 盘。
+确认进程已经退出后，还要卸载文件系统再拔盘，以清除 exFAT 的挂载状态：
+
+```bash
+umount /mnt/usb/sda
+```
+
+如果设备由系统 automount/eject 管理，则使用对应的安全弹出操作。`sync` 只保证
+缓存写回，并不会代替 `umount`；在仍挂载时直接拔出 U 盘，内核仍可能报告 USB
+disconnect 和 block I/O error，Windows 也可能提示检查磁盘。不要在程序仍运行时直接拔出 U 盘。
 
 ## Replay 回放
 

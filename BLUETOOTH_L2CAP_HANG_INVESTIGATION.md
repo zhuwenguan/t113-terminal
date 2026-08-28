@@ -481,6 +481,42 @@ notification 数据连接，也没有覆盖成功连接后的 disconnect/reconne
 `meta.before/meta.after`，便于后续复核。测试结束后 `awlink0/1` 已恢复 DOWN；内部
 UDISK 使用率约 95%（余量约 11.4 MB），后续部署前应先转移该 119 MB MP4 和日志。
 
+### 2026-08-29 USB/exFAT 退出写盘检查
+
+补充检查了测试期间的 USB 日志：
+
+```text
+usb 1-1.1: USB disconnect, device number 5
+blk_update_request: I/O error, dev sda, sector 0 op 0x1:(WRITE)
+Buffer I/O error on dev sda, logical block 0, lost async page write
+[EXFAT] trying to unmount...
+[EXFAT] unmounted successfully
+```
+
+这组日志首先证明的是物理 USB 设备在 `sda` 仍被挂载时被移除；sector 0 的异步写入
+失败是设备断开后的内核写回结果，不能单独证明 MP4 数据区损坏。Windows 提示检查
+磁盘则与 exFAT 未经过正常 `umount/eject`、卷状态未被清理相符。应用无法在用户直接
+拔盘后阻止 USB disconnect，也不应擅自卸载可能被其他服务使用的 `/mnt/usb/sda`。
+
+代码审查仍发现了退出写盘可靠性缺口：MP4 writer 之前只执行 `fflush()`，没有对
+底层描述符 `fsync()`；MP4 和临时 `.idx` 的 `fclose()` 返回值被忽略；封尾失败时
+还会删除 `.idx`，使 `mjpeg_mp4_recover` 失去恢复依据。Logger 的 CSV 文件也只检查
+了 `fflush()`，未检查 `fsync()`/`fclose()`。
+
+本轮最小修复如下：
+
+1. MP4 封尾在写入 `moov` 后执行 `fflush + fsync`，并检查两个文件的 `fclose()`。
+2. 正常封尾才删除 `.idx`；写入、同步或关闭失败时保留 `.idx` 供恢复工具使用。
+3. Logger 退出时对每个 CSV 执行 `fflush + fsync`，并记录同步/关闭错误。
+4. 使用说明明确要求进程退出后先 `umount /mnt/usb/sda` 或执行系统安全弹出，再物理
+   拔盘；`sync` 只负责写回缓存，不等价于卸载。
+
+验证结果：修改文件通过主机及 ARM 交叉编译器的 `-Wall -Wextra -Wpedantic` 检查，
+`test_video_recorder_timestamps` 主机回归通过，`strace` 确认 writer 退出路径实际
+调用两次 `fsync`。板端 16x16 recorder 单测受 Cedar 测试夹具/硬件初始化限制未通过，
+不能据此判断本次 USB 修复失败；尚未将包含本修复的正式 `t113_terminal` 新二进制
+部署到板端完成新的 USB 拔盘验证。
+
 ## 9. 修复后的板端执行顺序
 
 所有测试都必须接 UART，并在测试开始前执行 `dmesg -n 8`：

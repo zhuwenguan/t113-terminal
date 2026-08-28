@@ -399,17 +399,65 @@ static bool video_recorder_write_u64_at(FILE *file, uint64_t offset,
     return true;
 }
 
-static void video_recorder_close_mux_files(VideoRecorder *recorder)
+static bool video_recorder_flush_and_sync(FILE *file, const char *path)
 {
+    int descriptor;
+
+    if (file == NULL) {
+        return true;
+    }
+    if (fflush(file) != 0) {
+        LOG_ERROR("Video recorder: flush failed for %s: %s",
+                  path != NULL ? path : "<unknown>", strerror(errno));
+        return false;
+    }
+    descriptor = fileno(file);
+    if (descriptor < 0) {
+        LOG_ERROR("Video recorder: cannot get descriptor for %s: %s",
+                  path != NULL ? path : "<unknown>", strerror(errno));
+        return false;
+    }
+    while (fsync(descriptor) < 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        LOG_ERROR("Video recorder: fsync failed for %s: %s",
+                  path != NULL ? path : "<unknown>", strerror(errno));
+        return false;
+    }
+    return true;
+}
+
+static bool video_recorder_close_mux_files(VideoRecorder *recorder,
+                                            bool remove_index)
+{
+    bool success = true;
+    bool index_can_be_removed = true;
+
     if (recorder->index_file != NULL) {
-        fclose(recorder->index_file);
+        if (fclose(recorder->index_file) != 0) {
+            LOG_ERROR("Video recorder: close failed for %s: %s",
+                      recorder->index_path, strerror(errno));
+            success = false;
+            index_can_be_removed = false;
+        }
         recorder->index_file = NULL;
-        (void)unlink(recorder->index_path);
     }
     if (recorder->file != NULL) {
-        fclose(recorder->file);
+        if (fclose(recorder->file) != 0) {
+            LOG_ERROR("Video recorder: close failed for %s: %s",
+                      recorder->path, strerror(errno));
+            success = false;
+        }
         recorder->file = NULL;
     }
+    if (remove_index && index_can_be_removed &&
+        unlink(recorder->index_path) < 0 && errno != ENOENT) {
+        LOG_ERROR("Video recorder: cannot remove %s: %s",
+                  recorder->index_path, strerror(errno));
+        success = false;
+    }
+    return success;
 }
 
 static int video_recorder_mux_open(VideoRecorder *recorder)
@@ -453,7 +501,7 @@ static int video_recorder_mux_open(VideoRecorder *recorder)
             close(index_fd);
             (void)unlink(recorder->index_path);
         }
-        video_recorder_close_mux_files(recorder);
+        (void)video_recorder_close_mux_files(recorder, false);
         (void)unlink(recorder->path);
         errno = saved_errno;
         return -1;
@@ -543,6 +591,7 @@ static int video_recorder_mux_finalize(VideoRecorder *recorder)
     Mp4Buffer movie = { 0 };
     off_t index_size;
     uint64_t sample_count;
+    bool finalized = false;
     int result = -1;
 
     if (recorder->file == NULL || recorder->index_file == NULL) {
@@ -556,7 +605,8 @@ static int video_recorder_mux_finalize(VideoRecorder *recorder)
             goto done;
         }
     }
-    if (fflush(recorder->index_file) != 0 ||
+    if (!video_recorder_flush_and_sync(recorder->index_file,
+                                       recorder->index_path) ||
         fseeko(recorder->index_file, 0, SEEK_END) != 0 ||
         (index_size = ftello(recorder->index_file)) < 0 ||
         (uint64_t)index_size % sizeof(VideoRecorderSample) != 0U) {
@@ -581,14 +631,17 @@ static int video_recorder_mux_finalize(VideoRecorder *recorder)
         fseeko(recorder->file, 0, SEEK_END) != 0 ||
         !mp4_build_movie(&movie, recorder, samples) ||
         fwrite(movie.data, 1U, movie.size, recorder->file) != movie.size ||
-        fflush(recorder->file) != 0) {
+        !video_recorder_flush_and_sync(recorder->file, recorder->path)) {
         goto done;
     }
+    finalized = true;
     result = 0;
 done:
     free(movie.data);
     free(samples);
-    video_recorder_close_mux_files(recorder);
+    if (!video_recorder_close_mux_files(recorder, finalized)) {
+        result = -1;
+    }
     return result;
 }
 
@@ -1138,11 +1191,14 @@ int video_recorder_recover_file(const char *path, uint32_t width,
         return -1;
     }
     memset(&recorder, 0, sizeof(recorder));
+    (void)snprintf(recorder.path, sizeof(recorder.path), "%s", path);
     if (snprintf(index_path, sizeof(index_path), "%s.idx", path) >=
         (int)sizeof(index_path)) {
         errno = ENAMETOOLONG;
         return -1;
     }
+    (void)snprintf(recorder.index_path, sizeof(recorder.index_path), "%s",
+                   index_path);
     file = fopen(path, "rb+");
     index_file = fopen(index_path, "rb+");
     if (file == NULL || index_file == NULL ||

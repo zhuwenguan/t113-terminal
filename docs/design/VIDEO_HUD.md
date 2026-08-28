@@ -335,7 +335,7 @@ Video processing thread
 
 Recorder writer thread
   queue pop -> MP4 mdat + temporary sample index
-            -> drain -> stts/stsz/co64/moov -> flush/close
+            -> drain -> stts/stsz/co64/moov -> flush/fsync/close
 ```
 
 只有 writer thread 可以打开、写入、seek、flush、finalize 或关闭 MP4 和临时

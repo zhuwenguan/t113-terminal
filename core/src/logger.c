@@ -206,6 +206,26 @@ static FILE *logger_open_exclusive(const char *path)
     return file;
 }
 
+static int logger_flush_and_sync_file(FILE *file)
+{
+    int descriptor;
+
+    if (file == NULL || fflush(file) != 0) {
+        return -1;
+    }
+    descriptor = fileno(file);
+    if (descriptor < 0) {
+        return -1;
+    }
+    while (fsync(descriptor) < 0) {
+        if (errno == EINTR) {
+            continue;
+        }
+        return -1;
+    }
+    return 0;
+}
+
 static int logger_write_header(Logger *logger, LogRecordType type)
 {
     struct stat file_status;
@@ -799,17 +819,26 @@ void logger_stop(Logger *logger)
                 file_failed = logger->stats.file_failed[type];
                 pthread_mutex_unlock(&logger->mutex);
             }
-            if (!file_failed && fflush(logger->file[type]) < 0) {
+            if (!file_failed && logger_flush_and_sync_file(logger->file[type]) < 0) {
                 if (pthread_mutex_lock(&logger->mutex) == 0) {
                     logger->stats.write_errors++;
                     logger->stats.by_type[type].write_errors++;
                     logger->stats.file_failed[type] = true;
                     pthread_mutex_unlock(&logger->mutex);
                 }
-                LOG_ERROR("Cannot flush logger file %s: %s",
+                LOG_ERROR("Cannot flush/sync logger file %s: %s",
                           logger->log_path[type], strerror(errno));
             }
-            fclose(logger->file[type]);
+            if (fclose(logger->file[type]) != 0) {
+                if (pthread_mutex_lock(&logger->mutex) == 0) {
+                    logger->stats.write_errors++;
+                    logger->stats.by_type[type].write_errors++;
+                    logger->stats.file_failed[type] = true;
+                    pthread_mutex_unlock(&logger->mutex);
+                }
+                LOG_ERROR("Cannot close logger file %s: %s",
+                          logger->log_path[type], strerror(errno));
+            }
             logger->file[type] = NULL;
         }
     }
