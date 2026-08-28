@@ -30,6 +30,17 @@ target_include_directories(ui_draw PUBLIC ${CMAKE_SOURCE_DIR}/src/ui)
 target_compile_features(ui_draw PUBLIC c_std_11)
 target_compile_options(ui_draw PRIVATE -Wall -Wextra -Wpedantic)
 
+add_library(ui_image STATIC
+    src/ui/ui_image.c
+    third_party/tiny_png.c
+)
+target_include_directories(ui_image PUBLIC
+    ${CMAKE_SOURCE_DIR}/src/ui
+    ${CMAKE_SOURCE_DIR}/third_party
+)
+target_compile_features(ui_image PUBLIC c_std_11)
+target_compile_options(ui_image PRIVATE -Wall -Wextra -Wpedantic)
+
 # FreeType is a runtime dependency of the production PNG HUD.  Keep the
 # locations overridable for the T113 SDK/sysroot, while making the dependency
 # explicit instead of silently compiling another font implementation.
@@ -58,6 +69,19 @@ target_include_directories(t113_freetype INTERFACE
     ${T113_FREETYPE_INCLUDE_DIR})
 target_link_libraries(t113_freetype INTERFACE
     ${T113_FREETYPE_LIBRARY} ${T113_FREETYPE_DEPENDENCIES} m)
+
+add_library(ui_font STATIC
+    src/ui/ui_font.c
+    video/src/hud_text.c
+    video/src/hud_blend.c
+)
+target_include_directories(ui_font PUBLIC
+    ${CMAKE_SOURCE_DIR}/src/ui
+    ${RACE_VIDEO_INCLUDE_DIR}
+)
+target_compile_features(ui_font PUBLIC c_std_11)
+target_compile_options(ui_font PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(ui_font PUBLIC t113_freetype)
 
 add_executable(g2d_smoke_test
     tools/g2d_smoke_test.c
@@ -378,6 +402,33 @@ if (BUILD_TESTING)
     target_link_libraries(test_ui_draw PRIVATE ui_draw)
     add_test(NAME ui_draw_geometry_clipping_stride_and_guards
              COMMAND test_ui_draw)
+
+    add_executable(test_ui_image tests/test_ui_image.c)
+    target_include_directories(test_ui_image PRIVATE ${CMAKE_SOURCE_DIR}/src/ui)
+    target_compile_options(test_ui_image PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_ui_image PRIVATE ui_image)
+    add_test(NAME ui_image_load_binary_alpha_clipping_and_guards
+             COMMAND test_ui_image
+                     ${CMAKE_SOURCE_DIR}/assets/hud/g_meter_dot.png)
+
+    add_executable(test_ui_font tests/test_ui_font.c)
+    target_include_directories(test_ui_font PRIVATE ${CMAKE_SOURCE_DIR}/src/ui)
+    target_compile_options(test_ui_font PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_ui_font PRIVATE ui_font)
+    add_test(NAME ui_font_measure_draw_clipping_and_lifecycle
+             COMMAND test_ui_font ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf)
+
+    add_executable(test_ui_phase2 tests/test_ui_phase2.c)
+    target_include_directories(test_ui_phase2 PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_VIDEO_INCLUDE_DIR}
+    )
+    target_compile_options(test_ui_phase2 PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_ui_phase2 PRIVATE ui_draw ui_font ui_image)
+    add_test(NAME ui_phase2_geometry_font_and_icon_smoke
+             COMMAND test_ui_phase2
+                     ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf
+                     ${CMAKE_SOURCE_DIR}/assets/hud/g_meter_dot.png)
 
     add_executable(test_shared_state tests/test_shared_state.c)
     target_link_libraries(test_shared_state PRIVATE race_common)

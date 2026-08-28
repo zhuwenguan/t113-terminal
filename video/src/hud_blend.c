@@ -127,6 +127,8 @@ bool hud_blend_coverage(HudLayer *destination, int destination_x,
                         uint8_t red, uint8_t green, uint8_t blue,
                         uint8_t alpha)
 {
+    int64_t destination_x64 = destination_x;
+    int64_t destination_y64 = destination_y;
     uint32_t source_y_begin;
     uint32_t source_y_end;
     uint32_t source_x_begin;
@@ -137,28 +139,28 @@ bool hud_blend_coverage(HudLayer *destination, int destination_x,
         width == 0U || height == 0U || coverage_stride < width) {
         return false;
     }
-    if (destination_x >= (int)destination->width ||
-        destination_y >= (int)destination->height) {
+    if (destination_x64 >= (int64_t)destination->width ||
+        destination_y64 >= (int64_t)destination->height) {
         return true;
     }
-    source_x_begin = destination_x < 0 ? (uint32_t)(-destination_x) : 0U;
-    source_y_begin = destination_y < 0 ? (uint32_t)(-destination_y) : 0U;
+    source_x_begin = destination_x64 < 0 ? (uint32_t)(-destination_x64) : 0U;
+    source_y_begin = destination_y64 < 0 ? (uint32_t)(-destination_y64) : 0U;
     source_x_end = width;
     source_y_end = height;
-    if (destination_x >= 0 && (uint64_t)destination_x + width >
+    if (destination_x64 >= 0 && (uint64_t)destination_x64 + width >
         destination->width) {
-        source_x_end = destination->width - (uint32_t)destination_x;
+        source_x_end = destination->width - (uint32_t)destination_x64;
     }
-    if (destination_y >= 0 && (uint64_t)destination_y + height >
+    if (destination_y64 >= 0 && (uint64_t)destination_y64 + height >
         destination->height) {
-        source_y_end = destination->height - (uint32_t)destination_y;
+        source_y_end = destination->height - (uint32_t)destination_y64;
     }
     if (source_x_begin >= source_x_end || source_y_begin >= source_y_end) {
         return true;
     }
     for (source_y = source_y_begin; source_y < source_y_end; ++source_y) {
         uint32_t source_x;
-        int output_y = destination_y + (int)source_y;
+        int output_y = (int)(destination_y64 + (int64_t)source_y);
 
         for (source_x = source_x_begin; source_x < source_x_end; ++source_x) {
             uint8_t coverage_value = coverage[(size_t)source_y *
@@ -168,7 +170,8 @@ bool hud_blend_coverage(HudLayer *destination, int destination_x,
 
             if (pixel_alpha != 0U) {
                 hud_blend_pixel_unchecked(destination,
-                                           destination_x + (int)source_x,
+                                           (int)(destination_x64 +
+                                                 (int64_t)source_x),
                                            output_y, red, green, blue,
                                            pixel_alpha);
             }
