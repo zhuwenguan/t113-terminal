@@ -14,9 +14,9 @@ void hud_layout_default(HudLayout *layout)
      * clear gap for the gear frame above it. */
     layout->rpm_arc = (HudRect){ 140, 480, 520U, 170U };
     /* Keep the gear/RPM box on the same 12 px left margin as the other
-     * left-side panels.  The speed plate occupies the open center-right gap
-     * just above the RPM strip. */
-    layout->speed_plate = (HudRect){ 320, 420, 160U, 60U };
+     * left-side panels.  The speed plate sits in the transparent upper part
+     * of the RPM canvas, about 7 px above its visible border. */
+    layout->speed_plate = (HudRect){ 320, 470, 160U, 60U };
     layout->center_gear = (HudRect){ 12, 420, 160U, 110U };
     /* Keep the G meter on the left, centered vertically in the 600 px frame. */
     layout->g_meter = (HudRect){ 12, 220, 160U, 160U };

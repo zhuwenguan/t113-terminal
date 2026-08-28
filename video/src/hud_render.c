@@ -30,7 +30,7 @@ static const HudTextColor hud_png_yellow = { 255U, 210U, 64U, 255U };
 #define HUD_RIGHT_PANEL_FLAG_Y 103
 #define HUD_TEXT_REFRESH_PERIOD_US 100000ULL
 #define HUD_LAP_TIMER_RESET_THRESHOLD_S 0.5
-#define HUD_LAST_LAP_DISPLAY_PERIOD_US 1000000ULL
+#define HUD_LAST_LAP_DISPLAY_PERIOD_US 2000000ULL
 
 typedef enum {
     /* V3 sprite order: temperature, battery, flag, REC, GPS, connection. */
@@ -682,6 +682,7 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
 {
     char value[32];
     bool valid;
+    bool showing_last_lap_time;
     const char *flag_state = "--";
     uint64_t now_us = hud_png_now_us();
 
@@ -734,7 +735,9 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
                             (state->delta_time_s < 0.0 ? hud_png_green :
                              (state->delta_time_s > 0.0 ? hud_png_red :
                               hud_png_white)));
-    if (renderer->last_lap_time_display_until_us > now_us) {
+    showing_last_lap_time =
+        renderer->last_lap_time_display_until_us > now_us;
+    if (showing_last_lap_time) {
         hud_png_format_time(value, sizeof(value), true,
                             renderer->last_lap_time_display_s);
     } else {
@@ -742,7 +745,8 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
                             state != NULL ? state->lap_time_s : 0.0);
     }
     hud_png_draw_right_text(renderer, layer, 775, HUD_RIGHT_PANEL_TIMER_Y, value,
-                            renderer->layout.text_size_small, hud_png_white);
+                            renderer->layout.text_size_small,
+                            showing_last_lap_time ? hud_png_cyan : hud_png_white);
     hud_png_draw_right_text(renderer, layer, 775, HUD_RIGHT_PANEL_FLAG_Y,
                             flag_state, renderer->layout.text_size_small,
                             hud_png_cyan);
