@@ -33,6 +33,8 @@ typedef struct {
     uint32_t run_seconds;
     bool mock_camera;
     VideoCompositorMode compositor_mode;
+    HudStyle hud_style;
+    const char *hud_asset_path;
     VideoStateSnapshotGetter get_state;
     void *state_context;
 } VideoPipelineConfig;

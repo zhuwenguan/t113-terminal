@@ -48,6 +48,8 @@ int main(int argc, char **argv) {
     VideoStateSource source;
     const char *camera = VIDEO_CAPTURE_DEFAULT_DEVICE;
     const char *record = NULL;
+    const char *hud_assets = "assets/hud";
+    HudStyle hud_style = HUD_STYLE_PNG;
     uint32_t seconds = 0U;
     int i;
     memset(&pipeline, 0, sizeof(pipeline)); memset(&config, 0, sizeof(config));
@@ -58,7 +60,11 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--camera") && i + 1 < argc) camera = argv[++i];
         else if (!strcmp(argv[i], "--record") && i + 1 < argc) record = argv[++i];
         else if (!strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = (uint32_t)strtoul(argv[++i], NULL, 10);
-        else { LOG_ERROR("Usage: %s [-v] [--camera PATH] [--record PATH] [--seconds N]", argv[0]); return EXIT_FAILURE; }
+        else if (!strcmp(argv[i], "--hud-style") && i + 1 < argc &&
+                 hud_style_parse(argv[++i], &hud_style)) { }
+        else if (!strcmp(argv[i], "--hud-assets") && i + 1 < argc) hud_assets = argv[++i];
+        else if (!strcmp(argv[i], "--no-hud")) hud_style = HUD_STYLE_NONE;
+        else { LOG_ERROR("Usage: %s [-v] [--camera PATH] [--record PATH] [--seconds N] [--hud-style png|legacy|none] [--hud-assets PATH] [--no-hud]", argv[0]); return EXIT_FAILURE; }
     }
     if (install_signals() < 0) { LOG_ERROR("sigaction: %s", strerror(errno)); return EXIT_FAILURE; }
     if (race_shared_state_reader_open(&source.shared, NULL) < 0) {
@@ -68,6 +74,8 @@ int main(int argc, char **argv) {
     config.width = VIDEO_CAPTURE_WIDTH; config.height = VIDEO_CAPTURE_HEIGHT;
     config.fps = VIDEO_CAPTURE_FPS; config.run_seconds = seconds;
     config.compositor_mode = VIDEO_COMPOSITOR_MODE_AUTO;
+    config.hud_style = hud_style;
+    config.hud_asset_path = hud_assets;
     config.get_state = shared_state_getter; config.state_context = &source;
     if (video_pipeline_init(&pipeline, &config) < 0 || video_pipeline_start(&pipeline) < 0) {
         video_pipeline_stop(&pipeline); race_shared_state_close(&source.shared); return EXIT_FAILURE;

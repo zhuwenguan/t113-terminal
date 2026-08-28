@@ -757,6 +757,7 @@ static int hud_renderer_init_common(HudRenderer *renderer, uint32_t width,
     renderer->dynamic_layer.stride = width * VIDEO_FRAME_CHANNELS;
     renderer->dynamic_layer.pixel_format = HUD_PIXEL_FORMAT_RGBA8888;
     renderer->dynamic_surface_only = !allocate_layers;
+    renderer->style = HUD_STYLE_LEGACY;
     renderer->initialized = true;
     if (allocate_layers) {
         renderer->static_layer.pixels = calloc(1U, bytes);
@@ -800,6 +801,8 @@ void hud_renderer_close(HudRenderer *renderer)
     if (renderer == NULL) {
         return;
     }
+    hud_text_atlas_close(&renderer->text_atlas);
+    hud_assets_close(&renderer->assets);
     free(renderer->static_layer.pixels);
     free(renderer->dynamic_layer.pixels);
     memset(renderer, 0, sizeof(*renderer));
@@ -815,8 +818,16 @@ const HudLayer *hud_renderer_render_dynamic(HudRenderer *renderer,
                                              const VehicleState *state,
                                              bool recording)
 {
-    if (renderer == NULL || !renderer->initialized ||
-        renderer->dynamic_surface_only || renderer->dynamic_layer.pixels == NULL) {
+    if (renderer == NULL || !renderer->initialized) {
+        return NULL;
+    }
+    if (renderer->style == HUD_STYLE_PNG) {
+        return hud_png_render_dynamic(renderer, state, recording);
+    }
+    if (renderer->style == HUD_STYLE_NONE) {
+        return hud_none_render_dynamic(renderer, state, recording);
+    }
+    if (renderer->dynamic_surface_only || renderer->dynamic_layer.pixels == NULL) {
         return NULL;
     }
     return hud_renderer_render_dynamic_layer(renderer, &renderer->dynamic_layer,
@@ -830,6 +841,14 @@ const HudLayer *hud_renderer_render_dynamic_to_surface(
     if (renderer == NULL || !renderer->initialized ||
         !hud_surface_valid(renderer, surface)) {
         return NULL;
+    }
+    if (renderer->style == HUD_STYLE_PNG) {
+        return hud_png_render_dynamic_to_surface(renderer, state, recording,
+                                                  surface, timing);
+    }
+    if (renderer->style == HUD_STYLE_NONE) {
+        return hud_none_render_frame_to_surface(renderer, state, recording,
+                                                surface, timing);
     }
     hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
     return hud_renderer_render_dynamic_layer(renderer,
@@ -849,6 +868,14 @@ const HudLayer *hud_renderer_render_frame_to_surface(
     if (renderer == NULL || !renderer->initialized ||
         !hud_surface_valid(renderer, surface)) {
         return NULL;
+    }
+    if (renderer->style == HUD_STYLE_PNG) {
+        return hud_png_render_frame_to_surface(renderer, state, recording,
+                                                surface, timing);
+    }
+    if (renderer->style == HUD_STYLE_NONE) {
+        return hud_none_render_frame_to_surface(renderer, state, recording,
+                                                surface, timing);
     }
     if (timing != NULL) {
         memset(timing, 0, sizeof(*timing));

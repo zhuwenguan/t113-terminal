@@ -316,8 +316,11 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
     } else {
         if (pipeline->hud.dynamic_surface_only) {
             hud_renderer_close(&pipeline->hud);
-            if (hud_renderer_init(&pipeline->hud, pipeline->config.width,
-                                  pipeline->config.height) < 0) {
+            if (hud_renderer_init_style(&pipeline->hud, pipeline->config.width,
+                                        pipeline->config.height,
+                                        pipeline->config.hud_style,
+                                        pipeline->config.hud_asset_path,
+                                        HUD_PIXEL_FORMAT_RGBA8888) < 0) {
                 LOG_ERROR("Video: CPU compositor fallback HUD allocation failed");
                 video_pipeline_note_application_drop(pipeline);
                 pipeline->g2d_fatal_failure = true;
@@ -1040,12 +1043,12 @@ int video_pipeline_init(VideoPipeline *pipeline,
      * a later first VeInitialize invalidates the allocator's attachments. */
     if (video_compositor_init_mode(&pipeline->compositor, config->width,
                                    config->height, compositor_mode) < 0 ||
-        (video_compositor_active_mode(&pipeline->compositor) ==
-             VIDEO_COMPOSITOR_MODE_G2D ?
-         hud_renderer_init_external(&pipeline->hud, config->width,
-                                    config->height) :
-         hud_renderer_init(&pipeline->hud, config->width,
-                           config->height)) < 0) {
+        hud_renderer_init_style(
+            &pipeline->hud, config->width, config->height, config->hud_style,
+            config->hud_asset_path,
+            video_compositor_active_mode(&pipeline->compositor) ==
+                VIDEO_COMPOSITOR_MODE_G2D ? HUD_PIXEL_FORMAT_ARGB8888 :
+                                             HUD_PIXEL_FORMAT_RGBA8888) < 0) {
         video_pipeline_stop(pipeline);
         errno = ENOMEM;
         return -1;
@@ -1073,6 +1076,13 @@ int video_pipeline_init(VideoPipeline *pipeline,
                  &pipeline->compositor)),
              video_compositor_is_g2d_healthy(&pipeline->compositor) ?
              "yes" : "no");
+    LOG_INFO("Video HUD: style=%s assets=%zu resident=%zu bytes ready=%s path=%s",
+             hud_style_name(pipeline->hud.style),
+             hud_renderer_asset_memory(&pipeline->hud),
+             hud_renderer_resident_memory(&pipeline->hud),
+             hud_renderer_png_assets_ready(&pipeline->hud) ? "yes" : "no",
+             config->hud_asset_path != NULL ? config->hud_asset_path :
+                                               "assets/hud");
     if (config->compositor_mode == VIDEO_COMPOSITOR_MODE_AUTO &&
         video_compositor_active_mode(&pipeline->compositor) ==
             VIDEO_COMPOSITOR_MODE_CPU) {
@@ -1091,9 +1101,10 @@ int video_pipeline_init(VideoPipeline *pipeline,
         (video_compositor_active_mode(&pipeline->compositor) ==
          VIDEO_COMPOSITOR_MODE_G2D ?
          (uint64_t)config->width * config->height * 3ULL / 2ULL : 0ULL) +
-        (pipeline->recorder_ready ?
-         (uint64_t)VIDEO_WRITER_QUEUE_CAPACITY *
+             (pipeline->recorder_ready ?
+             (uint64_t)VIDEO_WRITER_QUEUE_CAPACITY *
              VIDEO_WRITER_SLOT_CAPACITY : 0ULL);
+    pipeline->stats.memory_bytes += hud_renderer_resident_memory(&pipeline->hud);
     return 0;
 }
 

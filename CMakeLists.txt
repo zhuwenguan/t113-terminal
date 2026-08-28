@@ -11,8 +11,17 @@ set(RACE_COMMON_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/common/include)
 set(RACE_COMMON_LEGACY_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/common/include/race)
 set(RACE_CORE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/core/include)
 set(RACE_VIDEO_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/video/include)
+set(T113_HUD_SOURCES
+    video/src/hud_renderer.c
+    video/src/hud_assets.c
+    video/src/hud_blend.c
+    video/src/hud_layout.c
+    video/src/hud_render.c
+    video/src/hud_text.c
+    third_party/tiny_png.c)
 
 include_directories(${RACE_COMMON_INCLUDE_DIR})
+include_directories(${CMAKE_SOURCE_DIR}/third_party)
 
 add_executable(g2d_smoke_test
     tools/g2d_smoke_test.c
@@ -28,17 +37,34 @@ add_executable(vencoder_rgb_test
 
 add_executable(video_argb_pipeline_test
     tools/video_argb_pipeline_test.c
-    video/src/hud_renderer.c
+    ${T113_HUD_SOURCES}
 )
 
 add_executable(hud_ion_test
     tools/hud_ion_test.c
-    video/src/hud_renderer.c
+    ${T113_HUD_SOURCES}
 )
 
 add_executable(mjpeg_mp4_inspect
     tools/mjpeg_mp4_inspect.c
 )
+
+add_executable(hud_png_snapshot
+    tools/hud_png_snapshot.c
+    ${T113_HUD_SOURCES}
+    video/src/video_frame.c
+)
+target_include_directories(hud_png_snapshot PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
+target_compile_options(hud_png_snapshot PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(hud_png_snapshot PRIVATE m)
+
+add_executable(hud_png_benchmark
+    tools/hud_png_benchmark.c
+    ${T113_HUD_SOURCES}
+)
+target_include_directories(hud_png_benchmark PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
+target_compile_options(hud_png_benchmark PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(hud_png_benchmark PRIVATE m)
 
 target_include_directories(g2d_smoke_test PRIVATE
     ${RACE_VIDEO_INCLUDE_DIR}
@@ -177,7 +203,7 @@ add_executable(t113_terminal
     video/src/jpeg_codec.c
     video/src/video_encoder.c
     video/src/video_capture.c
-    video/src/hud_renderer.c
+    ${T113_HUD_SOURCES}
     video/src/video_compositor.c
     video/src/video_recorder.c
     video/src/video_pipeline.c
@@ -242,7 +268,7 @@ set(RACE_VIDEO_SOURCES
     video/src/video_frame.c
     video/src/encoded_frame_queue.c video/src/jpeg_codec.c
     video/src/video_encoder.c video/src/video_capture.c
-    video/src/hud_renderer.c video/src/video_compositor.c
+    ${T113_HUD_SOURCES} video/src/video_compositor.c
     video/src/video_recorder.c video/src/video_pipeline.c)
 add_executable(race_video ${RACE_VIDEO_SOURCES})
 target_include_directories(race_video PRIVATE
@@ -278,6 +304,7 @@ install(TARGETS race_core race_video race_state_dump RUNTIME DESTINATION bin)
 install(TARGETS race_common ARCHIVE DESTINATION lib)
 install(DIRECTORY common/include/race DESTINATION include)
 install(DIRECTORY config/ DESTINATION config)
+install(DIRECTORY assets/hud DESTINATION share/t113-terminal)
 
 if (BUILD_TESTING)
     add_executable(test_shared_state tests/test_shared_state.c)
@@ -492,7 +519,7 @@ if (BUILD_TESTING)
 
     add_executable(test_hud_renderer
         tests/test_hud_renderer.c
-        video/src/hud_renderer.c
+        ${T113_HUD_SOURCES}
         video/src/video_compositor.c
         video/src/video_frame.c
     )
@@ -507,6 +534,16 @@ if (BUILD_TESTING)
     target_link_libraries(test_hud_renderer PRIVATE m ${CMAKE_DL_LIBS})
     add_test(NAME hud_renderer_layout_and_invalid_state
              COMMAND test_hud_renderer)
+
+    add_executable(test_hud_png
+        tests/test_hud_png.c
+        ${T113_HUD_SOURCES}
+    )
+    target_include_directories(test_hud_png PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
+    target_compile_options(test_hud_png PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_hud_png PRIVATE m ${CMAKE_DL_LIBS})
+    add_test(NAME hud_png_assets_alpha_layout_and_fallback
+             COMMAND test_hud_png ${CMAKE_SOURCE_DIR}/assets/hud)
 
     add_executable(test_video_recorder_timestamps
         tests/test_video_recorder_timestamps.c
