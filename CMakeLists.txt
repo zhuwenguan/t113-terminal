@@ -83,6 +83,17 @@ target_compile_features(ui_font PUBLIC c_std_11)
 target_compile_options(ui_font PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(ui_font PUBLIC t113_freetype)
 
+add_library(hud_widget STATIC
+    src/hud/hud_widget.c
+)
+target_include_directories(hud_widget PUBLIC
+    ${CMAKE_SOURCE_DIR}/src/hud
+    ${CMAKE_SOURCE_DIR}/src/ui
+)
+target_compile_features(hud_widget PUBLIC c_std_11)
+target_compile_options(hud_widget PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(hud_widget PUBLIC ui_draw ui_font)
+
 add_executable(g2d_smoke_test
     tools/g2d_smoke_test.c
 )
@@ -429,6 +440,19 @@ if (BUILD_TESTING)
              COMMAND test_ui_phase2
                      ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf
                      ${CMAKE_SOURCE_DIR}/assets/hud/g_meter_dot.png)
+
+    add_executable(test_hud_widget
+        tests/test_hud_widget.c
+        src/hud/hud_widget.c
+    )
+    target_include_directories(test_hud_widget PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/hud
+        ${CMAKE_SOURCE_DIR}/src/ui
+    )
+    target_compile_options(test_hud_widget PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_hud_widget PRIVATE ui_draw)
+    add_test(NAME hud_widget_composition_clipping_stride_and_guards
+             COMMAND test_hud_widget)
 
     add_executable(test_shared_state tests/test_shared_state.c)
     target_link_libraries(test_shared_state PRIVATE race_common)
