@@ -23,6 +23,13 @@ set(T113_HUD_SOURCES
 include_directories(${RACE_COMMON_INCLUDE_DIR})
 include_directories(${CMAKE_SOURCE_DIR}/third_party)
 
+add_library(ui_draw STATIC
+    src/ui/ui_draw.c
+)
+target_include_directories(ui_draw PUBLIC ${CMAKE_SOURCE_DIR}/src/ui)
+target_compile_features(ui_draw PUBLIC c_std_11)
+target_compile_options(ui_draw PRIVATE -Wall -Wextra -Wpedantic)
+
 # FreeType is a runtime dependency of the production PNG HUD.  Keep the
 # locations overridable for the T113 SDK/sysroot, while making the dependency
 # explicit instead of silently compiling another font implementation.
@@ -362,6 +369,16 @@ install(DIRECTORY assets/hud DESTINATION share/t113-terminal/assets)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
 
 if (BUILD_TESTING)
+    add_executable(test_ui_draw tests/test_ui_draw.c)
+    target_include_directories(test_ui_draw PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_VIDEO_INCLUDE_DIR}
+    )
+    target_compile_options(test_ui_draw PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_ui_draw PRIVATE ui_draw)
+    add_test(NAME ui_draw_geometry_clipping_stride_and_guards
+             COMMAND test_ui_draw)
+
     add_executable(test_shared_state tests/test_shared_state.c)
     target_link_libraries(test_shared_state PRIVATE race_common)
     target_compile_options(test_shared_state PRIVATE -Wall -Wextra -Wpedantic)
