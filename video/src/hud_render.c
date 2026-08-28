@@ -27,7 +27,10 @@ static const HudTextColor hud_png_yellow = { 255U, 210U, 64U, 255U };
 #define HUD_RIGHT_PANEL_LAP_Y 18
 #define HUD_RIGHT_PANEL_DELTA_Y 48
 #define HUD_RIGHT_PANEL_TIMER_Y 78
+#define HUD_RIGHT_PANEL_FLAG_Y 103
 #define HUD_TEXT_REFRESH_PERIOD_US 100000ULL
+#define HUD_LAP_TIMER_RESET_THRESHOLD_S 0.5
+#define HUD_LAST_LAP_DISPLAY_PERIOD_US 1000000ULL
 
 typedef enum {
     /* V3 sprite order: temperature, battery, flag, REC, GPS, connection. */
@@ -60,6 +63,19 @@ static const VehicleState *hud_png_latched_text_state(
          now_us - renderer->text_state_last_refresh_us >=
              HUD_TEXT_REFRESH_PERIOD_US)) {
         if (state != NULL) {
+            if (renderer->text_state_initialized &&
+                renderer->text_state_valid &&
+                isfinite(renderer->text_state.lap_time_s) &&
+                isfinite(state->lap_time_s) &&
+                renderer->text_state.lap_time_s >
+                    HUD_LAP_TIMER_RESET_THRESHOLD_S &&
+                state->lap_time_s <= HUD_LAP_TIMER_RESET_THRESHOLD_S &&
+                isfinite(state->last_lap_time_s) &&
+                state->last_lap_time_s > 0.0) {
+                renderer->last_lap_time_display_s = state->last_lap_time_s;
+                renderer->last_lap_time_display_until_us =
+                    now_us + HUD_LAST_LAP_DISPLAY_PERIOD_US;
+            }
             renderer->text_state = *state;
             renderer->text_state_valid = true;
         } else {
@@ -718,12 +734,18 @@ static void hud_png_render_values(HudRenderer *renderer, HudLayer *layer,
                             (state->delta_time_s < 0.0 ? hud_png_green :
                              (state->delta_time_s > 0.0 ? hud_png_red :
                               hud_png_white)));
-    hud_png_format_time(value, sizeof(value), state != NULL,
-                        state != NULL ? state->lap_time_s : 0.0);
+    if (renderer->last_lap_time_display_until_us > now_us) {
+        hud_png_format_time(value, sizeof(value), true,
+                            renderer->last_lap_time_display_s);
+    } else {
+        hud_png_format_time(value, sizeof(value), state != NULL,
+                            state != NULL ? state->lap_time_s : 0.0);
+    }
     hud_png_draw_right_text(renderer, layer, 775, HUD_RIGHT_PANEL_TIMER_Y, value,
                             renderer->layout.text_size_small, hud_png_white);
-    hud_png_draw_right_text(renderer, layer, 775, 98, flag_state,
-                            renderer->layout.text_size_small, hud_png_cyan);
+    hud_png_draw_right_text(renderer, layer, 775, HUD_RIGHT_PANEL_FLAG_Y,
+                            flag_state, renderer->layout.text_size_small,
+                            hud_png_cyan);
 
     /* The number plate is deliberately text-only artwork.  Both the primary
      * speed and its unit are rendered from hud.ttf so no numeric label is

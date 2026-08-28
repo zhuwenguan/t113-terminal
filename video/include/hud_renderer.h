@@ -89,6 +89,8 @@ typedef struct {
      * graphical instruments still use the current video-frame state. */
     VehicleState text_state;
     uint64_t text_state_last_refresh_us;
+    double last_lap_time_display_s;
+    uint64_t last_lap_time_display_until_us;
     bool text_state_initialized;
     bool text_state_valid;
     double filtered_lateral_g;
