@@ -1,4 +1,4 @@
-# T113 HUD PNG V2 接入验收记录
+# T113 HUD PNG V3 接入验收记录
 
 ## 结果摘要
 
@@ -12,7 +12,7 @@ PNG HUD 已接入现有 `VehicleState -> HUD -> G2D -> 摄像头/编码/Writer` 
 --no-hud                 # 等价于 --hud-style none
 ```
 
-运行时 PNG 资源目录为 `assets/hud/`；`T113_HUD_PNG_Kit_V2/` 保留为原始素材包副本。`preview_composite.png` 只用于人工对照，没有进入正式图层。
+运行时 PNG 资源目录为 `assets/hud/`，内容与 `T113_HUD_PNG_Kit_V3/assets/` 原样一致；V2 原始素材包仍保留。`preview_composite.png` 只用于人工对照，没有进入正式图层。
 
 ## 代码与资源
 
@@ -39,7 +39,7 @@ PNG HUD 已接入现有 `VehicleState -> HUD -> G2D -> 摄像头/编码/Writer` 
 | static | `center_gear_frame` | 320 | 480 | 160 | 110 | 固定 |
 | static | `g_meter_bg` | 12 | 428 | 160 | 160 | 固定 |
 | static | `pedal_bar_bg` | 668 | 408 | 120 | 180 | 固定 |
-| dynamic | `rpm_arc_fill` | 140 | 430 | 520 | 170 | 25 段量化；填充经过中央档位框时分左右裁剪 |
+| dynamic | `rpm_arc_fill` | 140 | 430 | 520 | 170 | 24 段量化；填充经过中央档位框时分左右裁剪 |
 | dynamic | pedal fills | 668 | 408 | 120 | 180 | 从底向上裁剪；油门蓝、制动红 |
 | dynamic | `g_meter_dot` | — | — | 32 | 32 | 中心 `(92,508)`，Gmax=1.5，半径=52，Y 轴取反 |
 | dynamic | text/status | 见代码配置 | 见代码配置 | — | — | 等宽固定步进、AA coverage |
@@ -58,27 +58,27 @@ PNG HUD 已接入现有 `VehicleState -> HUD -> G2D -> 摄像头/编码/Writer` 
 
 | 文件 | 尺寸 | alpha bbox |
 |---|---:|---|
-| `hud_static_frame.png` | 800×600 | (8,8)-(792,592) |
-| `left_top_panel.png` | 220×120 | (28,0)-(191,119) |
-| `right_top_panel.png` | 220×120 | (12,0)-(207,119) |
-| `rpm_arc_bg.png` | 520×170 | (0,46)-(519,123) |
-| `rpm_arc_fill.png` | 520×170 | (24,65)-(496,91) |
-| `center_gear_frame.png` | 160×110 | (0,0)-(159,88) |
-| `g_meter_bg.png` | 160×160 | (0,7)-(159,151) |
-| `g_meter_dot.png` | 32×32 | (4,4)-(27,27) |
-| `pedal_bar_bg.png` | 120×180 | (0,31)-(119,148) |
-| `pedal_bar_fill_blue.png` | 120×180 | (78,33)-(115,146) |
-| `pedal_bar_fill_red.png` | 120×180 | (57,113)-(70,138) |
-| `warning_icon_set.png` | 384×64 | (8,8)-(375,55) |
-| `small_label_plate.png` | 120×32 | (9,0)-(110,31) |
-| `number_highlight_plate.png` | 160×60 | (0,0)-(159,49) |
-| `status_pill.png` | 100×28 | (7,0)-(92,27) |
+| `hud_static_frame.png` | 800×600 | (5,5)-(794,594) |
+| `left_top_panel.png` | 220×120 | (0,0)-(219,119) |
+| `right_top_panel.png` | 220×120 | (0,0)-(219,119) |
+| `rpm_arc_bg.png` | 520×170 | (5,57)-(514,118) |
+| `rpm_arc_fill.png` | 520×170 | (29,76)-(490,101) |
+| `center_gear_frame.png` | 160×110 | (0,0)-(159,109) |
+| `g_meter_bg.png` | 160×160 | (0,0)-(159,159) |
+| `g_meter_dot.png` | 32×32 | (2,2)-(29,29) |
+| `pedal_bar_bg.png` | 120×180 | (0,0)-(119,179) |
+| `pedal_bar_fill_blue.png` | 120×180 | (16,36)-(35,157) |
+| `pedal_bar_fill_red.png` | 120×180 | (50,36)-(69,157) |
+| `warning_icon_set.png` | 384×64 | (22,14)-(368,52) |
+| `small_label_plate.png` | 120×32 | (0,0)-(119,31) |
+| `number_highlight_plate.png` | 160×60 | (0,0)-(159,59) |
+| `status_pill.png` | 100×28 | (0,0)-(99,27) |
 
-V2 的 `rpm_arc_fill` 实际只有中间的 (24,65)-(496,91) 有效像素，代码按此透明边界量化，而不是用整幅 170 px 高画矩形。`center_gear_frame` 与 RPM 画布按建议矩形重叠，因此高 RPM 时 fill 被分成中央框左、右两段，中央档位始终无遮挡。
+V3 的 `rpm_arc_fill` 实际只有中间的 (29,76)-(490,101) 有效像素，代码从加载后的 alpha bbox 取得有效 X 范围，并按 V3 的 24 段量化，而不是用整幅 170 px 高画矩形。`center_gear_frame` 与 RPM 画布按建议矩形重叠，因此高 RPM 时 fill 被分成中央框左、右两段，中央档位始终无遮挡。
 
-V2 的踏板 fill 素材实际把蓝色有效像素放在源图第三槽附近 x=78..115，把红色有效像素放在第二槽附近 x=57..70；而需求语义要求蓝色为 THR、红色为 BRK。当前默认将蓝色源槽映射到面板第一（THR）槽，红色保持第二（BRK）槽，并在代码中显式保留源/目标 x 常量。这是基于 alpha bbox 和截图对照做的唯一几何校正；若后续替换成槽位语义已修正的素材，应将蓝色目标 x 改回源 x，避免重复映射。
+V3 的踏板 fill 已位于语义对应槽：蓝色 alpha bbox 为 x=16..35，红色为 x=50..69。代码直接使用各 PNG 的 alpha bbox，不再沿用 V2 的蓝色第三槽映射；垂直方向按 alpha 边界内的 10 个完整格量化并自底向上裁剪。PNG 内容本身未做修改。
 
-warning sprite sheet 的实际单元按当前素材检查为：`TIMER=0`、`FLAG=1`、`TEMPERATURE=2`、`RECORDING=3`、`GPS=4`、`CONNECTION=5`。业务代码使用枚举，不直接使用数字索引；GPS 状态基于 monotonic 时间闪烁，不 sleep。
+V3 warning sprite sheet 的实际单元为：`TEMPERATURE=0`、`BATTERY=1`、`FLAG=2`、`RECORDING=3`、`GPS=4`、`CONNECTION=5`。业务代码使用枚举，不直接使用数字索引；GPS 状态基于 monotonic 时间闪烁，不 sleep。
 
 ## 常驻内存
 

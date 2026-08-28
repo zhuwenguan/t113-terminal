@@ -18,9 +18,10 @@ static const HudTextColor hud_png_green = { 64U, 230U, 122U, 255U };
 static const HudTextColor hud_png_yellow = { 255U, 210U, 64U, 255U };
 
 typedef enum {
-    HUD_ICON_TIMER = 0,
-    HUD_ICON_FLAG = 1,
-    HUD_ICON_TEMPERATURE = 2,
+    /* V3 sprite order: temperature, battery, flag, REC, GPS, connection. */
+    HUD_ICON_TEMPERATURE = 0,
+    HUD_ICON_BATTERY = 1,
+    HUD_ICON_FLAG = 2,
     HUD_ICON_RECORDING = 3,
     HUD_ICON_GPS = 4,
     HUD_ICON_CONNECTION = 5
@@ -202,6 +203,20 @@ static bool hud_png_render_static(HudRenderer *renderer)
     return true;
 }
 
+static void hud_png_apply_asset_geometry(HudRenderer *renderer)
+{
+    const HudImage *rpm_fill;
+
+    if (renderer == NULL) return;
+    rpm_fill = hud_png_asset(renderer, HUD_ASSET_RPM_ARC_FILL);
+    if (rpm_fill != NULL && rpm_fill->alpha_max > 0U &&
+        rpm_fill->alpha_x_max >= rpm_fill->alpha_x_min) {
+        renderer->layout.rpm_content_x = rpm_fill->alpha_x_min;
+        renderer->layout.rpm_content_width =
+            rpm_fill->alpha_x_max - rpm_fill->alpha_x_min + 1U;
+    }
+}
+
 static bool hud_png_valid(const VehicleState *state, uint32_t bit, double value)
 {
     return state != NULL && (state->valid_mask & bit) != 0U && isfinite(value);
@@ -379,45 +394,66 @@ static void hud_png_draw_pedal(const HudRenderer *renderer, HudLayer *layer,
         (renderer->layout.brake_input_is_pressure ?
          brake_value / renderer->layout.brake_pressure_max : brake_value / 100.0)
         : 0.0;
-    uint32_t throttle_height = (uint32_t)lround(
-        hud_png_clamp(throttle, 0.0, 1.0) *
-        renderer->layout.pedal_active_height);
-    uint32_t brake_height = (uint32_t)lround(
-        hud_png_clamp(brake, 0.0, 1.0) * renderer->layout.pedal_active_height);
-    const uint32_t image_height = renderer->layout.pedal_bar.height;
-    const uint32_t source_blue_x = 88U;
-    const uint32_t source_blue_width = 24U;
-    const uint32_t destination_blue_x = 18U;
-    const uint32_t source_red_x = 52U;
-    const uint32_t source_red_width = 24U;
+    {
+        const HudImage *blue = hud_png_asset(renderer,
+                                              HUD_ASSET_PEDAL_BAR_FILL_BLUE);
+        const HudImage *red = hud_png_asset(renderer,
+                                             HUD_ASSET_PEDAL_BAR_FILL_RED);
+        const uint32_t image_height = renderer->layout.pedal_bar.height;
+        const uint32_t segment_count = renderer->layout.pedal_segments;
 
-    if (throttle_height > image_height) throttle_height = image_height;
-    if (brake_height > image_height) brake_height = image_height;
-    if (throttle_height > 0U) {
-        HudRect source = { (int)source_blue_x,
-                           (int)(image_height - throttle_height),
-                           source_blue_width, throttle_height };
-        HudRect destination = {
-            renderer->layout.pedal_bar.x + (int)destination_blue_x,
-            renderer->layout.pedal_bar.y + (int)(image_height - throttle_height),
-            source_blue_width, throttle_height
-        };
-        (void)hud_png_blit_region(renderer, layer,
-                                  HUD_ASSET_PEDAL_BAR_FILL_BLUE, source,
-                                  destination);
-    }
-    if (brake_height > 0U) {
-        HudRect source = { (int)source_red_x,
-                           (int)(image_height - brake_height),
-                           source_red_width, brake_height };
-        HudRect destination = {
-            renderer->layout.pedal_bar.x + (int)source_red_x,
-            renderer->layout.pedal_bar.y + (int)(image_height - brake_height),
-            source_red_width, brake_height
-        };
-        (void)hud_png_blit_region(renderer, layer,
-                                  HUD_ASSET_PEDAL_BAR_FILL_RED, source,
-                                  destination);
+        /* The V3 bar has transparent margins below/above the ten complete
+         * cells.  Find those bounds from the loaded PNG and choose a cell
+         * boundary, rather than cutting a cell or using the old V2 slot. */
+        const HudImage *fills[] = { blue, red };
+        const double values[] = { throttle, brake };
+        const HudAssetId ids[] = { HUD_ASSET_PEDAL_BAR_FILL_BLUE,
+                                   HUD_ASSET_PEDAL_BAR_FILL_RED };
+        size_t fill_index;
+
+        if (segment_count == 0U) return;
+        for (fill_index = 0U; fill_index < 2U; ++fill_index) {
+            const HudImage *fill = fills[fill_index];
+            double normalized = hud_png_clamp(values[fill_index], 0.0, 1.0);
+            uint32_t visible_segments;
+            uint32_t active_top;
+            uint32_t active_bottom;
+            uint32_t source_y;
+            uint32_t source_height;
+            HudRect source;
+            HudRect destination;
+
+            if (fill == NULL || fill->alpha_max == 0U ||
+                fill->alpha_y_max < fill->alpha_y_min) {
+                continue;
+            }
+            visible_segments = (uint32_t)lround(normalized * segment_count);
+            if (visible_segments == 0U) continue;
+            if (visible_segments > segment_count) {
+                visible_segments = segment_count;
+            }
+            active_top = fill->alpha_y_min < image_height ?
+                         fill->alpha_y_min : image_height;
+            active_bottom = fill->alpha_y_max + 1U < image_height ?
+                            fill->alpha_y_max + 1U : image_height;
+            if (active_bottom <= active_top) continue;
+            source_y = active_top + (uint32_t)lround(
+                (double)(segment_count - visible_segments) *
+                (double)(active_bottom - active_top) / segment_count);
+            if (source_y >= image_height) continue;
+            source_height = image_height - source_y;
+            if (fill->alpha_x_max < fill->alpha_x_min) continue;
+            source = (HudRect){ (int)fill->alpha_x_min, (int)source_y,
+                                fill->alpha_x_max - fill->alpha_x_min + 1U,
+                                source_height };
+            destination = (HudRect){
+                renderer->layout.pedal_bar.x + (int)fill->alpha_x_min,
+                renderer->layout.pedal_bar.y + (int)source_y,
+                source.width, source.height
+            };
+            (void)hud_png_blit_region(renderer, layer, ids[fill_index], source,
+                                      destination);
+        }
     }
 }
 
@@ -637,6 +673,7 @@ int hud_renderer_init_style(HudRenderer *renderer, uint32_t width,
     if (hud_text_atlas_init(&renderer->text_atlas) < 0) {
         fprintf(stderr, "HUD PNG: glyph atlas initialization failed; text disabled\n");
     }
+    hud_png_apply_asset_geometry(renderer);
     if (!hud_png_render_static(renderer)) {
         fprintf(stderr, "HUD PNG: static template initialization failed; using empty HUD\n");
         memset(renderer->static_layer.pixels, 0,

@@ -29,7 +29,7 @@ typedef struct {
     double g_max;
     double g_radius;
     double g_filter_alpha;
-    uint32_t pedal_active_height;
+    uint32_t pedal_segments;
     double brake_pressure_max;
     bool brake_input_is_pressure;
     int text_size_small;

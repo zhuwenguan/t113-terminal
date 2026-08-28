@@ -91,6 +91,28 @@ static void test_alpha_blend(HudPixelFormat format)
     assert(pixel[1] == 0U && pixel[3] == 255U);
 }
 
+static size_t count_alpha_rect(const HudLayer *layer, uint32_t x, uint32_t y,
+                               uint32_t width, uint32_t height)
+{
+    size_t count = 0U;
+    uint32_t row;
+
+    assert(layer != NULL);
+    assert(x <= layer->width && width <= layer->width - x);
+    assert(y <= layer->height && height <= layer->height - y);
+    for (row = y; row < y + height; ++row) {
+        uint32_t column;
+
+        for (column = x; column < x + width; ++column) {
+            if (layer->pixels[(size_t)row * layer->stride +
+                              (size_t)column * 4U + 3U] != 0U) {
+                count++;
+            }
+        }
+    }
+    return count;
+}
+
 static VehicleState make_state(double rpm, double throttle, double brake,
                                double lateral_g, double longitudinal_g)
 {
@@ -131,6 +153,7 @@ static void test_png_renderer(const char *asset_dir,
 {
     HudRenderer renderer;
     HudSurface surface;
+    const HudLayer *dynamic;
     VehicleState states[4];
     uint8_t *pixels;
     size_t index;
@@ -157,6 +180,19 @@ static void test_png_renderer(const char *asset_dir,
     states[1] = make_state(9600.0, 100.0, 0.0, 0.8, -0.8);
     states[2] = make_state(5000.0, 25.0, 85.0, -0.8, 0.8);
     memset(&states[3], 0, sizeof(states[3]));
+    if (format == HUD_PIXEL_FORMAT_RGBA8888) {
+        dynamic = hud_renderer_render_dynamic(&renderer, &states[0], false);
+        assert(dynamic != NULL);
+        assert(count_alpha_rect(dynamic, 684U, 444U, 20U, 122U) == 0U);
+        dynamic = hud_renderer_render_dynamic(&renderer, &states[1], true);
+        assert(dynamic != NULL);
+        assert(count_alpha_rect(dynamic, 684U, 444U, 20U, 122U) > 0U);
+        assert(count_alpha_rect(dynamic, 718U, 444U, 20U, 122U) == 0U);
+        dynamic = hud_renderer_render_dynamic(&renderer, &states[2], false);
+        assert(dynamic != NULL);
+        assert(count_alpha_rect(dynamic, 684U, 444U, 20U, 122U) > 0U);
+        assert(count_alpha_rect(dynamic, 718U, 444U, 20U, 122U) > 0U);
+    }
     for (index = 0U; index < sizeof(states) / sizeof(states[0]); ++index) {
         const HudLayer *layer = hud_renderer_render_frame_to_surface(
             &renderer, &states[index], index == 1U, &surface, NULL);

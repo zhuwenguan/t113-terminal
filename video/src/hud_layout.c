@@ -17,15 +17,15 @@ void hud_layout_default(HudLayout *layout)
     layout->warning_status = (HudRect){ 246, 12, 100U, 28U };
     layout->rpm_max = 10000.0;
     layout->rpm_red_start = 8000.0;
-    layout->rpm_segments = 25U;
-    /* The supplied fill has a 24-pixel transparent lead-in before its first
-     * segment and 473 pixels of actual segment span. */
-    layout->rpm_content_x = 24U;
-    layout->rpm_content_width = 473U;
+    /* V3 contains 24 complete cells.  The X span is refreshed from the
+     * decode-time alpha bbox when the selected asset pack is loaded. */
+    layout->rpm_segments = 24U;
+    layout->rpm_content_x = 29U;
+    layout->rpm_content_width = 462U;
     layout->g_max = 1.5;
     layout->g_radius = 52.0;
     layout->g_filter_alpha = 0.25;
-    layout->pedal_active_height = 140U;
+    layout->pedal_segments = 10U;
     layout->brake_pressure_max = 100.0;
     layout->brake_input_is_pressure = false;
     layout->text_size_small = 1;
