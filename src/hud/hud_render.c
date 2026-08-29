@@ -27,6 +27,7 @@
 #define HUD_SPEED_VALUE_Y_OFFSET (-8)
 #define HUD_PEDAL_VALUE_Y_OFFSET 15
 #define HUD_G_LONGITUDINAL_VALUE_Y_OFFSET (-2)
+#define HUD_LAST_LAP_DISPLAY_US 2000000ULL
 
 typedef enum {
     HUD_G_DIRECTION_UP = 0,
@@ -55,6 +56,13 @@ struct HudContext {
     const HudTheme *theme;
     double g_direction_values[HUD_G_DIRECTION_COUNT];
     bool g_direction_valid[HUD_G_DIRECTION_COUNT];
+    double previous_lap_time_s;
+    bool previous_lap_time_valid;
+    uint32_t previous_lap_number;
+    bool previous_lap_number_valid;
+    double reset_last_lap_time_s;
+    uint64_t reset_last_lap_started_us;
+    bool reset_last_lap_active;
 };
 
 static const HudTheme hud_default_theme = HUD_THEME_DEFAULT;
@@ -242,20 +250,54 @@ static void hud_draw_lap_dynamic(HudContext *hud, const VehicleState *state)
     char lap_time[32];
     char best[32];
     char delta[32];
-    bool lap_valid = state != NULL && state->lap_valid;
-    bool time_valid = lap_valid && state != NULL &&
-                      isfinite(state->lap_time_s);
-    bool best_valid = lap_valid && state != NULL &&
-                      isfinite(state->best_lap_time_s);
-    bool delta_valid = lap_valid && state != NULL &&
-                       isfinite(state->delta_time_s);
+    bool time_valid = state != NULL && isfinite(state->lap_time_s);
+    bool best_valid = state != NULL && isfinite(state->best_lap_time_s);
+    bool delta_valid = state != NULL && isfinite(state->delta_time_s);
+    bool last_lap_valid = state != NULL &&
+                          isfinite(state->last_lap_time_s) &&
+                          state->last_lap_time_s > 0.0;
+    bool lap_number_changed = state != NULL &&
+                              hud->previous_lap_number_valid &&
+                              state->lap_number != hud->previous_lap_number;
+    bool show_last_lap = false;
+    uint64_t now_us = hud_now_us();
 
-    (void)snprintf(lap, sizeof(lap), "%u", lap_valid ? state->lap_number : 0U);
+    if (state != NULL && last_lap_valid &&
+        ((time_valid && state->lap_time_s == 0.0 &&
+          (!hud->previous_lap_time_valid || hud->previous_lap_time_s > 0.0)) ||
+         lap_number_changed)) {
+        hud->reset_last_lap_time_s = state->last_lap_time_s;
+        hud->reset_last_lap_started_us = now_us;
+        hud->reset_last_lap_active = now_us != 0U;
+    }
+    if (time_valid) {
+        hud->previous_lap_time_s = state->lap_time_s;
+        hud->previous_lap_time_valid = true;
+    } else {
+        hud->previous_lap_time_valid = false;
+    }
+    if (state != NULL) {
+        hud->previous_lap_number = state->lap_number;
+        hud->previous_lap_number_valid = true;
+    } else {
+        hud->previous_lap_number_valid = false;
+    }
+    if (hud->reset_last_lap_active && now_us >= hud->reset_last_lap_started_us &&
+        now_us - hud->reset_last_lap_started_us < HUD_LAST_LAP_DISPLAY_US) {
+        show_last_lap = true;
+    } else if (hud->reset_last_lap_active) {
+        hud->reset_last_lap_active = false;
+    }
+
+    if (state != NULL) {
+        (void)snprintf(lap, sizeof(lap), "%u", state->lap_number);
+    } else {
+        (void)snprintf(lap, sizeof(lap), "--");
+    }
     hud_draw_text_top(&hud->canvas, hud->font_normal, 20,
                       80 + HUD_LAP_TEXT_Y_OFFSET,
-                      lap_valid ? hud->theme->text_primary :
-                      hud->theme->text_secondary,
-                      lap_valid ? lap : "--");
+                      state != NULL ? hud->theme->text_primary :
+                      hud->theme->text_secondary, lap);
     hud_format_time(best, sizeof(best), best_valid,
                     state != NULL ? state->best_lap_time_s : 0.0);
     hud_draw_text_right(&hud->canvas, hud->font_small, 155,
@@ -269,12 +311,16 @@ static void hud_draw_lap_dynamic(HudContext *hud, const VehicleState *state)
                         !delta_valid ? hud->theme->text_secondary :
                         (state->delta_time_s <= 0.0 ? hud->theme->green :
                          hud->theme->red), delta);
-    hud_format_time(lap_time, sizeof(lap_time), time_valid,
-                    state != NULL ? state->lap_time_s : 0.0);
+    hud_format_time(lap_time, sizeof(lap_time),
+                    show_last_lap || time_valid,
+                    show_last_lap ? hud->reset_last_lap_time_s :
+                    (state != NULL ? state->lap_time_s : 0.0));
     hud_draw_text_right(&hud->canvas, hud->font_small, 155,
                         80 + HUD_LAP_TEXT_Y_OFFSET,
-                        time_valid ? hud->theme->text_primary :
-                        hud->theme->text_secondary, lap_time);
+                        show_last_lap ? hud->theme->panel_border :
+                        (time_valid ? hud->theme->text_primary :
+                         hud->theme->text_secondary),
+                        lap_time);
 }
 
 static void hud_draw_accel_event_static(HudContext *hud)

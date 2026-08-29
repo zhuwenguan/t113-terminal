@@ -22,6 +22,7 @@ static unsigned int font_load_calls;
 static char rendered_text[128][48];
 static int rendered_text_x[128];
 static int rendered_text_baseline_y[128];
+static uint32_t rendered_text_color[128];
 static size_t rendered_text_count;
 
 UiFont *ui_font_load(const char *path, int pixel_size)
@@ -75,6 +76,7 @@ int ui_text(UiCanvas *canvas, UiFont *font, int x, int baseline_y,
                                 sizeof(rendered_text[0])) {
         rendered_text_x[rendered_text_count] = x;
         rendered_text_baseline_y[rendered_text_count] = baseline_y;
+        rendered_text_color[rendered_text_count] = color;
         (void)snprintf(rendered_text[rendered_text_count],
                        sizeof(rendered_text[rendered_text_count]), "%s", text);
         rendered_text_count++;
@@ -204,6 +206,22 @@ static bool rendered_text_call_found(const char *text, int x, int baseline_y)
         if (strcmp(rendered_text[index], text) == 0 &&
             rendered_text_x[index] == x &&
             rendered_text_baseline_y[index] == baseline_y) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool rendered_text_call_found_with_color(const char *text, int x,
+                                                int baseline_y, uint32_t color)
+{
+    size_t index;
+
+    for (index = 0U; index < rendered_text_count; ++index) {
+        if (strcmp(rendered_text[index], text) == 0 &&
+            rendered_text_x[index] == x &&
+            rendered_text_baseline_y[index] == baseline_y &&
+            rendered_text_color[index] == color) {
             return true;
         }
     }
@@ -340,6 +358,31 @@ static void test_g_direction_history(HudContext *context)
     guarded_canvas_close(&guarded);
 }
 
+static void test_lap_values_ignore_valid(HudContext *context)
+{
+    GuardedCanvas guarded;
+    VehicleState state = make_state();
+
+    guarded_canvas_init(&guarded, TEST_WIDTH, TEST_HEIGHT,
+                        TEST_WIDTH * 4 + 64);
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
+
+    state.lap_valid = false;
+    state.lap_number = 0U;
+    state.lap_time_s = 0.0;
+    state.last_lap_time_s = 61.234;
+    state.best_lap_time_s = 0.0;
+    state.delta_time_s = 0.0;
+    rendered_text_count = 0U;
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
+    TEST_CHECK(rendered_text_call_found("0", 20, 96));
+    TEST_CHECK(rendered_text_call_found_with_color(
+        "01:01.234", 83, 88, UI_ARGB(230U, 0U, 170U, 241U)));
+    TEST_CHECK(rendered_text_call_found("00:00.000", 83, 130));
+    TEST_CHECK(rendered_text_call_found("+0.00", 115, 150));
+    guarded_canvas_close(&guarded);
+}
+
 static void test_extreme_geometry_clipping(void)
 {
     GuardedCanvas guarded;
@@ -404,6 +447,7 @@ int main(void)
     TEST_CHECK(font_load_calls == 3U);
     test_render_values_and_stride(context);
     test_g_direction_history(context);
+    test_lap_values_ignore_valid(context);
     test_invalid_values_and_accel_visibility(context);
     hud_shutdown(context);
     puts("hud_render tests: PASS");
