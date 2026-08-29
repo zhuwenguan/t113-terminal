@@ -289,6 +289,7 @@ static void test_render_values_and_stride(HudContext *context)
 
     guarded_canvas_init(&guarded, TEST_WIDTH, TEST_HEIGHT,
                         TEST_WIDTH * 4 + 64);
+    state.accel_distance_m = 5.0;
     rendered_text_count = 0U;
     TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
     TEST_CHECK(pixel_color(&guarded.canvas, 40, 40) != UI_COLOR_TRANSPARENT);
@@ -431,10 +432,46 @@ static void test_invalid_values_and_accel_visibility(HudContext *context)
     assert_text_has_no_invalid_tokens();
 
     invalid = make_state();
+    invalid.accel_distance_m = 0.0;
     invalid.accel_50m_time_s = 0.0;
     invalid.accel_time_s = 0.0;
     TEST_CHECK(hud_render(context, &guarded.canvas, &invalid, false) == 0);
+    TEST_CHECK(pixel_color(&guarded.canvas, 20, 215) == UI_COLOR_TRANSPARENT);
+    guarded_canvas_close(&guarded);
+}
+
+static void test_accel_event_card_visibility(HudContext *context)
+{
+    GuardedCanvas guarded;
+    VehicleState state = make_state();
+
+    guarded_canvas_init(&guarded, TEST_WIDTH, TEST_HEIGHT,
+                        TEST_WIDTH * 4 + 64);
+    state.accel_distance_m = 0.0;
+    state.accel_50m_time_s = 0.0;
+    state.accel_time_s = 0.0;
+    rendered_text_count = 0U;
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
+    TEST_CHECK(pixel_color(&guarded.canvas, 20, 215) == UI_COLOR_TRANSPARENT);
+    TEST_CHECK(!rendered_text_found("ACCEL EVENT"));
+
+    state.accel_distance_m = 5.0;
+    state.accel_50m_time_s = 3.82;
+    state.accel_time_s = 5.41;
+    rendered_text_count = 0U;
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
     TEST_CHECK(pixel_color(&guarded.canvas, 20, 215) != UI_COLOR_TRANSPARENT);
+    TEST_CHECK(rendered_text_found("ACCEL EVENT"));
+    TEST_CHECK(rendered_text_found("3.82 s"));
+    TEST_CHECK(rendered_text_found("5.41 s"));
+
+    state.accel_distance_m = 0.0;
+    state.accel_50m_time_s = 0.0;
+    state.accel_time_s = 0.0;
+    rendered_text_count = 0U;
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
+    TEST_CHECK(pixel_color(&guarded.canvas, 20, 215) == UI_COLOR_TRANSPARENT);
+    TEST_CHECK(!rendered_text_found("ACCEL EVENT"));
     guarded_canvas_close(&guarded);
 }
 
@@ -450,6 +487,7 @@ int main(void)
     test_g_direction_history(context);
     test_lap_values_ignore_valid(context);
     test_invalid_values_and_accel_visibility(context);
+    test_accel_event_card_visibility(context);
     hud_shutdown(context);
     puts("hud_render tests: PASS");
     return 0;

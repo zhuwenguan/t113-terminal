@@ -328,28 +328,11 @@ static void hud_draw_lap_dynamic(HudContext *hud, const VehicleState *state)
                         lap_time);
 }
 
-static void hud_draw_accel_event_static(HudContext *hud)
-{
-    const HudRect rect = hud->layout.accel_event;
-    const HudPanelStyle panel = hud_panel_style(hud, 6);
-
-    hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 42,
-                      213 + HUD_ACCEL_TEXT_Y_OFFSET,
-                      hud->theme->panel_border, "ACCEL EVENT");
-    hud_draw_rule(&hud->canvas, 20, 230, 160, hud->theme->segment_inactive);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 30,
-                      236 + HUD_ACCEL_TEXT_Y_OFFSET,
-                      hud->theme->text_secondary, "50m");
-    hud_draw_rule(&hud->canvas, 20, 255, 160, hud->theme->segment_inactive);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 30,
-                      262 + HUD_ACCEL_TEXT_Y_OFFSET,
-                      hud->theme->text_secondary, "75m");
-}
-
 static void hud_draw_accel_event_dynamic(HudContext *hud,
                                          const VehicleState *state)
 {
+    const HudRect rect = hud->layout.accel_event;
+    const HudPanelStyle panel = hud_panel_style(hud, 6);
     char time_50m[24];
     char time_75m[24];
     bool valid_50m = state != NULL && isfinite(state->accel_50m_time_s) &&
@@ -357,6 +340,28 @@ static void hud_draw_accel_event_dynamic(HudContext *hud,
     bool valid_75m = state != NULL && isfinite(state->accel_time_s) &&
                      state->accel_time_s > 0.0;
 
+    /* accel_distance_m is the first field that becomes non-zero when a
+     * straight-line acceleration event starts.  Keep the complete card out
+     * of the static cache so it disappears cleanly when the field resets. */
+    if (state == NULL || !isfinite(state->accel_distance_m) ||
+        state->accel_distance_m <= 0.0) {
+        return;
+    }
+
+    hud_panel(&hud->canvas, rect, &panel);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 42,
+                      213 + HUD_ACCEL_TEXT_Y_OFFSET,
+                      hud->theme->panel_border, "ACCEL EVENT");
+    hud_draw_rule(&hud->canvas, 20, 230, 160,
+                  hud->theme->segment_inactive);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 30,
+                      236 + HUD_ACCEL_TEXT_Y_OFFSET,
+                      hud->theme->text_secondary, "50m");
+    hud_draw_rule(&hud->canvas, 20, 255, 160,
+                  hud->theme->segment_inactive);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 30,
+                      262 + HUD_ACCEL_TEXT_Y_OFFSET,
+                      hud->theme->text_secondary, "75m");
     hud_format_number(time_50m, sizeof(time_50m), valid_50m,
                       state != NULL ? state->accel_50m_time_s : 0.0,
                       "%.2f", " s");
@@ -364,8 +369,8 @@ static void hud_draw_accel_event_dynamic(HudContext *hud,
                         236 + HUD_ACCEL_TEXT_Y_OFFSET,
                         valid_50m ? hud->theme->text_primary :
                         hud->theme->text_secondary, time_50m);
-    /* The first value's glyph bitmap reaches the separator row.  Keep the
-     * original draw order after moving the static separator into the cache. */
+    /* The first value's glyph bitmap reaches the separator row, so redraw the
+     * separator after it to keep the card boundary crisp. */
     hud_draw_rule(&hud->canvas, 20, 255, 160,
                   hud->theme->segment_inactive);
     hud_format_number(time_75m, sizeof(time_75m), valid_75m,
@@ -794,7 +799,6 @@ static bool hud_build_static_cache(HudContext *hud)
     hud->canvas = hud->static_canvas;
     ui_clear(&hud->static_canvas, hud->theme->transparent);
     hud_draw_lap_static(hud);
-    hud_draw_accel_event_static(hud);
     hud_draw_main_static(hud);
     hud->static_ready = true;
     return true;
