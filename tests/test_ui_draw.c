@@ -147,6 +147,36 @@ static void test_lines_and_circles(void)
     TEST_CHECK(test_pixel_color(&canvas, 20, 7) == UI_COLOR_WHITE);
 }
 
+static void test_axis_aligned_line_endpoints(void)
+{
+    uint8_t pixels[32 * 24 * 4];
+    UiCanvas canvas = { pixels, 32, 24, 32 * 4 };
+    int row;
+    int column;
+
+    memset(pixels, 0, sizeof(pixels));
+    ui_line(&canvas, 5, 10, 15, 10, 1, UI_COLOR_WHITE);
+    for (row = 0; row < canvas.height; ++row) {
+        for (column = 0; column < canvas.width; ++column) {
+            bool expected = row == 10 && column >= 5 && column <= 15;
+
+            TEST_CHECK((test_pixel_color(&canvas, column, row) != 0U) ==
+                       expected);
+        }
+    }
+
+    memset(pixels, 0, sizeof(pixels));
+    ui_line(&canvas, 20, 5, 20, 15, 1, UI_COLOR_WHITE);
+    for (row = 0; row < canvas.height; ++row) {
+        for (column = 0; column < canvas.width; ++column) {
+            bool expected = column == 20 && row >= 5 && row <= 15;
+
+            TEST_CHECK((test_pixel_color(&canvas, column, row) != 0U) ==
+                       expected);
+        }
+    }
+}
+
 static void test_round_rectangles(void)
 {
     uint8_t pixels[32 * 24 * 4];
@@ -313,6 +343,7 @@ int main(int argc, char **argv)
     test_color_and_stride();
     test_rectangles();
     test_lines_and_circles();
+    test_axis_aligned_line_endpoints();
     test_round_rectangles();
     test_guard_memory_and_clipping();
     test_hud_surface_mapping();

@@ -236,14 +236,21 @@ static bool ui_clip_line(long double min_x, long double max_x,
     }
     if (start > end) return false;
 
-    *x0 = (int64_t)((long double)*x0 + start * dx +
-                    ((long double)*x0 + start * dx >= 0.0L ? 0.5L : -0.5L));
-    *y0 = (int64_t)((long double)*y0 + start * dy +
-                    ((long double)*y0 + start * dy >= 0.0L ? 0.5L : -0.5L));
-    *x1 = (int64_t)((long double)*x1 + end * dx +
-                    ((long double)*x1 + end * dx >= 0.0L ? 0.5L : -0.5L));
-    *y1 = (int64_t)((long double)*y1 + end * dy +
-                    ((long double)*y1 + end * dy >= 0.0L ? 0.5L : -0.5L));
+    {
+        long double clipped_x0 = (long double)*x0 + start * dx;
+        long double clipped_y0 = (long double)*y0 + start * dy;
+        long double clipped_x1 = (long double)*x0 + end * dx;
+        long double clipped_y1 = (long double)*y0 + end * dy;
+
+        *x0 = (int64_t)(clipped_x0 +
+                        (clipped_x0 >= 0.0L ? 0.5L : -0.5L));
+        *y0 = (int64_t)(clipped_y0 +
+                        (clipped_y0 >= 0.0L ? 0.5L : -0.5L));
+        *x1 = (int64_t)(clipped_x1 +
+                        (clipped_x1 >= 0.0L ? 0.5L : -0.5L));
+        *y1 = (int64_t)(clipped_y1 +
+                        (clipped_y1 >= 0.0L ? 0.5L : -0.5L));
+    }
     if (*x0 < (int64_t)min_x) *x0 = (int64_t)min_x;
     if (*x0 > (int64_t)max_x) *x0 = (int64_t)max_x;
     if (*x1 < (int64_t)min_x) *x1 = (int64_t)min_x;
