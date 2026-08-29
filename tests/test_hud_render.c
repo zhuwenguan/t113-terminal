@@ -20,6 +20,8 @@ struct UiFont {
 
 static unsigned int font_load_calls;
 static char rendered_text[128][48];
+static int rendered_text_x[128];
+static int rendered_text_baseline_y[128];
 static size_t rendered_text_count;
 
 UiFont *ui_font_load(const char *path, int pixel_size)
@@ -71,6 +73,8 @@ int ui_text(UiCanvas *canvas, UiFont *font, int x, int baseline_y,
     if (ui_text_measure(font, text, &width, &height) < 0) return -1;
     if (rendered_text_count < sizeof(rendered_text) /
                                 sizeof(rendered_text[0])) {
+        rendered_text_x[rendered_text_count] = x;
+        rendered_text_baseline_y[rendered_text_count] = baseline_y;
         (void)snprintf(rendered_text[rendered_text_count],
                        sizeof(rendered_text[rendered_text_count]), "%s", text);
         rendered_text_count++;
@@ -192,6 +196,30 @@ static void assert_text_has_no_invalid_tokens(void)
     }
 }
 
+static bool rendered_text_call_found(const char *text, int x, int baseline_y)
+{
+    size_t index;
+
+    for (index = 0U; index < rendered_text_count; ++index) {
+        if (strcmp(rendered_text[index], text) == 0 &&
+            rendered_text_x[index] == x &&
+            rendered_text_baseline_y[index] == baseline_y) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool rendered_text_found(const char *text)
+{
+    size_t index;
+
+    for (index = 0U; index < rendered_text_count; ++index) {
+        if (strcmp(rendered_text[index], text) == 0) return true;
+    }
+    return false;
+}
+
 static void test_layout_constants(void)
 {
     HudLayout layout;
@@ -248,6 +276,10 @@ static void test_render_values_and_stride(HudContext *context)
     TEST_CHECK(pixel_color(&guarded.canvas, 40, 40) != UI_COLOR_TRANSPARENT);
     TEST_CHECK(pixel_color(&guarded.canvas, 130, 500) != UI_COLOR_TRANSPARENT);
     TEST_CHECK(rendered_text_count > 0U);
+    TEST_CHECK(rendered_text_call_found("3", 20, 96));
+    TEST_CHECK(rendered_text_call_found("3.82 s", 102, 242));
+    TEST_CHECK(rendered_text_call_found("86", 152, 529));
+    TEST_CHECK(rendered_text_call_found("63%", 396, 477));
     assert_text_has_no_invalid_tokens();
 
     for (iteration = 0; iteration < 5; ++iteration) {
@@ -262,6 +294,41 @@ static void test_render_values_and_stride(HudContext *context)
                           iteration == 4) == 0);
     }
     assert_text_has_no_invalid_tokens();
+    guarded_canvas_close(&guarded);
+}
+
+static void test_g_direction_history(HudContext *context)
+{
+    GuardedCanvas guarded;
+    VehicleState state = make_state();
+
+    guarded_canvas_init(&guarded, TEST_WIDTH, TEST_HEIGHT,
+                        TEST_WIDTH * 4 + 64);
+    state.acc_x = 1.25 * 9.80665;
+    state.acc_y = -0.35 * 9.80665;
+    rendered_text_count = 0U;
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
+    TEST_CHECK(rendered_text_found("+1.25"));
+    TEST_CHECK(rendered_text_found("-0.35"));
+    TEST_CHECK(rendered_text_found("--"));
+
+    state.acc_x = -0.75 * 9.80665;
+    state.acc_y = 0.65 * 9.80665;
+    rendered_text_count = 0U;
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
+    TEST_CHECK(rendered_text_found("+1.25"));
+    TEST_CHECK(rendered_text_found("-0.75"));
+    TEST_CHECK(rendered_text_found("-0.35"));
+    TEST_CHECK(rendered_text_found("+0.65"));
+
+    state.acc_x = 0.0;
+    state.acc_y = 0.0;
+    rendered_text_count = 0U;
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
+    TEST_CHECK(rendered_text_found("+1.25"));
+    TEST_CHECK(rendered_text_found("-0.75"));
+    TEST_CHECK(rendered_text_found("-0.35"));
+    TEST_CHECK(rendered_text_found("+0.65"));
     guarded_canvas_close(&guarded);
 }
 
@@ -328,6 +395,7 @@ int main(void)
     TEST_CHECK(hud_init(&context, "stub-font.ttf") == 0);
     TEST_CHECK(font_load_calls == 3U);
     test_render_values_and_stride(context);
+    test_g_direction_history(context);
     test_invalid_values_and_accel_visibility(context);
     hud_shutdown(context);
     puts("hud_render tests: PASS");

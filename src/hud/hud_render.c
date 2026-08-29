@@ -21,6 +21,17 @@
 #define HUD_FONT_NORMAL 24
 #define HUD_FONT_SPEED 48
 #define HUD_G_TO_MPS2 9.80665
+#define HUD_LAP_TEXT_Y_OFFSET (-8)
+#define HUD_ACCEL_TEXT_Y_OFFSET (-10)
+#define HUD_MAIN_TEXT_Y_OFFSET (-4)
+
+typedef enum {
+    HUD_G_DIRECTION_UP = 0,
+    HUD_G_DIRECTION_DOWN,
+    HUD_G_DIRECTION_LEFT,
+    HUD_G_DIRECTION_RIGHT,
+    HUD_G_DIRECTION_COUNT
+} HudGDirection;
 
 struct HudContext {
     UiCanvas canvas;
@@ -39,6 +50,8 @@ struct HudContext {
     UiImage *flag_checkered_icon;
     HudLayout layout;
     const HudTheme *theme;
+    double g_direction_values[HUD_G_DIRECTION_COUNT];
+    bool g_direction_valid[HUD_G_DIRECTION_COUNT];
 };
 
 static const HudTheme hud_default_theme = HUD_THEME_DEFAULT;
@@ -203,16 +216,20 @@ static void hud_draw_lap_static(HudContext *hud)
 
     hud_panel(&hud->canvas, rect, &panel);
     ui_image_draw(&hud->canvas, hud->timer_icon, 20, 32);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 40, 35,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 40,
+                      35 + HUD_LAP_TEXT_Y_OFFSET,
                       hud->theme->panel_border, "LAP");
     hud_draw_rule(&hud->canvas, 20, 55, 160, hud->theme->segment_inactive);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 20, 65,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 20,
+                      65 + HUD_LAP_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "LAP TIME");
     hud_draw_rule(&hud->canvas, 20, 115, 160, hud->theme->segment_inactive);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 20, 122,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 20,
+                      122 + HUD_LAP_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "BEST");
     hud_draw_rule(&hud->canvas, 20, 160, 160, hud->theme->segment_inactive);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 20, 142,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 20,
+                      142 + HUD_LAP_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "DELTA");
 }
 
@@ -231,24 +248,28 @@ static void hud_draw_lap_dynamic(HudContext *hud, const VehicleState *state)
                        isfinite(state->delta_time_s);
 
     (void)snprintf(lap, sizeof(lap), "%u", lap_valid ? state->lap_number : 0U);
-    hud_draw_text_top(&hud->canvas, hud->font_normal, 20, 80,
+    hud_draw_text_top(&hud->canvas, hud->font_normal, 20,
+                      80 + HUD_LAP_TEXT_Y_OFFSET,
                       lap_valid ? hud->theme->text_primary :
                       hud->theme->text_secondary,
                       lap_valid ? lap : "--");
     hud_format_time(best, sizeof(best), best_valid,
                     state != NULL ? state->best_lap_time_s : 0.0);
-    hud_draw_text_right(&hud->canvas, hud->font_small, 155, 122,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 155,
+                        122 + HUD_LAP_TEXT_Y_OFFSET,
                         best_valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, best);
     hud_format_number(delta, sizeof(delta), delta_valid,
                       state != NULL ? state->delta_time_s : 0.0, "%+.2f", "");
-    hud_draw_text_right(&hud->canvas, hud->font_small, 155, 142,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 155,
+                        142 + HUD_LAP_TEXT_Y_OFFSET,
                         !delta_valid ? hud->theme->text_secondary :
                         (state->delta_time_s <= 0.0 ? hud->theme->green :
                          hud->theme->red), delta);
     hud_format_time(lap_time, sizeof(lap_time), time_valid,
                     state != NULL ? state->lap_time_s : 0.0);
-    hud_draw_text_right(&hud->canvas, hud->font_small, 155, 80,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 155,
+                        80 + HUD_LAP_TEXT_Y_OFFSET,
                         time_valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, lap_time);
 }
@@ -259,13 +280,16 @@ static void hud_draw_accel_event_static(HudContext *hud)
     const HudPanelStyle panel = hud_panel_style(hud, 6);
 
     hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 42, 213,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 42,
+                      213 + HUD_ACCEL_TEXT_Y_OFFSET,
                       hud->theme->panel_border, "ACCEL EVENT");
     hud_draw_rule(&hud->canvas, 20, 230, 160, hud->theme->segment_inactive);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 30, 236,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 30,
+                      236 + HUD_ACCEL_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "50m");
     hud_draw_rule(&hud->canvas, 20, 255, 160, hud->theme->segment_inactive);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 30, 262,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 30,
+                      262 + HUD_ACCEL_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "75m");
 }
 
@@ -282,7 +306,8 @@ static void hud_draw_accel_event_dynamic(HudContext *hud,
     hud_format_number(time_50m, sizeof(time_50m), valid_50m,
                       state != NULL ? state->accel_50m_time_s : 0.0,
                       "%.2f", " s");
-    hud_draw_text_right(&hud->canvas, hud->font_small, 150, 236,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 150,
+                        236 + HUD_ACCEL_TEXT_Y_OFFSET,
                         valid_50m ? hud->theme->text_primary :
                         hud->theme->text_secondary, time_50m);
     /* The first value's glyph bitmap reaches the separator row.  Keep the
@@ -292,16 +317,19 @@ static void hud_draw_accel_event_dynamic(HudContext *hud,
     hud_format_number(time_75m, sizeof(time_75m), valid_75m,
                       state != NULL ? state->accel_time_s : 0.0,
                       "%.2f", " s");
-    hud_draw_text_right(&hud->canvas, hud->font_small, 150, 262,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 150,
+                        262 + HUD_ACCEL_TEXT_Y_OFFSET,
                         valid_75m ? hud->theme->text_primary :
                         hud->theme->text_secondary, time_75m);
 }
 
 static void hud_draw_speed_static(HudContext *hud)
 {
-    hud_draw_text_top(&hud->canvas, hud->font_small, 135, 465,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 155,
+                      465 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "SPEED");
-    hud_draw_text_center(&hud->canvas, hud->font_small, 167, 535,
+    hud_draw_text_center(&hud->canvas, hud->font_small, 167,
+                         535 + HUD_MAIN_TEXT_Y_OFFSET,
                          hud->theme->text_secondary, "km/h");
 }
 
@@ -321,11 +349,13 @@ static void hud_draw_speed_dynamic(HudContext *hud, const VehicleState *state,
 
     hud_format_number(speed, sizeof(speed), speed_valid,
                       state != NULL ? state->speed_kmh : 0.0, "%.0f", "");
-    hud_draw_text_top(&hud->canvas, hud->font_speed, 132, 485,
+    hud_draw_text_top(&hud->canvas, hud->font_speed, 152,
+                      485 + HUD_MAIN_TEXT_Y_OFFSET,
                       speed_valid ? hud->theme->text_primary :
                       hud->theme->text_secondary,
                       speed_valid ? speed : "---");
-    hud_draw_text_center(&hud->canvas, hud->font_small, 167, 558,
+    hud_draw_text_center(&hud->canvas, hud->font_small, 167,
+                         558 + HUD_MAIN_TEXT_Y_OFFSET,
                          recording || ready ? hud->theme->green :
                          hud->theme->text_secondary, status);
 }
@@ -352,7 +382,8 @@ static void hud_draw_pedal_row(HudContext *hud, int label_y, int bar_y,
     char display[24];
 
     hud_format_number(display, sizeof(display), valid, value, "%.0f", "%");
-    hud_draw_text_right(&hud->canvas, hud->font_small, 420, label_y,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 420,
+                        label_y + HUD_MAIN_TEXT_Y_OFFSET,
                         valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, display);
     hud_draw_fixed_segment_bar(hud, 240, bar_y,
@@ -367,7 +398,8 @@ static void hud_draw_pedal_row(HudContext *hud, int label_y, int bar_y,
 static void hud_draw_pedal_label(HudContext *hud, int label_y,
                                  const char *label)
 {
-    hud_draw_text_top(&hud->canvas, hud->font_small, 240, label_y,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 240,
+                      label_y + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, label);
 }
 
@@ -376,7 +408,8 @@ static void hud_draw_g_meter_static(HudContext *hud)
     const HudLayout *layout = &hud->layout;
 
     hud_draw_text_center(&hud->canvas, hud->font_small, layout->g_center_x,
-                         460, hud->theme->text_secondary, "G FORCE");
+                         460 + HUD_MAIN_TEXT_Y_OFFSET,
+                         hud->theme->text_secondary, "G FORCE");
     ui_circle(&hud->canvas, layout->g_center_x, layout->g_center_y,
               layout->g_radius, 1, hud->theme->panel_border);
     ui_circle(&hud->canvas, layout->g_center_x, layout->g_center_y, 16, 1,
@@ -406,6 +439,61 @@ static void hud_draw_g_meter_dynamic(HudContext *hud,
     int dot_x;
     int dot_y;
 
+    if (lateral_valid) {
+        if (lateral > 0.0) {
+            hud->g_direction_values[HUD_G_DIRECTION_RIGHT] = lateral;
+            hud->g_direction_valid[HUD_G_DIRECTION_RIGHT] = true;
+        } else if (lateral < 0.0) {
+            hud->g_direction_values[HUD_G_DIRECTION_LEFT] = lateral;
+            hud->g_direction_valid[HUD_G_DIRECTION_LEFT] = true;
+        }
+    }
+    if (longitudinal_valid) {
+        if (longitudinal > 0.0) {
+            hud->g_direction_values[HUD_G_DIRECTION_UP] = longitudinal;
+            hud->g_direction_valid[HUD_G_DIRECTION_UP] = true;
+        } else if (longitudinal < 0.0) {
+            hud->g_direction_values[HUD_G_DIRECTION_DOWN] = longitudinal;
+            hud->g_direction_valid[HUD_G_DIRECTION_DOWN] = true;
+        }
+    }
+
+    {
+        char up[24];
+        char down[24];
+        char left[24];
+        char right[24];
+
+        hud_format_number(up, sizeof(up),
+                          hud->g_direction_valid[HUD_G_DIRECTION_UP],
+                          hud->g_direction_values[HUD_G_DIRECTION_UP],
+                          "%+.2f", "");
+        hud_format_number(down, sizeof(down),
+                          hud->g_direction_valid[HUD_G_DIRECTION_DOWN],
+                          hud->g_direction_values[HUD_G_DIRECTION_DOWN],
+                          "%+.2f", "");
+        hud_format_number(left, sizeof(left),
+                          hud->g_direction_valid[HUD_G_DIRECTION_LEFT],
+                          hud->g_direction_values[HUD_G_DIRECTION_LEFT],
+                          "%+.2f", "");
+        hud_format_number(right, sizeof(right),
+                          hud->g_direction_valid[HUD_G_DIRECTION_RIGHT],
+                          hud->g_direction_values[HUD_G_DIRECTION_RIGHT],
+                          "%+.2f", "");
+        hud_draw_text_center(&hud->canvas, hud->font_small,
+                             layout->g_center_x, 480 + HUD_MAIN_TEXT_Y_OFFSET,
+                             hud->theme->text_primary, up);
+        hud_draw_text_center(&hud->canvas, hud->font_small,
+                             layout->g_center_x, 566 + HUD_MAIN_TEXT_Y_OFFSET,
+                             hud->theme->text_primary, down);
+        hud_draw_text_center(&hud->canvas, hud->font_small, 451,
+                             520 + HUD_MAIN_TEXT_Y_OFFSET,
+                             hud->theme->text_primary, left);
+        hud_draw_text_center(&hud->canvas, hud->font_small, 553,
+                             520 + HUD_MAIN_TEXT_Y_OFFSET,
+                             hud->theme->text_primary, right);
+    }
+
     if (!lateral_valid && !longitudinal_valid) return;
     dot_x = layout->g_center_x +
             (int)lround(hud_clamp(lateral / 1.5, -1.0, 1.0) *
@@ -418,7 +506,8 @@ static void hud_draw_g_meter_dynamic(HudContext *hud,
 
 static void hud_draw_rpm_static(HudContext *hud)
 {
-    hud_draw_text_top(&hud->canvas, hud->font_small, 240, 545,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 240,
+                      545 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "MOTOR RPM");
 }
 
@@ -436,7 +525,8 @@ static void hud_draw_rpm_dynamic(HudContext *hud, const VehicleState *state)
                       hud->theme->yellow : hud->theme->rpm);
 
     hud_format_number(display, sizeof(display), valid, rpm, "%.0f", "");
-    hud_draw_text_right(&hud->canvas, hud->font_small, 420, 545,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 420,
+                        545 + HUD_MAIN_TEXT_Y_OFFSET,
                         valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, display);
     hud_draw_fixed_segment_bar(hud, hud->layout.rpm_bar_x,
@@ -452,27 +542,33 @@ static void hud_draw_rpm_dynamic(HudContext *hud, const VehicleState *state)
 static void hud_draw_vehicle_info_static(HudContext *hud)
 {
     ui_image_draw(&hud->canvas, hud->battery_icon, 592, 465);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 618, 466,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 618,
+                      466 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "BATTERY");
     hud_draw_rule(&hud->canvas, 590, 490, 742, hud->theme->segment_inactive);
 
     ui_image_draw(&hud->canvas, hud->lightning_icon, 592, 497);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 618, 498,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 618,
+                      498 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "POWER");
     hud_draw_rule(&hud->canvas, 590, 525, 742, hud->theme->segment_inactive);
 
     ui_image_draw(&hud->canvas, hud->engine_icon, 592, 530);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 620, 530,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 620,
+                      530 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "-- C");
     ui_image_draw(&hud->canvas, hud->cpu_icon, 665, 530);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 695, 530,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 695,
+                      530 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "-- C");
     hud_draw_rule(&hud->canvas, 590, 555, 742, hud->theme->segment_inactive);
 
     ui_image_draw(&hud->canvas, hud->flag_checkered_icon, 592, 562);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 618, 563,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 618,
+                      563 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "MODE");
-    hud_draw_text_top(&hud->canvas, hud->font_small, 680, 563,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 680,
+                      563 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_primary, "TRACK");
 }
 
@@ -499,25 +595,29 @@ static void hud_draw_vehicle_info_dynamic(HudContext *hud,
     hud_format_number(soc, sizeof(soc), soc_valid,
                       state != NULL ? state->hv_soc_percent : 0.0,
                       "%.0f", "%");
-    hud_draw_text_right(&hud->canvas, hud->font_small, 685, 466,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 685,
+                        466 + HUD_MAIN_TEXT_Y_OFFSET,
                         soc_valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, soc);
     hud_format_number(voltage, sizeof(voltage), voltage_valid,
                       state != NULL ? state->hv_voltage_v : 0.0,
                       "%.0f", " V");
-    hud_draw_text_right(&hud->canvas, hud->font_small, 742, 466,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 742,
+                        466 + HUD_MAIN_TEXT_Y_OFFSET,
                         voltage_valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, voltage);
     hud_format_number(power, sizeof(power), power_valid,
                       state != NULL ? state->hv_power_w / 1000.0 : 0.0,
                       "%.1f", " kW");
-    hud_draw_text_top(&hud->canvas, hud->font_small, 670, 498,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 670,
+                      498 + HUD_MAIN_TEXT_Y_OFFSET,
                       power_valid ? hud->theme->text_primary :
                       hud->theme->text_secondary, power);
     hud_format_number(current, sizeof(current), current_valid,
                       state != NULL ? state->hv_current_a : 0.0,
                       "%.0f", " A");
-    hud_draw_text_right(&hud->canvas, hud->font_small, 742, 498,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 742,
+                        498 + HUD_MAIN_TEXT_Y_OFFSET,
                         current_valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, current);
 }
