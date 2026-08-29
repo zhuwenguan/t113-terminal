@@ -294,7 +294,8 @@ static void test_render_values_and_stride(HudContext *context)
     TEST_CHECK(pixel_color(&guarded.canvas, 40, 40) != UI_COLOR_TRANSPARENT);
     TEST_CHECK(pixel_color(&guarded.canvas, 130, 500) != UI_COLOR_TRANSPARENT);
     TEST_CHECK(rendered_text_count > 0U);
-    TEST_CHECK(rendered_text_call_found("3", 20, 96));
+    TEST_CHECK(rendered_text_call_found("3", 147, 178));
+    TEST_CHECK(rendered_text_call_found("01:02.314", 47, 100));
     TEST_CHECK(rendered_text_call_found("3.82 s", 102, 242));
     TEST_CHECK(rendered_text_call_found("86", 152, 521));
     TEST_CHECK(rendered_text_call_found("63%", 396, 492));
@@ -375,9 +376,9 @@ static void test_lap_values_ignore_valid(HudContext *context)
     state.delta_time_s = 0.0;
     rendered_text_count = 0U;
     TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
-    TEST_CHECK(rendered_text_call_found("0", 20, 96));
+    TEST_CHECK(rendered_text_call_found("0", 147, 178));
     TEST_CHECK(rendered_text_call_found_with_color(
-        "01:01.234", 83, 88, UI_ARGB(230U, 0U, 170U, 241U)));
+        "01:01.234", 47, 100, UI_ARGB(230U, 0U, 170U, 241U)));
     TEST_CHECK(rendered_text_call_found("00:00.000", 83, 130));
     TEST_CHECK(rendered_text_call_found("+0.00", 115, 150));
     guarded_canvas_close(&guarded);

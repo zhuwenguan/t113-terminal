@@ -22,6 +22,8 @@
 #define HUD_FONT_SPEED 48
 #define HUD_G_TO_MPS2 9.80665
 #define HUD_LAP_TEXT_Y_OFFSET (-8)
+#define HUD_LAP_TIME_VALUE_Y 84
+#define HUD_LAP_NUMBER_Y 170
 #define HUD_ACCEL_TEXT_Y_OFFSET (-10)
 #define HUD_MAIN_TEXT_Y_OFFSET (-4)
 #define HUD_SPEED_VALUE_Y_OFFSET (-8)
@@ -242,6 +244,9 @@ static void hud_draw_lap_static(HudContext *hud)
     hud_draw_text_top(&hud->canvas, hud->font_small, 20,
                       142 + HUD_LAP_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "DELTA");
+    hud_draw_text_top(&hud->canvas, hud->font_small, 20,
+                      HUD_LAP_NUMBER_Y + HUD_LAP_TEXT_Y_OFFSET,
+                      hud->theme->text_secondary, "LAP");
 }
 
 static void hud_draw_lap_dynamic(HudContext *hud, const VehicleState *state)
@@ -294,10 +299,10 @@ static void hud_draw_lap_dynamic(HudContext *hud, const VehicleState *state)
     } else {
         (void)snprintf(lap, sizeof(lap), "--");
     }
-    hud_draw_text_top(&hud->canvas, hud->font_normal, 20,
-                      80 + HUD_LAP_TEXT_Y_OFFSET,
-                      state != NULL ? hud->theme->text_primary :
-                      hud->theme->text_secondary, lap);
+    hud_draw_text_right(&hud->canvas, hud->font_small, 155,
+                        HUD_LAP_NUMBER_Y + HUD_LAP_TEXT_Y_OFFSET,
+                        state != NULL ? hud->theme->text_primary :
+                        hud->theme->text_secondary, lap);
     hud_format_time(best, sizeof(best), best_valid,
                     state != NULL ? state->best_lap_time_s : 0.0);
     hud_draw_text_right(&hud->canvas, hud->font_small, 155,
@@ -315,8 +320,8 @@ static void hud_draw_lap_dynamic(HudContext *hud, const VehicleState *state)
                     show_last_lap || time_valid,
                     show_last_lap ? hud->reset_last_lap_time_s :
                     (state != NULL ? state->lap_time_s : 0.0));
-    hud_draw_text_right(&hud->canvas, hud->font_small, 155,
-                        80 + HUD_LAP_TEXT_Y_OFFSET,
+    hud_draw_text_right(&hud->canvas, hud->font_normal, 155,
+                        HUD_LAP_TIME_VALUE_Y + HUD_LAP_TEXT_Y_OFFSET,
                         show_last_lap ? hud->theme->panel_border :
                         (time_valid ? hud->theme->text_primary :
                          hud->theme->text_secondary),
