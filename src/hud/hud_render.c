@@ -53,6 +53,7 @@ struct HudContext {
     UiImage *lightning_icon;
     UiImage *engine_icon;
     UiImage *cpu_icon;
+    UiImage *battery_temperature_icon;
     UiImage *flag_checkered_icon;
     HudLayout layout;
     const HudTheme *theme;
@@ -619,11 +620,15 @@ static void hud_draw_vehicle_info_static(HudContext *hud)
     hud_draw_rule(&hud->canvas, 590, 525, 742, hud->theme->segment_inactive);
 
     ui_image_draw(&hud->canvas, hud->engine_icon, 592, 530);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 620,
+    hud_draw_text_top(&hud->canvas, hud->font_small, 614,
                       530 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "-- C");
-    ui_image_draw(&hud->canvas, hud->cpu_icon, 665, 530);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 695,
+    ui_image_draw(&hud->canvas, hud->cpu_icon, 647, 530);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 669,
+                      530 + HUD_MAIN_TEXT_Y_OFFSET,
+                      hud->theme->text_secondary, "-- C");
+    ui_image_draw(&hud->canvas, hud->battery_temperature_icon, 702, 530);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 724,
                       530 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "-- C");
     hud_draw_rule(&hud->canvas, 590, 555, 742, hud->theme->segment_inactive);
@@ -865,11 +870,14 @@ int hud_init(HudContext **context, const char *font_path)
     hud->lightning_icon = ui_image_load_png(HUD_DEFAULT_LIGHTNING_ICON_PATH);
     hud->engine_icon = ui_image_load_png(HUD_DEFAULT_ENGINE_ICON_PATH);
     hud->cpu_icon = ui_image_load_png(HUD_DEFAULT_CPU_ICON_PATH);
+    hud->battery_temperature_icon = ui_image_load_png(
+        HUD_DEFAULT_BATTERY_TEMPERATURE_ICON_PATH);
     hud->flag_checkered_icon = ui_image_load_png(
         HUD_DEFAULT_FLAG_CHECKERED_ICON_PATH);
     if (hud->timer_icon == NULL || hud->battery_icon == NULL ||
         hud->lightning_icon == NULL || hud->engine_icon == NULL ||
-        hud->cpu_icon == NULL || hud->flag_checkered_icon == NULL) {
+        hud->cpu_icon == NULL || hud->battery_temperature_icon == NULL ||
+        hud->flag_checkered_icon == NULL) {
         hud_shutdown(hud);
         return -1;
     }
@@ -888,6 +896,7 @@ void hud_shutdown(HudContext *context)
     if (context == NULL) return;
     free(context->static_pixels);
     ui_image_free(context->flag_checkered_icon);
+    ui_image_free(context->battery_temperature_icon);
     ui_image_free(context->cpu_icon);
     ui_image_free(context->engine_icon);
     ui_image_free(context->lightning_icon);

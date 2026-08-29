@@ -282,9 +282,11 @@ Current   right=742
 
 ```text
 Motor temp icon       (592, 530)
-Motor temp            (620, 530)
-Controller temp icon  (665, 530)
-Controller temp       (695, 530)
+Motor temp            (614, 530)
+Controller temp icon  (647, 530)
+Controller temp       (669, 530)
+Battery temp icon     (702, 530)
+Battery temp          (724, 530)
 ```
 
 ### MODE

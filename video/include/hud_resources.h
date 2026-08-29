@@ -7,6 +7,7 @@
 #define HUD_DEFAULT_LIGHTNING_ICON_PATH "lightning.png"
 #define HUD_DEFAULT_ENGINE_ICON_PATH "engine.png"
 #define HUD_DEFAULT_CPU_ICON_PATH "cpu.png"
+#define HUD_DEFAULT_BATTERY_TEMPERATURE_ICON_PATH "battery-charging-vertical.png"
 #define HUD_DEFAULT_FLAG_CHECKERED_ICON_PATH "flag-checkered.png"
 
 #endif

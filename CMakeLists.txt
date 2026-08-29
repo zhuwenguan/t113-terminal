@@ -350,6 +350,7 @@ install(FILES
     lightning.png
     engine.png
     cpu.png
+    battery-charging-vertical.png
     flag-checkered.png
     DESTINATION share/t113-terminal)
 
@@ -376,6 +377,7 @@ if (BUILD_TESTING)
                      ${CMAKE_SOURCE_DIR}/lightning.png
                      ${CMAKE_SOURCE_DIR}/engine.png
                      ${CMAKE_SOURCE_DIR}/cpu.png
+                     ${CMAKE_SOURCE_DIR}/battery-charging-vertical.png
                      ${CMAKE_SOURCE_DIR}/flag-checkered.png)
 
     add_executable(test_ui_font tests/test_ui_font.c)
