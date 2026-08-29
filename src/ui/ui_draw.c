@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #define UI_BYTES_PER_PIXEL 4
 
@@ -28,6 +29,24 @@ static inline void ui_store_color(uint8_t *pixel, uint32_t color)
     pixel[1] = (uint8_t)((color >> 8U) & UINT32_C(0xff));
     pixel[2] = (uint8_t)((color >> 16U) & UINT32_C(0xff));
     pixel[3] = (uint8_t)((color >> 24U) & UINT32_C(0xff));
+}
+
+static void ui_fill_row(uint8_t *row, size_t row_bytes, uint32_t color)
+{
+    uint8_t color_bytes[UI_BYTES_PER_PIXEL];
+    size_t filled;
+
+    if (row == NULL || row_bytes < UI_BYTES_PER_PIXEL) return;
+    ui_store_color(color_bytes, color);
+    memcpy(row, color_bytes, sizeof(color_bytes));
+    filled = sizeof(color_bytes);
+    while (filled < row_bytes) {
+        size_t copy_bytes = filled;
+
+        if (copy_bytes > row_bytes - filled) copy_bytes = row_bytes - filled;
+        memcpy(row + filled, row, copy_bytes);
+        filled += copy_bytes;
+    }
 }
 
 static inline void ui_put_pixel(const UiCanvas *canvas, int64_t x,
@@ -378,11 +397,14 @@ static void ui_round_rect_i64(const UiCanvas *canvas, int64_t x, int64_t y,
 
 void ui_clear(UiCanvas *canvas, uint32_t color)
 {
+    size_t row_bytes;
     int row;
 
     if (!ui_canvas_valid(canvas)) return;
+    row_bytes = (size_t)canvas->width * UI_BYTES_PER_PIXEL;
     for (row = 0; row < canvas->height; ++row) {
-        ui_fill_span(canvas, row, 0, canvas->width, color);
+        ui_fill_row(canvas->pixels + (size_t)row * (size_t)canvas->stride,
+                    row_bytes, color);
     }
 }
 
