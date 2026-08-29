@@ -196,13 +196,31 @@ static void test_layout_constants(void)
 {
     HudLayout layout;
     const HudRect *rects[] = {
-        &layout.lap, &layout.speed, &layout.vehicle_info, &layout.g_meter,
-        &layout.throttle, &layout.brake, &layout.rpm, &layout.accel_event,
-        &layout.status
+        &layout.lap, &layout.accel_event, &layout.main, &layout.speed,
+        &layout.g_meter, &layout.vehicle_info
     };
     size_t index;
 
     hud_ui_layout_default(&layout);
+    assert(layout.lap.x == 10 && layout.lap.y == 25 &&
+           layout.lap.w == 160 && layout.lap.h == 170);
+    assert(layout.accel_event.x == 10 && layout.accel_event.y == 205 &&
+           layout.accel_event.w == 160 && layout.accel_event.h == 80);
+    assert(layout.main.x == 115 && layout.main.y == 450 &&
+           layout.main.w == 640 && layout.main.h == 140);
+    assert(layout.main_div_1_x == 220 && layout.main_div_2_x == 435 &&
+           layout.main_div_3_x == 570);
+    assert(layout.main_div_y1 == 460 && layout.main_div_y2 == 580);
+    assert(layout.pedal_bar_x == 240 && layout.throttle_bar_y == 485 &&
+           layout.brake_bar_y == 525);
+    assert(layout.rpm_bar_x == 240 && layout.rpm_bar_y == 565);
+    assert(layout.pedal_segment_count == 16 &&
+           layout.pedal_segment_width == 6 &&
+           layout.pedal_segment_gap == 2 && layout.pedal_segment_height == 10);
+    assert(layout.rpm_segment_count == 20 && layout.rpm_segment_width == 4 &&
+           layout.rpm_segment_gap == 2 && layout.rpm_segment_height == 9);
+    assert(layout.g_center_x == 502 && layout.g_center_y == 528 &&
+           layout.g_radius == 32);
     assert(layout.segment_count == 16);
     assert(layout.rpm_max == 10000);
     for (index = 0U; index < sizeof(rects) / sizeof(rects[0]); ++index) {
@@ -229,7 +247,7 @@ static void test_render_values_and_stride(HudContext *context)
     rendered_text_count = 0U;
     assert(hud_render(context, &guarded.canvas, &state, false) == 0);
     assert(pixel_color(&guarded.canvas, 40, 40) != UI_COLOR_TRANSPARENT);
-    assert(pixel_color(&guarded.canvas, 40, 500) != UI_COLOR_TRANSPARENT);
+    assert(pixel_color(&guarded.canvas, 130, 500) != UI_COLOR_TRANSPARENT);
     assert(rendered_text_count > 0U);
     assert_text_has_no_invalid_tokens();
 
@@ -298,7 +316,7 @@ static void test_invalid_values_and_accel_visibility(HudContext *context)
     invalid.accel_50m_time_s = 0.0;
     invalid.accel_time_s = 0.0;
     assert(hud_render(context, &guarded.canvas, &invalid, false) == 0);
-    assert(pixel_color(&guarded.canvas, 32, 310) == UI_COLOR_TRANSPARENT);
+    assert(pixel_color(&guarded.canvas, 20, 215) != UI_COLOR_TRANSPARENT);
     guarded_canvas_close(&guarded);
 }
 

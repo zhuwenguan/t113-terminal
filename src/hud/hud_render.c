@@ -16,7 +16,7 @@
 
 #define HUD_FONT_SMALL 16
 #define HUD_FONT_NORMAL 24
-#define HUD_FONT_SPEED 64
+#define HUD_FONT_SPEED 48
 #define HUD_G_TO_MPS2 9.80665
 
 struct HudContext {
@@ -71,6 +71,18 @@ static void hud_draw_text_right(UiCanvas *canvas, UiFont *font, int right,
                   hud_int_from_i64((int64_t)y + height), color, text);
 }
 
+static void hud_draw_text_center(UiCanvas *canvas, UiFont *font, int center_x,
+                                 int y, uint32_t color, const char *text)
+{
+    int width;
+    int height;
+
+    if (!hud_text_measure(font, text, &width, &height)) return;
+    (void)ui_text(canvas, font,
+                  hud_int_from_i64((int64_t)center_x - width / 2),
+                  hud_int_from_i64((int64_t)y + height), color, text);
+}
+
 static bool hud_state_valid(const VehicleState *state, uint32_t valid_bit,
                             double value)
 {
@@ -88,7 +100,7 @@ static void hud_format_number(char *buffer, size_t size, bool valid,
                               double value, const char *format,
                               const char *suffix)
 {
-    int written;
+    size_t length;
 
     if (buffer == NULL || size == 0U) return;
     if (!valid || !isfinite(value)) {
@@ -97,10 +109,9 @@ static void hud_format_number(char *buffer, size_t size, bool valid,
     }
     (void)snprintf(buffer, size, format, value);
     if (suffix == NULL || suffix[0] == '\0') return;
-    written = snprintf(buffer + strlen(buffer),
-                       size > strlen(buffer) ? size - strlen(buffer) : 0U,
-                       "%s", suffix);
-    (void)written;
+    length = strlen(buffer);
+    (void)snprintf(buffer + length, size > length ? size - length : 0U,
+                   "%s", suffix);
 }
 
 static void hud_format_time(char *buffer, size_t size, bool valid,
@@ -138,186 +149,244 @@ static const char *hud_drive_state_name(VehicleDriveState state)
     case VEHICLE_DRIVE_STATE_NEUTRAL: return "N";
     case VEHICLE_DRIVE_STATE_DRIVE: return "D";
     case VEHICLE_DRIVE_STATE_REVERSE: return "R";
-    case VEHICLE_DRIVE_STATE_READY: return "RTD";
+    case VEHICLE_DRIVE_STATE_READY: return "READY";
     case VEHICLE_DRIVE_STATE_UNKNOWN:
     default: return "--";
     }
 }
 
-static HudPanelStyle hud_panel_style(const HudContext *hud)
+static HudPanelStyle hud_panel_style(const HudContext *hud, int radius)
 {
     return (HudPanelStyle){ hud->theme->panel_bg, hud->theme->panel_border,
-                            1, 8 };
+                            1, radius };
 }
 
-static HudTextValueStyle hud_value_style(const HudContext *hud,
-                                         UiFont *value_font,
-                                         HudAlign align)
+static void hud_draw_rule(UiCanvas *canvas, int x0, int y, int x1,
+                          uint32_t color)
 {
-    return (HudTextValueStyle){
-        hud->font_small, value_font, hud->font_small,
-        hud->theme->text_secondary, hud->theme->text_primary,
-        hud->theme->text_secondary, 2, 5, align
-    };
+    ui_line(canvas, x0, y, x1, y, 1, color);
 }
 
-static HudSegmentBarStyle hud_bar_style(const HudContext *hud,
-                                        uint32_t active_color)
+static void hud_draw_stopwatch_icon(UiCanvas *canvas, int x, int y,
+                                    uint32_t color)
 {
-    return (HudSegmentBarStyle){
-        active_color, hud->theme->segment_inactive, hud->theme->panel_border,
-        hud->layout.segment_count, 3, 1, 3
-    };
+    ui_circle(canvas, x + 7, y + 8, 6, 1, color);
+    ui_fill_rect(canvas, x + 5, y, 5, 2, color);
+    ui_line(canvas, x + 7, y + 8, x + 7, y + 4, 1, color);
+    ui_line(canvas, x + 7, y + 8, x + 10, y + 10, 1, color);
 }
 
-static HudStatusStyle hud_status_style(const HudContext *hud,
-                                       uint32_t active_color)
+static void hud_draw_flag_icon(UiCanvas *canvas, int x, int y,
+                               uint32_t color)
 {
-    return (HudStatusStyle){ hud->font_small, active_color,
-                             hud->theme->yellow, hud->theme->text_primary,
-                             4, 6 };
+    ui_line(canvas, x + 1, y, x + 1, y + 17, 1, color);
+    ui_line(canvas, x + 2, y + 1, x + 13, y + 1, 1, color);
+    ui_line(canvas, x + 13, y + 1, x + 9, y + 7, 1, color);
+    ui_line(canvas, x + 9, y + 7, x + 2, y + 7, 1, color);
+    ui_line(canvas, x + 1, y + 17, x + 14, y + 17, 1, color);
+}
+
+static void hud_draw_battery_icon(UiCanvas *canvas, int x, int y,
+                                  uint32_t color)
+{
+    ui_rect(canvas, x, y + 2, 14, 9, 1, color);
+    ui_fill_rect(canvas, x + 14, y + 5, 2, 3, color);
+    ui_fill_rect(canvas, x + 3, y + 5, 7, 3, color);
+}
+
+static void hud_draw_power_icon(UiCanvas *canvas, int x, int y,
+                                uint32_t color)
+{
+    ui_line(canvas, x + 8, y, x + 2, y + 9, 1, color);
+    ui_line(canvas, x + 2, y + 9, x + 7, y + 9, 1, color);
+    ui_line(canvas, x + 7, y + 9, x + 4, y + 17, 1, color);
+    ui_line(canvas, x + 4, y + 17, x + 14, y + 6, 1, color);
+    ui_line(canvas, x + 14, y + 6, x + 9, y + 6, 1, color);
+    ui_line(canvas, x + 9, y + 6, x + 12, y, 1, color);
+}
+
+static void hud_draw_temperature_icon(UiCanvas *canvas, int x, int y,
+                                      uint32_t color)
+{
+    ui_line(canvas, x + 5, y, x + 5, y + 11, 1, color);
+    ui_circle(canvas, x + 5, y + 13, 4, 1, color);
+    ui_fill_circle(canvas, x + 5, y + 13, 2, color);
+}
+
+static void hud_draw_controller_icon(UiCanvas *canvas, int x, int y,
+                                     uint32_t color)
+{
+    ui_round_rect(canvas, x, y + 2, 14, 13, 2, 1, color);
+    ui_line(canvas, x + 4, y, x + 4, y + 4, 1, color);
+    ui_line(canvas, x + 10, y, x + 10, y + 4, 1, color);
+    ui_fill_circle(canvas, x + 5, y + 9, 1, color);
+    ui_fill_circle(canvas, x + 10, y + 9, 1, color);
+}
+
+static void hud_draw_mode_icon(UiCanvas *canvas, int x, int y,
+                               uint32_t color)
+{
+    ui_rect(canvas, x, y + 2, 14, 13, 1, color);
+    ui_line(canvas, x + 3, y + 9, x + 6, y + 12, 1, color);
+    ui_line(canvas, x + 6, y + 12, x + 11, y + 6, 1, color);
 }
 
 static void hud_draw_lap(HudContext *hud, const VehicleState *state)
 {
     char lap[24];
     char lap_time[32];
+    char best[32];
     char delta[32];
-    HudRect rect = hud->layout.lap;
-    HudPanelStyle panel = hud_panel_style(hud);
-    HudTextValueStyle value_style = hud_value_style(
-        hud, hud->font_normal, HUD_WIDGET_ALIGN_LEFT);
+    const HudRect rect = hud->layout.lap;
+    const HudPanelStyle panel = hud_panel_style(hud, 6);
     bool lap_valid = state != NULL && state->lap_valid;
     bool time_valid = lap_valid && state != NULL &&
                       isfinite(state->lap_time_s);
+    bool best_valid = lap_valid && state != NULL &&
+                      isfinite(state->best_lap_time_s);
     bool delta_valid = lap_valid && state != NULL &&
                        isfinite(state->delta_time_s);
 
     hud_panel(&hud->canvas, rect, &panel);
+    hud_draw_stopwatch_icon(&hud->canvas, 20, 32, hud->theme->panel_border);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 40, 35,
+                      hud->theme->panel_border, "LAP");
+    hud_draw_rule(&hud->canvas, 20, 55, 160, hud->theme->segment_inactive);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 20, 65,
+                      hud->theme->text_secondary, "LAP TIME");
     (void)snprintf(lap, sizeof(lap), "%u", lap_valid ? state->lap_number : 0U);
-    hud_text_value(&hud->canvas,
-                   (HudRect){ rect.x + 14, rect.y + 12, rect.w - 28, 48 },
-                   &value_style, "LAP", lap_valid ? lap : "--", NULL);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 70, hud->theme->text_secondary, "TIME");
-    hud_format_time(lap_time, sizeof(lap_time), time_valid,
-                    state != NULL ? state->lap_time_s : 0.0);
-    hud_draw_text_right(&hud->canvas, hud->font_small,
-                        rect.x + rect.w - 14, rect.y + 68,
-                        time_valid ? hud->theme->text_primary :
-                        hud->theme->text_secondary, lap_time);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 98, hud->theme->text_secondary, "DELTA");
+    hud_draw_text_top(&hud->canvas, hud->font_normal, 20, 80,
+                      lap_valid ? hud->theme->text_primary :
+                      hud->theme->text_secondary,
+                      lap_valid ? lap : "--");
+    hud_draw_rule(&hud->canvas, 20, 115, 160, hud->theme->segment_inactive);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 20, 122,
+                      hud->theme->text_secondary, "BEST");
+    hud_format_time(best, sizeof(best), best_valid,
+                    state != NULL ? state->best_lap_time_s : 0.0);
+    hud_draw_text_right(&hud->canvas, hud->font_small, 155, 122,
+                        best_valid ? hud->theme->text_primary :
+                        hud->theme->text_secondary, best);
+    hud_draw_rule(&hud->canvas, 20, 160, 160, hud->theme->segment_inactive);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 20, 142,
+                      hud->theme->text_secondary, "DELTA");
     hud_format_number(delta, sizeof(delta), delta_valid,
-                      state != NULL ? state->delta_time_s : 0.0, "%+.2f",
-                      "");
-    hud_draw_text_right(&hud->canvas, hud->font_small,
-                        rect.x + rect.w - 14, rect.y + 96,
+                      state != NULL ? state->delta_time_s : 0.0, "%+.2f", "");
+    hud_draw_text_right(&hud->canvas, hud->font_small, 155, 142,
                         !delta_valid ? hud->theme->text_secondary :
                         (state->delta_time_s <= 0.0 ? hud->theme->green :
                          hud->theme->red), delta);
+    hud_format_time(lap_time, sizeof(lap_time), time_valid,
+                    state != NULL ? state->lap_time_s : 0.0);
+    hud_draw_text_right(&hud->canvas, hud->font_small, 155, 80,
+                        time_valid ? hud->theme->text_primary :
+                        hud->theme->text_secondary, lap_time);
+}
+
+static void hud_draw_accel_event(HudContext *hud, const VehicleState *state)
+{
+    char time_50m[24];
+    char time_75m[24];
+    const HudRect rect = hud->layout.accel_event;
+    const HudPanelStyle panel = hud_panel_style(hud, 6);
+    bool valid_50m = state != NULL && isfinite(state->accel_50m_time_s) &&
+                     state->accel_50m_time_s > 0.0;
+    bool valid_75m = state != NULL && isfinite(state->accel_time_s) &&
+                     state->accel_time_s > 0.0;
+
+    hud_panel(&hud->canvas, rect, &panel);
+    hud_draw_flag_icon(&hud->canvas, 20, 212, hud->theme->panel_border);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 42, 213,
+                      hud->theme->panel_border, "ACCEL EVENT");
+    hud_draw_rule(&hud->canvas, 20, 230, 160, hud->theme->segment_inactive);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 30, 236,
+                      hud->theme->text_secondary, "50m");
+    hud_format_number(time_50m, sizeof(time_50m), valid_50m,
+                      state != NULL ? state->accel_50m_time_s : 0.0,
+                      "%.2f", " s");
+    hud_draw_text_right(&hud->canvas, hud->font_small, 150, 236,
+                        valid_50m ? hud->theme->text_primary :
+                        hud->theme->text_secondary, time_50m);
+    hud_draw_rule(&hud->canvas, 20, 255, 160, hud->theme->segment_inactive);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 30, 262,
+                      hud->theme->text_secondary, "75m");
+    hud_format_number(time_75m, sizeof(time_75m), valid_75m,
+                      state != NULL ? state->accel_time_s : 0.0,
+                      "%.2f", " s");
+    hud_draw_text_right(&hud->canvas, hud->font_small, 150, 262,
+                        valid_75m ? hud->theme->text_primary :
+                        hud->theme->text_secondary, time_75m);
 }
 
 static void hud_draw_speed(HudContext *hud, const VehicleState *state,
                            bool recording)
 {
     char speed[24];
-    const char *status_text = "STATE --";
     bool speed_valid = hud_state_valid(
         state, VEHICLE_STATE_VALID_SPEED_KMH,
         state != NULL ? state->speed_kmh : 0.0);
     bool drive_valid = state != NULL &&
                        (state->valid_mask & VEHICLE_STATE_VALID_DRIVE_STATE) != 0U;
     bool ready = drive_valid && state->drive_state == VEHICLE_DRIVE_STATE_READY;
-    HudRect rect = hud->layout.speed;
-    HudPanelStyle panel = hud_panel_style(hud);
-    HudTextValueStyle value_style = hud_value_style(
-        hud, hud->font_speed, HUD_WIDGET_ALIGN_CENTER);
-    HudStatusStyle status_style = hud_status_style(hud, hud->theme->green);
+    const char *status = recording ? "REC" :
+                         (drive_valid ? hud_drive_state_name(state->drive_state) :
+                          "--");
 
-    hud_panel(&hud->canvas, rect, &panel);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 135, 465,
+                      hud->theme->text_secondary, "SPEED");
     hud_format_number(speed, sizeof(speed), speed_valid,
                       state != NULL ? state->speed_kmh : 0.0, "%.0f", "");
-    hud_text_value(&hud->canvas,
-                   (HudRect){ rect.x + 14, rect.y + 18, rect.w - 28, 116 },
-                   &value_style, "SPEED", speed_valid ? speed : "---",
-                   "km/h");
-    if (drive_valid) status_text = hud_drive_state_name(state->drive_state);
-    if (recording) {
-        status_text = "REC";
-        status_style.active_color = hud->theme->red;
-    }
-    hud_status_indicator(&hud->canvas, rect.x + 90, rect.y + 148,
-                         &status_style, ready || recording, status_text);
+    hud_draw_text_top(&hud->canvas, hud->font_speed, 132, 485,
+                      speed_valid ? hud->theme->text_primary :
+                      hud->theme->text_secondary,
+                      speed_valid ? speed : "---");
+    hud_draw_text_center(&hud->canvas, hud->font_small, 167, 535,
+                         hud->theme->text_secondary, "km/h");
+    hud_draw_text_center(&hud->canvas, hud->font_small, 167, 558,
+                         recording || ready ? hud->theme->green :
+                         hud->theme->text_secondary, status);
 }
 
-static void hud_draw_vehicle_info(HudContext *hud, const VehicleState *state)
+static void hud_draw_fixed_segment_bar(HudContext *hud, int x, int y,
+                                       int segment_count, int segment_width,
+                                       int gap, int height, double value,
+                                       uint32_t active_color)
 {
-    char value[32];
-    HudRect rect = hud->layout.vehicle_info;
-    HudPanelStyle panel = hud_panel_style(hud);
-    HudTextValueStyle style = hud_value_style(hud, hud->font_small,
-                                              HUD_WIDGET_ALIGN_LEFT);
-    int row_y = rect.y + 28;
-    int row_gap = 38;
-    bool valid;
+    HudSegmentBarStyle style = {
+        active_color, hud->theme->segment_inactive, 0U,
+        segment_count, gap, 0, 0
+    };
+    int width = segment_count * segment_width +
+                (segment_count - 1) * gap;
 
-    hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 10, hud->theme->panel_border, "VEHICLE");
+    hud_segment_bar(&hud->canvas, (HudRect){ x, y, width, height }, &style,
+                    (float)value);
+}
 
-    valid = hud_state_valid(state, VEHICLE_STATE_VALID_HV_VOLTAGE_V,
-                            state != NULL ? state->hv_voltage_v : 0.0);
-    hud_format_number(value, sizeof(value), valid,
-                      state != NULL ? state->hv_voltage_v : 0.0, "%.0f", "");
-    hud_text_value(&hud->canvas,
-                   (HudRect){ rect.x + 14, row_y, rect.w - 28, 40 }, &style,
-                   "HV", value, "V");
+static void hud_draw_pedal_row(HudContext *hud, int label_y, int bar_y,
+                               const char *label, double value, bool valid,
+                               uint32_t color)
+{
+    char display[24];
 
-    valid = hud_state_valid(state, VEHICLE_STATE_VALID_HV_SOC_PERCENT,
-                            state != NULL ? state->hv_soc_percent : 0.0);
-    hud_format_number(value, sizeof(value), valid,
-                      state != NULL ? state->hv_soc_percent : 0.0, "%.0f", "");
-    hud_text_value(&hud->canvas,
-                   (HudRect){ rect.x + 14, row_y + row_gap, rect.w - 28, 40 },
-                   &style, "SOC", value, "%");
-
-    valid = hud_state_valid(state, VEHICLE_STATE_VALID_HV_POWER_W,
-                            state != NULL ? state->hv_power_w : 0.0);
-    hud_format_number(value, sizeof(value), valid,
-                      state != NULL ? state->hv_power_w / 1000.0 : 0.0,
-                      "%.1f", "");
-    hud_text_value(&hud->canvas,
-                   (HudRect){ rect.x + 14, row_y + row_gap * 2,
-                              rect.w - 28, 40 }, &style, "POWER", value,
-                   "kW");
-
-    valid = hud_state_valid(state, VEHICLE_STATE_VALID_HV_CURRENT_A,
-                            state != NULL ? state->hv_current_a : 0.0);
-    hud_format_number(value, sizeof(value), valid,
-                      state != NULL ? state->hv_current_a : 0.0, "%.0f", "");
-    hud_text_value(&hud->canvas,
-                   (HudRect){ rect.x + 14, row_y + row_gap * 3,
-                              rect.w - 28, 40 }, &style, "CURRENT", value,
-                   "A");
-
-    hud_text_value(&hud->canvas,
-                   (HudRect){ rect.x + 14, row_y + row_gap * 4,
-                              rect.w - 28, 40 }, &style, "TEMP", "--", "C");
-
-    valid = state != NULL &&
-            (state->valid_mask & VEHICLE_STATE_VALID_DRIVE_STATE) != 0U;
-    hud_text_value(&hud->canvas,
-                   (HudRect){ rect.x + 14, row_y + row_gap * 5,
-                              rect.w - 28, 40 }, &style, "MODE",
-                   valid ? hud_drive_state_name(state->drive_state) : "--",
-                   NULL);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 240, label_y,
+                      hud->theme->text_secondary, label);
+    hud_format_number(display, sizeof(display), valid, value, "%.0f", "%");
+    hud_draw_text_right(&hud->canvas, hud->font_small, 420, label_y,
+                        valid ? hud->theme->text_primary :
+                        hud->theme->text_secondary, display);
+    hud_draw_fixed_segment_bar(hud, 240, bar_y,
+                               hud->layout.pedal_segment_count,
+                               hud->layout.pedal_segment_width,
+                               hud->layout.pedal_segment_gap,
+                               hud->layout.pedal_segment_height,
+                               valid ? hud_clamp(value, 0.0, 100.0) / 100.0 :
+                               0.0, color);
 }
 
 static void hud_draw_g_meter(HudContext *hud, const VehicleState *state)
 {
-    HudRect rect = hud->layout.g_meter;
-    HudPanelStyle panel = hud_panel_style(hud);
+    const HudLayout *layout = &hud->layout;
     bool lateral_valid = hud_state_valid(
         state, VEHICLE_STATE_VALID_ACC_Y_MPS2,
         state != NULL ? state->acc_y : 0.0);
@@ -327,76 +396,35 @@ static void hud_draw_g_meter(HudContext *hud, const VehicleState *state)
     double lateral = lateral_valid ? state->acc_y / HUD_G_TO_MPS2 : 0.0;
     double longitudinal = longitudinal_valid ?
                           state->acc_x / HUD_G_TO_MPS2 : 0.0;
-    int center_x = rect.x + rect.w / 2;
-    int center_y = rect.y + 62;
-    int radius = 29;
     int dot_x;
     int dot_y;
 
-    hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 8, hud->theme->text_secondary, "G FORCE");
-    ui_circle(&hud->canvas, center_x, center_y, radius, 1,
-              hud->theme->panel_border);
-    ui_line(&hud->canvas, center_x - radius, center_y, center_x + radius,
-            center_y, 1, hud->theme->segment_inactive);
-    ui_line(&hud->canvas, center_x, center_y - radius, center_x,
-            center_y + radius, 1, hud->theme->segment_inactive);
+    hud_draw_text_center(&hud->canvas, hud->font_small, layout->g_center_x,
+                         460, hud->theme->text_secondary, "G FORCE");
+    ui_circle(&hud->canvas, layout->g_center_x, layout->g_center_y,
+              layout->g_radius, 1, hud->theme->panel_border);
+    ui_circle(&hud->canvas, layout->g_center_x, layout->g_center_y, 16, 1,
+              hud->theme->segment_inactive);
+    ui_line(&hud->canvas, layout->g_center_x - layout->g_radius,
+            layout->g_center_y, layout->g_center_x + layout->g_radius,
+            layout->g_center_y, 1, hud->theme->segment_inactive);
+    ui_line(&hud->canvas, layout->g_center_x,
+            layout->g_center_y - layout->g_radius, layout->g_center_x,
+            layout->g_center_y + layout->g_radius, 1,
+            hud->theme->segment_inactive);
     if (!lateral_valid && !longitudinal_valid) return;
-    dot_x = center_x + (int)lround(hud_clamp(lateral / 1.5, -1.0, 1.0) *
-                                   (double)(radius - 4));
-    dot_y = center_y - (int)lround(hud_clamp(longitudinal / 1.5, -1.0, 1.0) *
-                                   (double)(radius - 4));
+    dot_x = layout->g_center_x +
+            (int)lround(hud_clamp(lateral / 1.5, -1.0, 1.0) *
+                        (double)(layout->g_radius - 4));
+    dot_y = layout->g_center_y -
+            (int)lround(hud_clamp(longitudinal / 1.5, -1.0, 1.0) *
+                        (double)(layout->g_radius - 4));
     ui_fill_circle(&hud->canvas, dot_x, dot_y, 4, hud->theme->green);
-}
-
-static void hud_draw_bar(HudContext *hud, HudRect rect, const char *label,
-                         double value, bool valid, uint32_t color)
-{
-    char display[24];
-    HudPanelStyle panel = hud_panel_style(hud);
-    HudSegmentBarStyle bar = hud_bar_style(hud, color);
-
-    hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 10, hud->theme->text_secondary, label);
-    hud_format_number(display, sizeof(display), valid, value, "%.0f", "%");
-    hud_draw_text_right(&hud->canvas, hud->font_small, rect.x + rect.w - 14,
-                        rect.y + 10,
-                        valid ? hud->theme->text_primary :
-                        hud->theme->text_secondary, display);
-    hud_segment_bar(&hud->canvas,
-                    (HudRect){ rect.x + 14, rect.y + 42, rect.w - 28, 20 },
-                    &bar, valid ? (float)(value / 100.0) : 0.0f);
-}
-
-static void hud_draw_throttle(HudContext *hud, const VehicleState *state)
-{
-    bool valid = hud_state_valid(
-        state, VEHICLE_STATE_VALID_THROTTLE_PERCENT,
-        state != NULL ? state->throttle_percent : 0.0);
-
-    hud_draw_bar(hud, hud->layout.throttle, "THROTTLE",
-                 valid ? hud_clamp(state->throttle_percent, 0.0, 100.0) : 0.0,
-                 valid, hud->theme->throttle);
-}
-
-static void hud_draw_brake(HudContext *hud, const VehicleState *state)
-{
-    bool valid = hud_state_valid(
-        state, VEHICLE_STATE_VALID_BRAKE_PERCENT,
-        state != NULL ? state->brake_percent : 0.0);
-
-    hud_draw_bar(hud, hud->layout.brake, "BRAKE",
-                 valid ? hud_clamp(state->brake_percent, 0.0, 100.0) : 0.0,
-                 valid, hud->theme->brake);
 }
 
 static void hud_draw_rpm(HudContext *hud, const VehicleState *state)
 {
     char display[24];
-    HudRect rect = hud->layout.rpm;
-    HudPanelStyle panel = hud_panel_style(hud);
     bool valid = hud_state_valid(
         state, VEHICLE_STATE_VALID_MOTOR_RPM,
         state != NULL ? state->motor_rpm : 0.0);
@@ -406,60 +434,122 @@ static void hud_draw_rpm(HudContext *hud, const VehicleState *state)
                      hud->theme->red :
                      (valid && rpm >= hud->layout.rpm_red_start / 2.0 ?
                       hud->theme->yellow : hud->theme->rpm);
-    HudSegmentBarStyle bar = hud_bar_style(hud, color);
 
-    hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 10, hud->theme->text_secondary, "RPM");
+    hud_draw_text_top(&hud->canvas, hud->font_small, 240, 545,
+                      hud->theme->text_secondary, "MOTOR RPM");
     hud_format_number(display, sizeof(display), valid, rpm, "%.0f", "");
-    hud_draw_text_right(&hud->canvas, hud->font_small, rect.x + rect.w - 14,
-                        rect.y + 10,
+    hud_draw_text_right(&hud->canvas, hud->font_small, 420, 545,
                         valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, display);
-    hud_segment_bar(&hud->canvas,
-                    (HudRect){ rect.x + 14, rect.y + 42, rect.w - 28, 20 },
-                    &bar, valid ? (float)(rpm / hud->layout.rpm_max) : 0.0f);
+    hud_draw_fixed_segment_bar(hud, hud->layout.rpm_bar_x,
+                               hud->layout.rpm_bar_y,
+                               hud->layout.rpm_segment_count,
+                               hud->layout.rpm_segment_width,
+                               hud->layout.rpm_segment_gap,
+                               hud->layout.rpm_segment_height,
+                               valid ? rpm / (double)hud->layout.rpm_max : 0.0,
+                               color);
 }
 
-static void hud_draw_accel_event(HudContext *hud, const VehicleState *state)
+static void hud_draw_vehicle_info(HudContext *hud, const VehicleState *state)
 {
-    char time_50m[24];
-    char time_75m[24];
-    HudRect rect = hud->layout.accel_event;
-    HudPanelStyle panel = hud_panel_style(hud);
-    bool valid = state != NULL && isfinite(state->accel_50m_time_s) &&
-                 isfinite(state->accel_time_s) &&
-                 state->accel_50m_time_s > 0.0 && state->accel_time_s > 0.0;
+    char soc[24];
+    char voltage[24];
+    char power[24];
+    char current[24];
+    bool soc_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_HV_SOC_PERCENT,
+        state != NULL ? state->hv_soc_percent : 0.0);
+    bool voltage_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_HV_VOLTAGE_V,
+        state != NULL ? state->hv_voltage_v : 0.0);
+    bool power_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_HV_POWER_W,
+        state != NULL ? state->hv_power_w : 0.0);
+    bool current_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_HV_CURRENT_A,
+        state != NULL ? state->hv_current_a : 0.0);
 
-    if (!valid) return;
-    hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 12, hud->theme->panel_border, "ACCEL EVENT");
-    (void)snprintf(time_50m, sizeof(time_50m), "%.2f s",
-                   state->accel_50m_time_s);
-    (void)snprintf(time_75m, sizeof(time_75m), "%.2f s", state->accel_time_s);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 52, hud->theme->text_secondary, "50 m");
-    hud_draw_text_right(&hud->canvas, hud->font_small, rect.x + rect.w - 14,
-                        rect.y + 50, hud->theme->text_primary, time_50m);
-    hud_draw_text_top(&hud->canvas, hud->font_small, rect.x + 14,
-                      rect.y + 84, hud->theme->text_secondary, "75 m");
-    hud_draw_text_right(&hud->canvas, hud->font_small, rect.x + rect.w - 14,
-                        rect.y + 82, hud->theme->text_primary, time_75m);
+    hud_draw_battery_icon(&hud->canvas, 592, 465, hud->theme->panel_border);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 618, 466,
+                      hud->theme->text_secondary, "BATTERY");
+    hud_format_number(soc, sizeof(soc), soc_valid,
+                      state != NULL ? state->hv_soc_percent : 0.0,
+                      "%.0f", "%");
+    hud_draw_text_right(&hud->canvas, hud->font_small, 685, 466,
+                        soc_valid ? hud->theme->text_primary :
+                        hud->theme->text_secondary, soc);
+    hud_format_number(voltage, sizeof(voltage), voltage_valid,
+                      state != NULL ? state->hv_voltage_v : 0.0,
+                      "%.0f", " V");
+    hud_draw_text_right(&hud->canvas, hud->font_small, 742, 466,
+                        voltage_valid ? hud->theme->text_primary :
+                        hud->theme->text_secondary, voltage);
+    hud_draw_rule(&hud->canvas, 590, 490, 742, hud->theme->segment_inactive);
+
+    hud_draw_power_icon(&hud->canvas, 592, 497, hud->theme->panel_border);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 618, 498,
+                      hud->theme->text_secondary, "POWER");
+    hud_format_number(power, sizeof(power), power_valid,
+                      state != NULL ? state->hv_power_w / 1000.0 : 0.0,
+                      "%.1f", " kW");
+    hud_draw_text_top(&hud->canvas, hud->font_small, 670, 498,
+                      power_valid ? hud->theme->text_primary :
+                      hud->theme->text_secondary, power);
+    hud_format_number(current, sizeof(current), current_valid,
+                      state != NULL ? state->hv_current_a : 0.0,
+                      "%.0f", " A");
+    hud_draw_text_right(&hud->canvas, hud->font_small, 742, 498,
+                        current_valid ? hud->theme->text_primary :
+                        hud->theme->text_secondary, current);
+    hud_draw_rule(&hud->canvas, 590, 525, 742, hud->theme->segment_inactive);
+
+    hud_draw_temperature_icon(&hud->canvas, 592, 530, hud->theme->panel_border);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 620, 530,
+                      hud->theme->text_secondary, "-- C");
+    hud_draw_controller_icon(&hud->canvas, 665, 530, hud->theme->panel_border);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 695, 530,
+                      hud->theme->text_secondary, "-- C");
+    hud_draw_rule(&hud->canvas, 590, 555, 742, hud->theme->segment_inactive);
+
+    hud_draw_mode_icon(&hud->canvas, 592, 562, hud->theme->panel_border);
+    hud_draw_text_top(&hud->canvas, hud->font_small, 618, 563,
+                      hud->theme->text_secondary, "MODE");
+    hud_draw_text_top(&hud->canvas, hud->font_small, 680, 563,
+                      hud->theme->text_primary, "TRACK");
 }
 
-static void hud_draw_status(HudContext *hud, const VehicleState *state)
+static void hud_draw_main(HudContext *hud, const VehicleState *state,
+                          bool recording)
 {
-    HudStatusStyle can_style = hud_status_style(hud, hud->theme->green);
-    HudStatusStyle gps_style = hud_status_style(hud, hud->theme->green);
-    bool can_ok = state != NULL && state->can_valid;
-    bool gps_ok = state != NULL && state->gps_valid && state->gps_fix_type >= 3U;
-    HudRect rect = hud->layout.status;
+    const HudPanelStyle panel = hud_panel_style(hud, 8);
+    bool throttle_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_THROTTLE_PERCENT,
+        state != NULL ? state->throttle_percent : 0.0);
+    bool brake_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_BRAKE_PERCENT,
+        state != NULL ? state->brake_percent : 0.0);
 
-    hud_status_indicator(&hud->canvas, rect.x, rect.y, &can_style, can_ok,
-                         "CAN");
-    hud_status_indicator(&hud->canvas, rect.x + 100, rect.y, &gps_style,
-                         gps_ok, "GPS");
+    hud_panel(&hud->canvas, hud->layout.main, &panel);
+    ui_line(&hud->canvas, hud->layout.main_div_1_x, hud->layout.main_div_y1,
+            hud->layout.main_div_1_x, hud->layout.main_div_y2, 1,
+            hud->theme->segment_inactive);
+    ui_line(&hud->canvas, hud->layout.main_div_2_x, hud->layout.main_div_y1,
+            hud->layout.main_div_2_x, hud->layout.main_div_y2, 1,
+            hud->theme->segment_inactive);
+    ui_line(&hud->canvas, hud->layout.main_div_3_x, hud->layout.main_div_y1,
+            hud->layout.main_div_3_x, hud->layout.main_div_y2, 1,
+            hud->theme->segment_inactive);
+    hud_draw_speed(hud, state, recording);
+    hud_draw_pedal_row(hud, 465, hud->layout.throttle_bar_y, "THROTTLE",
+                       state != NULL ? state->throttle_percent : 0.0,
+                       throttle_valid, hud->theme->throttle);
+    hud_draw_pedal_row(hud, 505, hud->layout.brake_bar_y, "BRAKE",
+                       state != NULL ? state->brake_percent : 0.0,
+                       brake_valid, hud->theme->brake);
+    hud_draw_rpm(hud, state);
+    hud_draw_g_meter(hud, state);
+    hud_draw_vehicle_info(hud, state);
 }
 
 static bool hud_warm_font(UiFont *font)
@@ -518,13 +608,7 @@ int hud_render(HudContext *context, UiCanvas *canvas,
     context->canvas = *canvas;
     ui_clear(&context->canvas, context->theme->transparent);
     hud_draw_lap(context, state);
-    hud_draw_speed(context, state, recording);
-    hud_draw_vehicle_info(context, state);
-    hud_draw_g_meter(context, state);
-    hud_draw_throttle(context, state);
-    hud_draw_brake(context, state);
-    hud_draw_rpm(context, state);
     hud_draw_accel_event(context, state);
-    hud_draw_status(context, state);
+    hud_draw_main(context, state, recording);
     return 0;
 }
