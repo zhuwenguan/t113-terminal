@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define HUD_FONT_SMALL 16
 #define HUD_FONT_NORMAL 24
@@ -29,6 +30,22 @@ struct HudContext {
 };
 
 static const HudTheme hud_default_theme = HUD_THEME_DEFAULT;
+
+static uint64_t hud_now_us(void)
+{
+    struct timespec timestamp;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &timestamp) != 0) return 0U;
+    return (uint64_t)timestamp.tv_sec * 1000000ULL +
+           (uint64_t)timestamp.tv_nsec / 1000ULL;
+}
+
+static uint64_t hud_profile_elapsed(uint64_t start)
+{
+    uint64_t finish = hud_now_us();
+
+    return finish >= start ? finish - start : 0U;
+}
 
 static int hud_int_from_i64(int64_t value)
 {
@@ -520,7 +537,7 @@ static void hud_draw_vehicle_info(HudContext *hud, const VehicleState *state)
 }
 
 static void hud_draw_main(HudContext *hud, const VehicleState *state,
-                          bool recording)
+                          bool recording, HudRenderProfile *profile)
 {
     const HudPanelStyle panel = hud_panel_style(hud, 8);
     bool throttle_valid = hud_state_valid(
@@ -540,16 +557,58 @@ static void hud_draw_main(HudContext *hud, const VehicleState *state,
     ui_line(&hud->canvas, hud->layout.main_div_3_x, hud->layout.main_div_y1,
             hud->layout.main_div_3_x, hud->layout.main_div_y2, 1,
             hud->theme->segment_inactive);
-    hud_draw_speed(hud, state, recording);
+    if (profile != NULL) {
+        uint64_t start = hud_now_us();
+
+        hud_draw_speed(hud, state, recording);
+        profile->speed_time_us = hud_profile_elapsed(start);
+    } else {
+        hud_draw_speed(hud, state, recording);
+    }
+    {
+        uint64_t start = profile != NULL ? hud_now_us() : 0U;
+
     hud_draw_pedal_row(hud, 465, hud->layout.throttle_bar_y, "THROTTLE",
                        state != NULL ? state->throttle_percent : 0.0,
                        throttle_valid, hud->theme->throttle);
+        if (profile != NULL) {
+            profile->throttle_time_us = hud_profile_elapsed(start);
+        }
+    }
+    {
+        uint64_t start = profile != NULL ? hud_now_us() : 0U;
+
     hud_draw_pedal_row(hud, 505, hud->layout.brake_bar_y, "BRAKE",
                        state != NULL ? state->brake_percent : 0.0,
                        brake_valid, hud->theme->brake);
-    hud_draw_rpm(hud, state);
-    hud_draw_g_meter(hud, state);
-    hud_draw_vehicle_info(hud, state);
+        if (profile != NULL) {
+            profile->brake_time_us = hud_profile_elapsed(start);
+        }
+    }
+    if (profile != NULL) {
+        uint64_t start = hud_now_us();
+
+        hud_draw_rpm(hud, state);
+        profile->rpm_time_us = hud_profile_elapsed(start);
+    } else {
+        hud_draw_rpm(hud, state);
+    }
+    if (profile != NULL) {
+        uint64_t start = hud_now_us();
+
+        hud_draw_g_meter(hud, state);
+        profile->g_meter_time_us = hud_profile_elapsed(start);
+    } else {
+        hud_draw_g_meter(hud, state);
+    }
+    if (profile != NULL) {
+        uint64_t start = hud_now_us();
+
+        hud_draw_vehicle_info(hud, state);
+        profile->vehicle_info_time_us = hud_profile_elapsed(start);
+    } else {
+        hud_draw_vehicle_info(hud, state);
+    }
 }
 
 static bool hud_warm_font(UiFont *font)
@@ -598,17 +657,46 @@ void hud_shutdown(HudContext *context)
     free(context);
 }
 
-int hud_render(HudContext *context, UiCanvas *canvas,
-               const VehicleState *state, bool recording)
+int hud_render_profiled(HudContext *context, UiCanvas *canvas,
+                        const VehicleState *state, bool recording,
+                        HudRenderProfile *profile)
 {
+    uint64_t start;
+
     if (context == NULL || canvas == NULL || canvas->pixels == NULL ||
         canvas->width <= 0 || canvas->height <= 0 || canvas->stride <= 0) {
         return -1;
     }
+    if (profile != NULL) memset(profile, 0, sizeof(*profile));
     context->canvas = *canvas;
+    start = profile != NULL ? hud_now_us() : 0U;
     ui_clear(&context->canvas, context->theme->transparent);
+    if (profile != NULL) {
+        profile->clear_time_us = hud_profile_elapsed(start);
+    }
+    start = profile != NULL ? hud_now_us() : 0U;
     hud_draw_lap(context, state);
+    if (profile != NULL) {
+        profile->lap_time_us = hud_profile_elapsed(start);
+    }
+    start = profile != NULL ? hud_now_us() : 0U;
     hud_draw_accel_event(context, state);
-    hud_draw_main(context, state, recording);
+    if (profile != NULL) {
+        profile->accel_event_time_us = hud_profile_elapsed(start);
+    }
+    start = profile != NULL ? hud_now_us() : 0U;
+    hud_draw_main(context, state, recording, profile);
+    if (profile != NULL) {
+        profile->total_time_us = hud_profile_elapsed(start) +
+                                 profile->clear_time_us +
+                                 profile->lap_time_us +
+                                 profile->accel_event_time_us;
+    }
     return 0;
+}
+
+int hud_render(HudContext *context, UiCanvas *canvas,
+               const VehicleState *state, bool recording)
+{
+    return hud_render_profiled(context, canvas, state, recording, NULL);
 }

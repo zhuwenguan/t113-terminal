@@ -408,6 +408,23 @@ if (BUILD_TESTING)
     add_test(NAME hud_render_static_state_layout_guard_stride
              COMMAND test_hud_render)
 
+    add_executable(hud_perf_benchmark
+        tests/hud_perf_benchmark.c
+        src/hud/hud_render.c
+        src/hud/hud_widget.c
+    )
+    target_include_directories(hud_perf_benchmark PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/hud
+        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_COMMON_INCLUDE_DIR}
+    )
+    target_compile_options(hud_perf_benchmark PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(hud_perf_benchmark PRIVATE ui_draw ui_font m)
+
     add_executable(test_video_compositor_argb
         tests/test_video_compositor_argb.c
         video/src/video_compositor.c
