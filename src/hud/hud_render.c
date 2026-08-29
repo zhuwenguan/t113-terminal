@@ -1,9 +1,11 @@
 #include "hud_render.h"
 
 #include "hud_layout.h"
+#include "hud_resources.h"
 #include "hud_theme.h"
 #include "hud_widget.h"
 #include "ui_font.h"
+#include "ui_image.h"
 
 #include <limits.h>
 #include <math.h>
@@ -29,6 +31,7 @@ struct HudContext {
     UiFont *font_small;
     UiFont *font_normal;
     UiFont *font_speed;
+    UiImage *battery_icon;
     HudLayout layout;
     const HudTheme *theme;
 };
@@ -188,77 +191,12 @@ static void hud_draw_rule(UiCanvas *canvas, int x0, int y, int x1,
     ui_line(canvas, x0, y, x1, y, 1, color);
 }
 
-static void hud_draw_stopwatch_icon(UiCanvas *canvas, int x, int y,
-                                    uint32_t color)
-{
-    ui_circle(canvas, x + 7, y + 8, 6, 1, color);
-    ui_fill_rect(canvas, x + 5, y, 5, 2, color);
-    ui_line(canvas, x + 7, y + 8, x + 7, y + 4, 1, color);
-    ui_line(canvas, x + 7, y + 8, x + 10, y + 10, 1, color);
-}
-
-static void hud_draw_flag_icon(UiCanvas *canvas, int x, int y,
-                               uint32_t color)
-{
-    ui_line(canvas, x + 1, y, x + 1, y + 17, 1, color);
-    ui_line(canvas, x + 2, y + 1, x + 13, y + 1, 1, color);
-    ui_line(canvas, x + 13, y + 1, x + 9, y + 7, 1, color);
-    ui_line(canvas, x + 9, y + 7, x + 2, y + 7, 1, color);
-    ui_line(canvas, x + 1, y + 17, x + 14, y + 17, 1, color);
-}
-
-static void hud_draw_battery_icon(UiCanvas *canvas, int x, int y,
-                                  uint32_t color)
-{
-    ui_rect(canvas, x, y + 2, 14, 9, 1, color);
-    ui_fill_rect(canvas, x + 14, y + 5, 2, 3, color);
-    ui_fill_rect(canvas, x + 3, y + 5, 7, 3, color);
-}
-
-static void hud_draw_power_icon(UiCanvas *canvas, int x, int y,
-                                uint32_t color)
-{
-    ui_line(canvas, x + 8, y, x + 2, y + 9, 1, color);
-    ui_line(canvas, x + 2, y + 9, x + 7, y + 9, 1, color);
-    ui_line(canvas, x + 7, y + 9, x + 4, y + 17, 1, color);
-    ui_line(canvas, x + 4, y + 17, x + 14, y + 6, 1, color);
-    ui_line(canvas, x + 14, y + 6, x + 9, y + 6, 1, color);
-    ui_line(canvas, x + 9, y + 6, x + 12, y, 1, color);
-}
-
-static void hud_draw_temperature_icon(UiCanvas *canvas, int x, int y,
-                                      uint32_t color)
-{
-    ui_line(canvas, x + 5, y, x + 5, y + 11, 1, color);
-    ui_circle(canvas, x + 5, y + 13, 4, 1, color);
-    ui_fill_circle(canvas, x + 5, y + 13, 2, color);
-}
-
-static void hud_draw_controller_icon(UiCanvas *canvas, int x, int y,
-                                     uint32_t color)
-{
-    ui_round_rect(canvas, x, y + 2, 14, 13, 2, 1, color);
-    ui_line(canvas, x + 4, y, x + 4, y + 4, 1, color);
-    ui_line(canvas, x + 10, y, x + 10, y + 4, 1, color);
-    ui_fill_circle(canvas, x + 5, y + 9, 1, color);
-    ui_fill_circle(canvas, x + 10, y + 9, 1, color);
-}
-
-static void hud_draw_mode_icon(UiCanvas *canvas, int x, int y,
-                               uint32_t color)
-{
-    ui_rect(canvas, x, y + 2, 14, 13, 1, color);
-    ui_line(canvas, x + 3, y + 9, x + 6, y + 12, 1, color);
-    ui_line(canvas, x + 6, y + 12, x + 11, y + 6, 1, color);
-}
-
 static void hud_draw_lap_static(HudContext *hud)
 {
     const HudRect rect = hud->layout.lap;
     const HudPanelStyle panel = hud_panel_style(hud, 6);
 
     hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_stopwatch_icon(&hud->canvas, 20, 32, hud->theme->panel_border);
     hud_draw_text_top(&hud->canvas, hud->font_small, 40, 35,
                       hud->theme->panel_border, "LAP");
     hud_draw_rule(&hud->canvas, 20, 55, 160, hud->theme->segment_inactive);
@@ -315,7 +253,6 @@ static void hud_draw_accel_event_static(HudContext *hud)
     const HudPanelStyle panel = hud_panel_style(hud, 6);
 
     hud_panel(&hud->canvas, rect, &panel);
-    hud_draw_flag_icon(&hud->canvas, 20, 212, hud->theme->panel_border);
     hud_draw_text_top(&hud->canvas, hud->font_small, 42, 213,
                       hud->theme->panel_border, "ACCEL EVENT");
     hud_draw_rule(&hud->canvas, 20, 230, 160, hud->theme->segment_inactive);
@@ -508,27 +445,21 @@ static void hud_draw_rpm_dynamic(HudContext *hud, const VehicleState *state)
 
 static void hud_draw_vehicle_info_static(HudContext *hud)
 {
-    hud_draw_battery_icon(&hud->canvas, 592, 465, hud->theme->panel_border);
+    ui_image_draw(&hud->canvas, hud->battery_icon, 592, 465);
     hud_draw_text_top(&hud->canvas, hud->font_small, 618, 466,
                       hud->theme->text_secondary, "BATTERY");
     hud_draw_rule(&hud->canvas, 590, 490, 742, hud->theme->segment_inactive);
 
-    hud_draw_power_icon(&hud->canvas, 592, 497, hud->theme->panel_border);
     hud_draw_text_top(&hud->canvas, hud->font_small, 618, 498,
                       hud->theme->text_secondary, "POWER");
     hud_draw_rule(&hud->canvas, 590, 525, 742, hud->theme->segment_inactive);
 
-    hud_draw_temperature_icon(&hud->canvas, 592, 530,
-                              hud->theme->panel_border);
     hud_draw_text_top(&hud->canvas, hud->font_small, 620, 530,
                       hud->theme->text_secondary, "-- C");
-    hud_draw_controller_icon(&hud->canvas, 665, 530,
-                             hud->theme->panel_border);
     hud_draw_text_top(&hud->canvas, hud->font_small, 695, 530,
                       hud->theme->text_secondary, "-- C");
     hud_draw_rule(&hud->canvas, 590, 555, 742, hud->theme->segment_inactive);
 
-    hud_draw_mode_icon(&hud->canvas, 592, 562, hud->theme->panel_border);
     hud_draw_text_top(&hud->canvas, hud->font_small, 618, 563,
                       hud->theme->text_secondary, "MODE");
     hud_draw_text_top(&hud->canvas, hud->font_small, 680, 563,
@@ -755,6 +686,11 @@ int hud_init(HudContext **context, const char *font_path)
         hud_shutdown(hud);
         return -1;
     }
+    hud->battery_icon = ui_image_load_png(HUD_DEFAULT_BATTERY_ICON_PATH);
+    if (hud->battery_icon == NULL) {
+        hud_shutdown(hud);
+        return -1;
+    }
     hud_ui_layout_default(&hud->layout);
     hud->theme = &hud_default_theme;
     if (!hud_build_static_cache(hud)) {
@@ -769,6 +705,7 @@ void hud_shutdown(HudContext *context)
 {
     if (context == NULL) return;
     free(context->static_pixels);
+    ui_image_free(context->battery_icon);
     ui_font_free(context->font_speed);
     ui_font_free(context->font_normal);
     ui_font_free(context->font_small);

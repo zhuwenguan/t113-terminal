@@ -16,6 +16,8 @@ set(T113_HUD_SOURCES
     video/src/hud_text.c
     src/ui/ui_draw.c
     src/ui/ui_font.c
+    src/ui/ui_image.c
+    third_party/tiny_png.c
     src/hud/hud_widget.c
     src/hud/hud_render.c)
 
@@ -342,6 +344,7 @@ install(TARGETS race_common ARCHIVE DESTINATION lib)
 install(DIRECTORY common/include/race DESTINATION include)
 install(DIRECTORY config/ DESTINATION config)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
+install(FILES car-battery.png DESTINATION share/t113-terminal)
 
 if (BUILD_TESTING)
     add_executable(test_ui_draw tests/test_ui_draw.c)
@@ -360,7 +363,7 @@ if (BUILD_TESTING)
     target_compile_options(test_ui_image PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_ui_image PRIVATE ui_image)
     add_test(NAME ui_image_load_binary_alpha_clipping_and_guards
-             COMMAND test_ui_image)
+             COMMAND test_ui_image ${CMAKE_SOURCE_DIR}/car-battery.png)
 
     add_executable(test_ui_font tests/test_ui_font.c)
     target_include_directories(test_ui_font PRIVATE ${CMAKE_SOURCE_DIR}/src/ui)
@@ -402,11 +405,14 @@ if (BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src/hud
         ${CMAKE_SOURCE_DIR}/src/ui
         ${RACE_COMMON_INCLUDE_DIR}
+        ${RACE_VIDEO_INCLUDE_DIR}
     )
     target_compile_options(test_hud_render PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(test_hud_render PRIVATE ui_draw m)
+    target_link_libraries(test_hud_render PRIVATE ui_draw ui_image m)
     add_test(NAME hud_render_static_state_layout_guard_stride
              COMMAND test_hud_render)
+    set_tests_properties(hud_render_static_state_layout_guard_stride
+                         PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     add_executable(hud_perf_benchmark
         tests/hud_perf_benchmark.c
@@ -423,7 +429,7 @@ if (BUILD_TESTING)
         -Wextra
         -Wpedantic
     )
-    target_link_libraries(hud_perf_benchmark PRIVATE ui_draw ui_font m)
+    target_link_libraries(hud_perf_benchmark PRIVATE ui_draw ui_font ui_image m)
 
     add_executable(test_video_compositor_argb
         tests/test_video_compositor_argb.c
