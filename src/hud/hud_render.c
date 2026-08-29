@@ -24,6 +24,9 @@
 #define HUD_LAP_TEXT_Y_OFFSET (-8)
 #define HUD_ACCEL_TEXT_Y_OFFSET (-10)
 #define HUD_MAIN_TEXT_Y_OFFSET (-4)
+#define HUD_SPEED_VALUE_Y_OFFSET (-8)
+#define HUD_PEDAL_VALUE_Y_OFFSET 15
+#define HUD_G_LONGITUDINAL_VALUE_Y_OFFSET (-2)
 
 typedef enum {
     HUD_G_DIRECTION_UP = 0,
@@ -350,7 +353,7 @@ static void hud_draw_speed_dynamic(HudContext *hud, const VehicleState *state,
     hud_format_number(speed, sizeof(speed), speed_valid,
                       state != NULL ? state->speed_kmh : 0.0, "%.0f", "");
     hud_draw_text_top(&hud->canvas, hud->font_speed, 152,
-                      485 + HUD_MAIN_TEXT_Y_OFFSET,
+                      485 + HUD_MAIN_TEXT_Y_OFFSET + HUD_SPEED_VALUE_Y_OFFSET,
                       speed_valid ? hud->theme->text_primary :
                       hud->theme->text_secondary,
                       speed_valid ? speed : "---");
@@ -383,7 +386,8 @@ static void hud_draw_pedal_row(HudContext *hud, int label_y, int bar_y,
 
     hud_format_number(display, sizeof(display), valid, value, "%.0f", "%");
     hud_draw_text_right(&hud->canvas, hud->font_small, 420,
-                        label_y + HUD_MAIN_TEXT_Y_OFFSET,
+                        label_y + HUD_MAIN_TEXT_Y_OFFSET +
+                            HUD_PEDAL_VALUE_Y_OFFSET,
                         valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, display);
     hud_draw_fixed_segment_bar(hud, 240, bar_y,
@@ -481,10 +485,14 @@ static void hud_draw_g_meter_dynamic(HudContext *hud,
                           hud->g_direction_values[HUD_G_DIRECTION_RIGHT],
                           "%+.2f", "");
         hud_draw_text_center(&hud->canvas, hud->font_small,
-                             layout->g_center_x, 480 + HUD_MAIN_TEXT_Y_OFFSET,
+                             layout->g_center_x,
+                             480 + HUD_MAIN_TEXT_Y_OFFSET +
+                                 HUD_G_LONGITUDINAL_VALUE_Y_OFFSET,
                              hud->theme->text_primary, up);
         hud_draw_text_center(&hud->canvas, hud->font_small,
-                             layout->g_center_x, 566 + HUD_MAIN_TEXT_Y_OFFSET,
+                             layout->g_center_x,
+                             566 + HUD_MAIN_TEXT_Y_OFFSET +
+                                 HUD_G_LONGITUDINAL_VALUE_Y_OFFSET,
                              hud->theme->text_primary, down);
         hud_draw_text_center(&hud->canvas, hud->font_small, 451,
                              520 + HUD_MAIN_TEXT_Y_OFFSET,
@@ -526,7 +534,8 @@ static void hud_draw_rpm_dynamic(HudContext *hud, const VehicleState *state)
 
     hud_format_number(display, sizeof(display), valid, rpm, "%.0f", "");
     hud_draw_text_right(&hud->canvas, hud->font_small, 420,
-                        545 + HUD_MAIN_TEXT_Y_OFFSET,
+                        545 + HUD_MAIN_TEXT_Y_OFFSET +
+                            HUD_PEDAL_VALUE_Y_OFFSET,
                         valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, display);
     hud_draw_fixed_segment_bar(hud, hud->layout.rpm_bar_x,

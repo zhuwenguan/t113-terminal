@@ -278,8 +278,10 @@ static void test_render_values_and_stride(HudContext *context)
     TEST_CHECK(rendered_text_count > 0U);
     TEST_CHECK(rendered_text_call_found("3", 20, 96));
     TEST_CHECK(rendered_text_call_found("3.82 s", 102, 242));
-    TEST_CHECK(rendered_text_call_found("86", 152, 529));
-    TEST_CHECK(rendered_text_call_found("63%", 396, 477));
+    TEST_CHECK(rendered_text_call_found("86", 152, 521));
+    TEST_CHECK(rendered_text_call_found("63%", 396, 492));
+    TEST_CHECK(rendered_text_call_found("18%", 396, 532));
+    TEST_CHECK(rendered_text_call_found("8200", 388, 572));
     assert_text_has_no_invalid_tokens();
 
     for (iteration = 0; iteration < 5; ++iteration) {
@@ -311,6 +313,8 @@ static void test_g_direction_history(HudContext *context)
     TEST_CHECK(rendered_text_found("+1.25"));
     TEST_CHECK(rendered_text_found("-0.35"));
     TEST_CHECK(rendered_text_found("--"));
+    TEST_CHECK(rendered_text_call_found("+1.25", 482, 490));
+    TEST_CHECK(rendered_text_call_found("-0.35", 431, 532));
 
     state.acc_x = -0.75 * 9.80665;
     state.acc_y = 0.65 * 9.80665;
@@ -320,6 +324,10 @@ static void test_g_direction_history(HudContext *context)
     TEST_CHECK(rendered_text_found("-0.75"));
     TEST_CHECK(rendered_text_found("-0.35"));
     TEST_CHECK(rendered_text_found("+0.65"));
+    TEST_CHECK(rendered_text_call_found("+1.25", 482, 490));
+    TEST_CHECK(rendered_text_call_found("-0.75", 482, 576));
+    TEST_CHECK(rendered_text_call_found("-0.35", 431, 532));
+    TEST_CHECK(rendered_text_call_found("+0.65", 533, 532));
 
     state.acc_x = 0.0;
     state.acc_y = 0.0;
