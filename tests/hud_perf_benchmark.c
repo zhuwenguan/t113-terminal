@@ -136,6 +136,7 @@ static void bench_profile_add(HudRenderProfile *total,
                               const HudRenderProfile *sample)
 {
     total->clear_time_us += sample->clear_time_us;
+    total->static_copy_time_us += sample->static_copy_time_us;
     total->lap_time_us += sample->lap_time_us;
     total->accel_event_time_us += sample->accel_event_time_us;
     total->speed_time_us += sample->speed_time_us;
@@ -275,12 +276,14 @@ int main(int argc, char **argv)
         }
         printf("case=%s iterations=%u total_us=%" PRIu64
                " avg_us=%.3f checksum=%016" PRIx64
-               " profile_us[clear=%.3f lap=%.3f accel=%.3f speed=%.3f "
+               " profile_us[clear=%.3f copy=%.3f lap=%.3f accel=%.3f speed=%.3f "
                "throttle=%.3f brake=%.3f rpm=%.3f g=%.3f vehicle=%.3f "
                "total=%.3f]\n",
                cases[index].name, BENCH_RENDER_ITERATIONS, elapsed,
                (double)elapsed / BENCH_RENDER_ITERATIONS, checksum,
                (double)profile_total.clear_time_us / BENCH_RENDER_ITERATIONS,
+               (double)profile_total.static_copy_time_us /
+                   BENCH_RENDER_ITERATIONS,
                (double)profile_total.lap_time_us / BENCH_RENDER_ITERATIONS,
                (double)profile_total.accel_event_time_us /
                    BENCH_RENDER_ITERATIONS,

@@ -12,6 +12,7 @@ typedef struct HudContext HudContext;
 
 typedef struct {
     uint64_t clear_time_us;
+    uint64_t static_copy_time_us;
     uint64_t lap_time_us;
     uint64_t accel_event_time_us;
     uint64_t speed_time_us;
