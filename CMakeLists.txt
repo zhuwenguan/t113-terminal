@@ -344,7 +344,14 @@ install(TARGETS race_common ARCHIVE DESTINATION lib)
 install(DIRECTORY common/include/race DESTINATION include)
 install(DIRECTORY config/ DESTINATION config)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
-install(FILES car-battery.png DESTINATION share/t113-terminal)
+install(FILES
+    car-battery.png
+    timer.png
+    lightning.png
+    engine.png
+    cpu.png
+    flag-checkered.png
+    DESTINATION share/t113-terminal)
 
 if (BUILD_TESTING)
     add_executable(test_ui_draw tests/test_ui_draw.c)
@@ -363,7 +370,13 @@ if (BUILD_TESTING)
     target_compile_options(test_ui_image PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_ui_image PRIVATE ui_image)
     add_test(NAME ui_image_load_binary_alpha_clipping_and_guards
-             COMMAND test_ui_image ${CMAKE_SOURCE_DIR}/car-battery.png)
+             COMMAND test_ui_image
+                     ${CMAKE_SOURCE_DIR}/car-battery.png
+                     ${CMAKE_SOURCE_DIR}/timer.png
+                     ${CMAKE_SOURCE_DIR}/lightning.png
+                     ${CMAKE_SOURCE_DIR}/engine.png
+                     ${CMAKE_SOURCE_DIR}/cpu.png
+                     ${CMAKE_SOURCE_DIR}/flag-checkered.png)
 
     add_executable(test_ui_font tests/test_ui_font.c)
     target_include_directories(test_ui_font PRIVATE ${CMAKE_SOURCE_DIR}/src/ui)

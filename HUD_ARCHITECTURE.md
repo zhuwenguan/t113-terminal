@@ -30,7 +30,8 @@ G2D
 - `src/ui/ui_font.c` and `video/src/hud_text.c` provide FreeType text and the
   fixed-capacity glyph cache.
 - `src/ui/ui_image.c` provides optional PNG binary-alpha loading and drawing;
-  the fixed page uses `car-battery.png` for the battery status icon.
+  the fixed page uses PNG icons for timer, battery, power, motor temperature,
+  controller temperature, and mode.
 
 The normal lifecycle is:
 

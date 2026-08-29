@@ -206,7 +206,9 @@ int main(int argc, char **argv)
     write_test_png(path);
     test_load_and_binary_alpha(path);
     test_draw_clipping_stride_and_reuse(path);
-    if (argc > 1) test_load_real_icon(argv[1]);
+    for (int argument_index = 1; argument_index < argc; ++argument_index) {
+        test_load_real_icon(argv[argument_index]);
+    }
     TEST_CHECK(remove(path) == 0);
     puts("ui_image tests: PASS");
     return EXIT_SUCCESS;

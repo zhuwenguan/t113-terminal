@@ -31,7 +31,12 @@ struct HudContext {
     UiFont *font_small;
     UiFont *font_normal;
     UiFont *font_speed;
+    UiImage *timer_icon;
     UiImage *battery_icon;
+    UiImage *lightning_icon;
+    UiImage *engine_icon;
+    UiImage *cpu_icon;
+    UiImage *flag_checkered_icon;
     HudLayout layout;
     const HudTheme *theme;
 };
@@ -197,6 +202,7 @@ static void hud_draw_lap_static(HudContext *hud)
     const HudPanelStyle panel = hud_panel_style(hud, 6);
 
     hud_panel(&hud->canvas, rect, &panel);
+    ui_image_draw(&hud->canvas, hud->timer_icon, 20, 32);
     hud_draw_text_top(&hud->canvas, hud->font_small, 40, 35,
                       hud->theme->panel_border, "LAP");
     hud_draw_rule(&hud->canvas, 20, 55, 160, hud->theme->segment_inactive);
@@ -450,16 +456,20 @@ static void hud_draw_vehicle_info_static(HudContext *hud)
                       hud->theme->text_secondary, "BATTERY");
     hud_draw_rule(&hud->canvas, 590, 490, 742, hud->theme->segment_inactive);
 
+    ui_image_draw(&hud->canvas, hud->lightning_icon, 592, 497);
     hud_draw_text_top(&hud->canvas, hud->font_small, 618, 498,
                       hud->theme->text_secondary, "POWER");
     hud_draw_rule(&hud->canvas, 590, 525, 742, hud->theme->segment_inactive);
 
+    ui_image_draw(&hud->canvas, hud->engine_icon, 592, 530);
     hud_draw_text_top(&hud->canvas, hud->font_small, 620, 530,
                       hud->theme->text_secondary, "-- C");
+    ui_image_draw(&hud->canvas, hud->cpu_icon, 665, 530);
     hud_draw_text_top(&hud->canvas, hud->font_small, 695, 530,
                       hud->theme->text_secondary, "-- C");
     hud_draw_rule(&hud->canvas, 590, 555, 742, hud->theme->segment_inactive);
 
+    ui_image_draw(&hud->canvas, hud->flag_checkered_icon, 592, 562);
     hud_draw_text_top(&hud->canvas, hud->font_small, 618, 563,
                       hud->theme->text_secondary, "MODE");
     hud_draw_text_top(&hud->canvas, hud->font_small, 680, 563,
@@ -686,8 +696,16 @@ int hud_init(HudContext **context, const char *font_path)
         hud_shutdown(hud);
         return -1;
     }
+    hud->timer_icon = ui_image_load_png(HUD_DEFAULT_TIMER_ICON_PATH);
     hud->battery_icon = ui_image_load_png(HUD_DEFAULT_BATTERY_ICON_PATH);
-    if (hud->battery_icon == NULL) {
+    hud->lightning_icon = ui_image_load_png(HUD_DEFAULT_LIGHTNING_ICON_PATH);
+    hud->engine_icon = ui_image_load_png(HUD_DEFAULT_ENGINE_ICON_PATH);
+    hud->cpu_icon = ui_image_load_png(HUD_DEFAULT_CPU_ICON_PATH);
+    hud->flag_checkered_icon = ui_image_load_png(
+        HUD_DEFAULT_FLAG_CHECKERED_ICON_PATH);
+    if (hud->timer_icon == NULL || hud->battery_icon == NULL ||
+        hud->lightning_icon == NULL || hud->engine_icon == NULL ||
+        hud->cpu_icon == NULL || hud->flag_checkered_icon == NULL) {
         hud_shutdown(hud);
         return -1;
     }
@@ -705,7 +723,12 @@ void hud_shutdown(HudContext *context)
 {
     if (context == NULL) return;
     free(context->static_pixels);
+    ui_image_free(context->flag_checkered_icon);
+    ui_image_free(context->cpu_icon);
+    ui_image_free(context->engine_icon);
+    ui_image_free(context->lightning_icon);
     ui_image_free(context->battery_icon);
+    ui_image_free(context->timer_icon);
     ui_font_free(context->font_speed);
     ui_font_free(context->font_normal);
     ui_font_free(context->font_small);
