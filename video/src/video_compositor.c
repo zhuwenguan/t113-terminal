@@ -445,10 +445,12 @@ static void video_compositor_blend_layer(VideoFrame *output,
                                          const HudLayer *layer)
 {
     size_t region_index;
+    bool argb_layer;
 
     if (output == NULL || layer == NULL || layer->pixels == NULL) {
         return;
     }
+    argb_layer = layer->pixel_format == HUD_PIXEL_FORMAT_ARGB8888;
     for (region_index = 0U; region_index < layer->region_count;
          ++region_index) {
         const HudRegion *region = &layer->regions[region_index];
@@ -482,11 +484,13 @@ static void video_compositor_blend_layer(VideoFrame *output,
                                          (size_t)column * VIDEO_FRAME_CHANNELS);
                 alpha = overlay_pixels.val[3];
                 inverse = vsub_u8(vdup_n_u8(255U), alpha);
-                red = vaddq_u16(vmull_u8(overlay_pixels.val[0], alpha),
+                red = vaddq_u16(vmull_u8(argb_layer ? overlay_pixels.val[2] :
+                                                   overlay_pixels.val[0], alpha),
                                 vmull_u8(destination_pixels.val[0], inverse));
                 green = vaddq_u16(vmull_u8(overlay_pixels.val[1], alpha),
                                   vmull_u8(destination_pixels.val[1], inverse));
-                blue = vaddq_u16(vmull_u8(overlay_pixels.val[2], alpha),
+                blue = vaddq_u16(vmull_u8(argb_layer ? overlay_pixels.val[0] :
+                                                   overlay_pixels.val[2], alpha),
                                  vmull_u8(destination_pixels.val[2], inverse));
                 red = vaddq_u16(red, vdupq_n_u16(128U));
                 green = vaddq_u16(green, vdupq_n_u16(128U));
@@ -507,11 +511,13 @@ static void video_compositor_blend_layer(VideoFrame *output,
                         (size_t)(column + pixel_index) * VIDEO_FRAME_CHANNELS;
                     uint32_t alpha = overlay[3];
                     uint32_t inverse = 255U - alpha;
-                    pixel[0] = (uint8_t)((overlay[0] * alpha +
+                    uint32_t red = argb_layer ? overlay[2] : overlay[0];
+                    uint32_t blue = argb_layer ? overlay[0] : overlay[2];
+                    pixel[0] = (uint8_t)((red * alpha +
                                           pixel[0] * inverse + 128U) >> 8);
                     pixel[1] = (uint8_t)((overlay[1] * alpha +
                                           pixel[1] * inverse + 128U) >> 8);
-                    pixel[2] = (uint8_t)((overlay[2] * alpha +
+                    pixel[2] = (uint8_t)((blue * alpha +
                                           pixel[2] * inverse + 128U) >> 8);
                     pixel[3] = 255U;
                 }
@@ -528,18 +534,20 @@ static void video_compositor_blend_layer(VideoFrame *output,
                     continue;
                 }
                 if (alpha >= 255U) {
-                    pixel[0] = overlay[0];
+                    pixel[0] = argb_layer ? overlay[2] : overlay[0];
                     pixel[1] = overlay[1];
-                    pixel[2] = overlay[2];
+                    pixel[2] = argb_layer ? overlay[0] : overlay[2];
                     pixel[3] = 255U;
                     continue;
                 }
                 inverse = 255U - alpha;
-                pixel[0] = (uint8_t)((overlay[0] * alpha +
+                pixel[0] = (uint8_t)(((argb_layer ? overlay[2] : overlay[0]) *
+                                      alpha +
                                       pixel[0] * inverse + 128U) >> 8);
                 pixel[1] = (uint8_t)((overlay[1] * alpha +
                                       pixel[1] * inverse + 128U) >> 8);
-                pixel[2] = (uint8_t)((overlay[2] * alpha +
+                pixel[2] = (uint8_t)(((argb_layer ? overlay[0] : overlay[2]) *
+                                      alpha +
                                       pixel[2] * inverse + 128U) >> 8);
                 pixel[3] = 255U;
             }
@@ -578,7 +586,8 @@ static void video_compositor_rgb_to_yuv(uint8_t red, uint8_t green,
 }
 
 static bool video_compositor_yuv_pixel(VideoYuvFrame *frame, uint32_t x,
-                                       uint32_t y, const uint8_t *overlay)
+                                       uint32_t y, const uint8_t *overlay,
+                                       bool argb_layer)
 {
     uint32_t source_x;
     uint32_t source_y;
@@ -602,7 +611,8 @@ static bool video_compositor_yuv_pixel(VideoYuvFrame *frame, uint32_t x,
     if (alpha == 0U) {
         return true;
     }
-    video_compositor_rgb_to_yuv(overlay[0], overlay[1], overlay[2],
+    video_compositor_rgb_to_yuv(argb_layer ? overlay[2] : overlay[0],
+                                overlay[1], argb_layer ? overlay[0] : overlay[2],
                                 &foreground_y, &foreground_u, &foreground_v);
     y_plane = frame->plane[0] + (size_t)source_y * frame->stride[0] + source_x;
     *y_plane = video_compositor_blend_u8(*y_plane, foreground_y, alpha);
@@ -653,10 +663,12 @@ static bool video_compositor_blend_yuv_layer(VideoYuvFrame *output,
                                              const HudLayer *layer)
 {
     size_t region_index;
+    bool argb_layer;
 
     if (output == NULL || layer == NULL || layer->pixels == NULL) {
         return false;
     }
+    argb_layer = layer->pixel_format == HUD_PIXEL_FORMAT_ARGB8888;
     for (region_index = 0U; region_index < layer->region_count;
          ++region_index) {
         const HudRegion *region = &layer->regions[region_index];
@@ -680,7 +692,8 @@ static bool video_compositor_blend_yuv_layer(VideoYuvFrame *output,
                 const uint8_t *overlay = layer->pixels +
                     (size_t)row * layer->stride +
                     (size_t)column * VIDEO_FRAME_CHANNELS;
-                if (!video_compositor_yuv_pixel(output, column, row, overlay)) {
+                if (!video_compositor_yuv_pixel(output, column, row, overlay,
+                                               argb_layer)) {
                     return false;
                 }
             }

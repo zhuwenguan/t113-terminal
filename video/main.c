@@ -66,7 +66,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--hud-assets") && i + 1 < argc) hud_assets = argv[++i];
         else if (!strcmp(argv[i], "--hud-font") && i + 1 < argc) hud_font = argv[++i];
         else if (!strcmp(argv[i], "--no-hud")) hud_style = HUD_STYLE_NONE;
-        else { LOG_ERROR("Usage: %s [-v] [--camera PATH] [--record PATH] [--seconds N] [--hud-style png|legacy|none] [--hud-assets PATH] [--hud-font PATH] [--no-hud]", argv[0]); return EXIT_FAILURE; }
+        else { LOG_ERROR("Usage: %s [-v] [--camera PATH] [--record PATH] [--seconds N] [--hud-style png|legacy|ui|none] [--hud-assets PATH] [--hud-font PATH] [--no-hud]", argv[0]); return EXIT_FAILURE; }
     }
     if (install_signals() < 0) { LOG_ERROR("sigaction: %s", strerror(errno)); return EXIT_FAILURE; }
     if (race_shared_state_reader_open(&source.shared, NULL) < 0) {

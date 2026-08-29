@@ -9,6 +9,7 @@
 #include "hud_layout.h"
 #include "hud_resources.h"
 #include "hud_text.h"
+#include "hud_render.h"
 #include "video_frame.h"
 
 /* The production camera and recorder are native 800x600.  Keep the HUD
@@ -30,7 +31,9 @@ typedef enum {
     /* PNG is the production default; legacy remains available for A/B. */
     HUD_STYLE_PNG = 0,
     HUD_STYLE_LEGACY = 1,
-    HUD_STYLE_NONE = 2
+    HUD_STYLE_NONE = 2,
+    /* Phase 4 direct UiCanvas renderer; legacy and PNG remain available. */
+    HUD_STYLE_UI = 3
 } HudStyle;
 
 typedef struct {
@@ -84,6 +87,7 @@ typedef struct {
     HudStyle style;
     HudAssets assets;
     HudTextAtlas text_atlas;
+    HudContext *ui_context;
     HudLayout layout;
     /* Numeric/label text is held for the human-readable HUD refresh rate;
      * graphical instruments still use the current video-frame state. */

@@ -18,7 +18,11 @@ set(T113_HUD_SOURCES
     video/src/hud_layout.c
     video/src/hud_render.c
     video/src/hud_text.c
-    third_party/tiny_png.c)
+    third_party/tiny_png.c
+    src/ui/ui_draw.c
+    src/ui/ui_font.c
+    src/hud/hud_widget.c
+    src/hud/hud_render.c)
 
 include_directories(${RACE_COMMON_INCLUDE_DIR})
 include_directories(${CMAKE_SOURCE_DIR}/third_party)
@@ -77,6 +81,7 @@ add_library(ui_font STATIC
 )
 target_include_directories(ui_font PUBLIC
     ${CMAKE_SOURCE_DIR}/src/ui
+    ${CMAKE_SOURCE_DIR}/src/hud
     ${RACE_VIDEO_INCLUDE_DIR}
 )
 target_compile_features(ui_font PUBLIC c_std_11)
@@ -125,7 +130,11 @@ add_executable(hud_png_snapshot
     ${T113_HUD_SOURCES}
     video/src/video_frame.c
 )
-target_include_directories(hud_png_snapshot PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
+target_include_directories(hud_png_snapshot PRIVATE
+    ${RACE_VIDEO_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/ui
+    ${CMAKE_SOURCE_DIR}/src/hud
+)
 target_compile_options(hud_png_snapshot PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(hud_png_snapshot PRIVATE m)
 
@@ -133,7 +142,11 @@ add_executable(hud_png_benchmark
     tools/hud_png_benchmark.c
     ${T113_HUD_SOURCES}
 )
-target_include_directories(hud_png_benchmark PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
+target_include_directories(hud_png_benchmark PRIVATE
+    ${RACE_VIDEO_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/ui
+    ${CMAKE_SOURCE_DIR}/src/hud
+)
 target_compile_options(hud_png_benchmark PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(hud_png_benchmark PRIVATE m)
 
@@ -151,10 +164,14 @@ target_include_directories(vencoder_rgb_test PRIVATE
 
 target_include_directories(video_argb_pipeline_test PRIVATE
     ${RACE_VIDEO_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/ui
+    ${CMAKE_SOURCE_DIR}/src/hud
 )
 
 target_include_directories(hud_ion_test PRIVATE
     ${RACE_VIDEO_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/ui
+    ${CMAKE_SOURCE_DIR}/src/hud
 )
 
 target_compile_options(g2d_smoke_test PRIVATE
@@ -310,6 +327,8 @@ target_include_directories(t113_terminal PRIVATE
     ${RACE_COMMON_LEGACY_INCLUDE_DIR}
     ${RACE_CORE_INCLUDE_DIR}
     ${RACE_VIDEO_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/ui
+    ${CMAKE_SOURCE_DIR}/src/hud
     ${T113_JPEG_INCLUDE_DIR}
 )
 
@@ -368,6 +387,7 @@ set(RACE_VIDEO_SOURCES
 add_executable(race_video ${RACE_VIDEO_SOURCES})
 target_include_directories(race_video PRIVATE
     ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_VIDEO_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/ui ${CMAKE_SOURCE_DIR}/src/hud
     ${T113_JPEG_INCLUDE_DIR})
 target_compile_options(race_video PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(race_video PRIVATE race_common Threads::Threads ${CMAKE_DL_LIBS})
@@ -408,6 +428,7 @@ if (BUILD_TESTING)
     target_include_directories(test_ui_draw PRIVATE
         ${CMAKE_SOURCE_DIR}/src/ui
         ${RACE_VIDEO_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/hud
     )
     target_compile_options(test_ui_draw PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_ui_draw PRIVATE ui_draw)
@@ -453,6 +474,42 @@ if (BUILD_TESTING)
     target_link_libraries(test_hud_widget PRIVATE ui_draw)
     add_test(NAME hud_widget_composition_clipping_stride_and_guards
              COMMAND test_hud_widget)
+
+    add_executable(test_hud_render
+        tests/test_hud_render.c
+        src/hud/hud_render.c
+        src/hud/hud_widget.c
+    )
+    target_include_directories(test_hud_render PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/hud
+        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_COMMON_INCLUDE_DIR}
+    )
+    target_compile_options(test_hud_render PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_hud_render PRIVATE ui_draw m)
+    add_test(NAME hud_render_static_state_layout_guard_stride
+             COMMAND test_hud_render)
+
+    add_executable(test_video_compositor_argb
+        tests/test_video_compositor_argb.c
+        video/src/video_compositor.c
+        video/src/video_frame.c
+    )
+    target_include_directories(test_video_compositor_argb PRIVATE
+        ${RACE_VIDEO_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/ui
+        ${CMAKE_SOURCE_DIR}/src/hud
+    )
+    target_compile_definitions(test_video_compositor_argb PRIVATE
+        _DEFAULT_SOURCE
+        _POSIX_C_SOURCE=200809L
+    )
+    target_compile_options(test_video_compositor_argb PRIVATE
+        -Wall -Wextra -Wpedantic
+    )
+    target_link_libraries(test_video_compositor_argb PRIVATE ${CMAKE_DL_LIBS})
+    add_test(NAME video_compositor_rgba_argb_layer_decode
+             COMMAND test_video_compositor_argb)
 
     add_executable(test_shared_state tests/test_shared_state.c)
     target_link_libraries(test_shared_state PRIVATE race_common)
@@ -672,6 +729,8 @@ if (BUILD_TESTING)
     )
     target_include_directories(test_hud_renderer PRIVATE
         ${RACE_VIDEO_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/ui
+        ${CMAKE_SOURCE_DIR}/src/hud
     )
     target_compile_options(test_hud_renderer PRIVATE
         -Wall
@@ -687,7 +746,11 @@ if (BUILD_TESTING)
         tests/test_hud_png.c
         ${T113_HUD_SOURCES}
     )
-    target_include_directories(test_hud_png PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
+    target_include_directories(test_hud_png PRIVATE
+        ${RACE_VIDEO_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/ui
+        ${CMAKE_SOURCE_DIR}/src/hud
+    )
     target_compile_options(test_hud_png PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_hud_png PRIVATE m ${CMAKE_DL_LIBS})
     target_link_libraries(test_hud_png PRIVATE t113_freetype)
@@ -701,7 +764,10 @@ if (BUILD_TESTING)
         video/src/hud_text.c
         video/src/hud_blend.c
     )
-    target_include_directories(test_hud_text PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
+    target_include_directories(test_hud_text PRIVATE
+        ${RACE_VIDEO_INCLUDE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/hud
+    )
     target_compile_options(test_hud_text PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_hud_text PRIVATE t113_freetype)
     add_test(NAME hud_text_freetype_cache_metrics_alignment_and_antialias

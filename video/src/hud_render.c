@@ -838,7 +838,7 @@ int hud_renderer_init_style(HudRenderer *renderer, uint32_t width,
                        font_path : HUD_DEFAULT_FONT_PATH;
 
     if (style != HUD_STYLE_PNG && style != HUD_STYLE_LEGACY &&
-        style != HUD_STYLE_NONE) {
+        style != HUD_STYLE_NONE && style != HUD_STYLE_UI) {
         errno = EINVAL;
         return -1;
     }
@@ -848,6 +848,25 @@ int hud_renderer_init_style(HudRenderer *renderer, uint32_t width,
     if (result < 0) return result;
     renderer->style = style;
     if (style == HUD_STYLE_LEGACY) return 0;
+    if (style == HUD_STYLE_UI) {
+        /* The UiCanvas path is ARGB8888 in both the real HudSurface and its
+         * CPU fallback layer.  Do not retain the temporary legacy template. */
+        renderer->static_layer.pixel_format = HUD_PIXEL_FORMAT_ARGB8888;
+        renderer->dynamic_layer.pixel_format = HUD_PIXEL_FORMAT_ARGB8888;
+        if (renderer->static_layer.pixels != NULL) {
+            memset(renderer->static_layer.pixels, 0,
+                   (size_t)renderer->static_layer.stride * renderer->height);
+        }
+        if (renderer->dynamic_layer.pixels != NULL) {
+            memset(renderer->dynamic_layer.pixels, 0,
+                   (size_t)renderer->dynamic_layer.stride * renderer->height);
+        }
+        if (hud_init(&renderer->ui_context, font) < 0) {
+            hud_renderer_close(renderer);
+            return -1;
+        }
+        return 0;
+    }
     hud_layout_default(&renderer->layout);
     if (style == HUD_STYLE_NONE) {
         memset(renderer->static_layer.pixels, 0,
@@ -900,6 +919,7 @@ const char *hud_style_name(HudStyle style)
     case HUD_STYLE_PNG: return "png";
     case HUD_STYLE_LEGACY: return "legacy";
     case HUD_STYLE_NONE: return "none";
+    case HUD_STYLE_UI: return "ui";
     default: return "unknown";
     }
 }
@@ -910,6 +930,7 @@ bool hud_style_parse(const char *value, HudStyle *style)
     if (strcmp(value, "png") == 0) *style = HUD_STYLE_PNG;
     else if (strcmp(value, "legacy") == 0) *style = HUD_STYLE_LEGACY;
     else if (strcmp(value, "none") == 0) *style = HUD_STYLE_NONE;
+    else if (strcmp(value, "ui") == 0) *style = HUD_STYLE_UI;
     else return false;
     return true;
 }

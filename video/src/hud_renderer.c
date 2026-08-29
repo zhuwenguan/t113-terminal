@@ -3,6 +3,7 @@
 #include "hud_renderer.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -687,6 +688,36 @@ static void hud_layer_set_surface(HudLayer *layer, const HudSurface *surface)
     layer->pixel_format = surface->pixel_format;
 }
 
+static const HudLayer *hud_renderer_render_ui_layer(
+    HudRenderer *renderer, HudLayer *layer, const VehicleState *state,
+    bool recording, HudRenderTiming *timing)
+{
+    UiCanvas canvas;
+    uint64_t start;
+
+    if (renderer == NULL || renderer->ui_context == NULL || layer == NULL ||
+        layer->pixels == NULL || layer->pixel_format != HUD_PIXEL_FORMAT_ARGB8888 ||
+        layer->width == 0U || layer->height == 0U ||
+        layer->width > (uint32_t)INT_MAX || layer->height > (uint32_t)INT_MAX ||
+        layer->stride > (uint32_t)INT_MAX) {
+        return NULL;
+    }
+    canvas = (UiCanvas){ layer->pixels, (int)layer->width, (int)layer->height,
+                         (int)layer->stride };
+    if (timing != NULL) memset(timing, 0, sizeof(*timing));
+    start = hud_renderer_now_us();
+    if (hud_render(renderer->ui_context, &canvas, state, recording) < 0) {
+        return NULL;
+    }
+    layer->region_count = 1U;
+    layer->regions[0] = (HudRegion){ 0U, 0U, layer->width, layer->height };
+    if (timing != NULL) {
+        timing->draw_time_us = hud_renderer_now_us() - start;
+        timing->total_time_us = timing->draw_time_us;
+    }
+    return layer;
+}
+
 static const HudLayer *hud_renderer_render_dynamic_layer(
     HudRenderer *renderer, HudLayer *layer, const VehicleState *state,
     bool recording, HudRenderTiming *timing)
@@ -803,6 +834,7 @@ void hud_renderer_close(HudRenderer *renderer)
     }
     hud_text_atlas_close(&renderer->text_atlas);
     hud_assets_close(&renderer->assets);
+    hud_shutdown(renderer->ui_context);
     free(renderer->static_layer.pixels);
     free(renderer->dynamic_layer.pixels);
     memset(renderer, 0, sizeof(*renderer));
@@ -823,6 +855,14 @@ const HudLayer *hud_renderer_render_dynamic(HudRenderer *renderer,
     }
     if (renderer->style == HUD_STYLE_PNG) {
         return hud_png_render_dynamic(renderer, state, recording);
+    }
+    if (renderer->style == HUD_STYLE_UI) {
+        if (renderer->dynamic_surface_only ||
+            renderer->dynamic_layer.pixels == NULL) {
+            return NULL;
+        }
+        return hud_renderer_render_ui_layer(renderer, &renderer->dynamic_layer,
+                                            state, recording, NULL);
     }
     if (renderer->style == HUD_STYLE_NONE) {
         return hud_none_render_dynamic(renderer, state, recording);
@@ -845,6 +885,13 @@ const HudLayer *hud_renderer_render_dynamic_to_surface(
     if (renderer->style == HUD_STYLE_PNG) {
         return hud_png_render_dynamic_to_surface(renderer, state, recording,
                                                   surface, timing);
+    }
+    if (renderer->style == HUD_STYLE_UI) {
+        if (surface->pixel_format != HUD_PIXEL_FORMAT_ARGB8888) return NULL;
+        hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
+        return hud_renderer_render_ui_layer(renderer,
+                                             &renderer->external_dynamic_layer,
+                                             state, recording, timing);
     }
     if (renderer->style == HUD_STYLE_NONE) {
         return hud_none_render_frame_to_surface(renderer, state, recording,
@@ -872,6 +919,13 @@ const HudLayer *hud_renderer_render_frame_to_surface(
     if (renderer->style == HUD_STYLE_PNG) {
         return hud_png_render_frame_to_surface(renderer, state, recording,
                                                 surface, timing);
+    }
+    if (renderer->style == HUD_STYLE_UI) {
+        if (surface->pixel_format != HUD_PIXEL_FORMAT_ARGB8888) return NULL;
+        hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
+        return hud_renderer_render_ui_layer(renderer,
+                                             &renderer->external_dynamic_layer,
+                                             state, recording, timing);
     }
     if (renderer->style == HUD_STYLE_NONE) {
         return hud_none_render_frame_to_surface(renderer, state, recording,

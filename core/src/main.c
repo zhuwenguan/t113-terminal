@@ -472,7 +472,7 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
         if (strcmp(argv[argument_index], "--hud-style") == 0) {
             if (argument_index + 1 >= argc ||
                 !hud_style_parse(argv[++argument_index], &options->hud_style)) {
-                LOG_ERROR("Invalid --hud-style; use png, legacy, or none");
+                LOG_ERROR("Invalid --hud-style; use png, legacy, ui, or none");
                 return -1;
             }
             options->video = true;
@@ -535,7 +535,7 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
                   "[--video-record [path]] [--video-frame <path>] "
                   "[--video-seconds <number>] "
                   "[--video-compositor auto|g2d|cpu] "
-                  "[--hud-style png|legacy|none] [--hud-assets PATH] "
+                  "[--hud-style png|legacy|ui|none] [--hud-assets PATH] "
                   "[--hud-font PATH] "
                   "[--no-hud] "
                   "[--hud-demo|--hud-demo-no-frame]",
