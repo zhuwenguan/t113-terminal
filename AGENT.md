@@ -154,6 +154,7 @@ ssh root@"$T113_HOST"
 
 ```bash
 scp build/t113_terminal root@192.168.34.238:/mnt/UDISK/t113_terminal
+scp -r assets root@192.168.34.238:/mnt/UDISK/
 ```
 
 程序部署到板端后，启动任务会执行以下操作：

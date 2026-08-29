@@ -345,14 +345,14 @@ install(DIRECTORY common/include/race DESTINATION include)
 install(DIRECTORY config/ DESTINATION config)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
 install(FILES
-    car-battery.png
-    timer.png
-    lightning.png
-    engine.png
-    cpu.png
-    battery-charging-vertical.png
-    flag-checkered.png
-    DESTINATION share/t113-terminal)
+    assets/icons/car-battery.png
+    assets/icons/timer.png
+    assets/icons/lightning.png
+    assets/icons/engine.png
+    assets/icons/cpu.png
+    assets/icons/battery-charging-vertical.png
+    assets/icons/flag-checkered.png
+    DESTINATION share/t113-terminal/assets/icons)
 
 if (BUILD_TESTING)
     add_executable(test_ui_draw tests/test_ui_draw.c)
@@ -372,13 +372,13 @@ if (BUILD_TESTING)
     target_link_libraries(test_ui_image PRIVATE ui_image)
     add_test(NAME ui_image_load_binary_alpha_clipping_and_guards
              COMMAND test_ui_image
-                     ${CMAKE_SOURCE_DIR}/car-battery.png
-                     ${CMAKE_SOURCE_DIR}/timer.png
-                     ${CMAKE_SOURCE_DIR}/lightning.png
-                     ${CMAKE_SOURCE_DIR}/engine.png
-                     ${CMAKE_SOURCE_DIR}/cpu.png
-                     ${CMAKE_SOURCE_DIR}/battery-charging-vertical.png
-                     ${CMAKE_SOURCE_DIR}/flag-checkered.png)
+                     ${CMAKE_SOURCE_DIR}/assets/icons/car-battery.png
+                     ${CMAKE_SOURCE_DIR}/assets/icons/timer.png
+                     ${CMAKE_SOURCE_DIR}/assets/icons/lightning.png
+                     ${CMAKE_SOURCE_DIR}/assets/icons/engine.png
+                     ${CMAKE_SOURCE_DIR}/assets/icons/cpu.png
+                     ${CMAKE_SOURCE_DIR}/assets/icons/battery-charging-vertical.png
+                     ${CMAKE_SOURCE_DIR}/assets/icons/flag-checkered.png)
 
     add_executable(test_ui_font tests/test_ui_font.c)
     target_include_directories(test_ui_font PRIVATE ${CMAKE_SOURCE_DIR}/src/ui)
