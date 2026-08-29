@@ -1,4 +1,6 @@
 #include "hud_renderer.h"
+#include "hud_resources.h"
+#include "hud_text.h"
 
 #include <assert.h>
 #include <stdint.h>

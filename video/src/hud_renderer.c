@@ -2,94 +2,15 @@
 
 #include "hud_renderer.h"
 
-#include <errno.h>
+#include "hud_resources.h"
+
 #include <limits.h>
-#include <math.h>
-#include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-typedef struct {
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
-    uint8_t a;
-} HudColor;
-
-static const HudColor hud_cyan = { 44U, 210U, 232U, 235U };
-static const HudColor hud_white = { 245U, 249U, 252U, 245U };
-static const HudColor hud_muted = { 143U, 180U, 190U, 235U };
-static const HudColor hud_green = { 64U, 230U, 122U, 245U };
-static const HudColor hud_red = { 255U, 66U, 72U, 245U };
-static const HudColor hud_yellow = { 255U, 210U, 64U, 245U };
-static const HudColor hud_black_panel = { 0U, 0U, 0U, 166U };
-
-/* Compact 5x7 font. It intentionally uses a fixed-width ASCII alphabet so
- * changing telemetry values never moves the surrounding layout. */
-static const uint8_t hud_font[36][7] = {
-    {0x0e,0x11,0x13,0x15,0x19,0x11,0x0e}, /* 0 */
-    {0x04,0x0c,0x04,0x04,0x04,0x04,0x0e}, /* 1 */
-    {0x0e,0x11,0x01,0x02,0x04,0x08,0x1f}, /* 2 */
-    {0x1e,0x01,0x01,0x0e,0x01,0x01,0x1e}, /* 3 */
-    {0x02,0x06,0x0a,0x12,0x1f,0x02,0x02}, /* 4 */
-    {0x1f,0x10,0x10,0x1e,0x01,0x01,0x1e}, /* 5 */
-    {0x0e,0x10,0x10,0x1e,0x11,0x11,0x0e}, /* 6 */
-    {0x1f,0x01,0x02,0x04,0x08,0x08,0x08}, /* 7 */
-    {0x0e,0x11,0x11,0x0e,0x11,0x11,0x0e}, /* 8 */
-    {0x0e,0x11,0x11,0x0f,0x01,0x01,0x0e}, /* 9 */
-    {0x0e,0x11,0x11,0x1f,0x11,0x11,0x11}, /* A */
-    {0x1e,0x11,0x11,0x1e,0x11,0x11,0x1e}, /* B */
-    {0x0e,0x11,0x10,0x10,0x10,0x11,0x0e}, /* C */
-    {0x1e,0x11,0x11,0x11,0x11,0x11,0x1e}, /* D */
-    {0x1f,0x10,0x10,0x1e,0x10,0x10,0x1f}, /* E */
-    {0x1f,0x10,0x10,0x1e,0x10,0x10,0x10}, /* F */
-    {0x0e,0x11,0x10,0x17,0x11,0x11,0x0f}, /* G */
-    {0x11,0x11,0x11,0x1f,0x11,0x11,0x11}, /* H */
-    {0x0e,0x04,0x04,0x04,0x04,0x04,0x0e}, /* I */
-    {0x07,0x02,0x02,0x02,0x12,0x12,0x0c}, /* J */
-    {0x11,0x12,0x14,0x18,0x14,0x12,0x11}, /* K */
-    {0x10,0x10,0x10,0x10,0x10,0x10,0x1f}, /* L */
-    {0x11,0x1b,0x15,0x15,0x11,0x11,0x11}, /* M */
-    {0x11,0x19,0x15,0x13,0x11,0x11,0x11}, /* N */
-    {0x0e,0x11,0x11,0x11,0x11,0x11,0x0e}, /* O */
-    {0x1e,0x11,0x11,0x1e,0x10,0x10,0x10}, /* P */
-    {0x0e,0x11,0x11,0x11,0x15,0x12,0x0d}, /* Q */
-    {0x1e,0x11,0x11,0x1e,0x14,0x12,0x11}, /* R */
-    {0x0f,0x10,0x10,0x0e,0x01,0x01,0x1e}, /* S */
-    {0x1f,0x04,0x04,0x04,0x04,0x04,0x04}, /* T */
-    {0x11,0x11,0x11,0x11,0x11,0x11,0x0e}, /* U */
-    {0x11,0x11,0x11,0x11,0x11,0x0a,0x04}, /* V */
-    {0x11,0x11,0x11,0x15,0x15,0x15,0x0a}, /* W */
-    {0x11,0x11,0x0a,0x04,0x0a,0x11,0x11}, /* X */
-    {0x11,0x11,0x0a,0x04,0x04,0x04,0x04}, /* Y */
-    {0x1f,0x01,0x02,0x04,0x08,0x10,0x1f}  /* Z */
-};
-
-static const uint8_t hud_dot[7] = {0x00,0x00,0x00,0x00,0x00,0x00,0x04};
-static const uint8_t hud_colon[7] = {0x00,0x04,0x00,0x00,0x00,0x04,0x00};
-static const uint8_t hud_minus[7] = {0x00,0x00,0x00,0x1f,0x00,0x00,0x00};
-static const uint8_t hud_plus[7] = {0x00,0x04,0x04,0x1f,0x04,0x04,0x00};
-static const uint8_t hud_percent[7] = {0x19,0x19,0x02,0x04,0x08,0x13,0x13};
-static const uint8_t hud_slash[7] = {0x01,0x02,0x04,0x08,0x10,0x00,0x00};
-
-static int hud_scaled_x(const HudRenderer *renderer, int value)
-{
-    return renderer->offset_x +
-           (int)lround((double)value * renderer->scale_x);
-}
-
-static int hud_scaled_y(const HudRenderer *renderer, int value)
-{
-    return renderer->offset_y +
-           (int)lround((double)value * renderer->scale_y);
-}
-
-static int hud_font_scale(const HudRenderer *renderer, int scale)
-{
-    int result = (int)lround((double)scale * renderer->scale_x);
-    return result < 1 ? 1 : result;
-}
+#define HUD_BYTES_PER_PIXEL 4U
 
 static uint64_t hud_renderer_now_us(void)
 {
@@ -102,584 +23,72 @@ static uint64_t hud_renderer_now_us(void)
            (uint64_t)timestamp.tv_nsec / 1000U;
 }
 
+static bool hud_renderer_size_valid(uint32_t width, uint32_t height,
+                                    size_t *bytes)
+{
+    size_t row_bytes;
+
+    if (width == 0U || height == 0U) {
+        return false;
+    }
+#if SIZE_MAX < UINT32_MAX
+    if (width > SIZE_MAX / HUD_BYTES_PER_PIXEL) return false;
+#endif
+    row_bytes = (size_t)width * HUD_BYTES_PER_PIXEL;
+    if ((size_t)height > SIZE_MAX / row_bytes) return false;
+    if (bytes != NULL) *bytes = row_bytes * (size_t)height;
+    return true;
+}
+
+static void hud_layer_init(HudLayer *layer, uint32_t width, uint32_t height,
+                           HudPixelFormat pixel_format)
+{
+    if (layer == NULL) return;
+    memset(layer, 0, sizeof(*layer));
+    layer->width = width;
+    layer->height = height;
+    layer->stride = width * HUD_BYTES_PER_PIXEL;
+    layer->pixel_format = pixel_format;
+}
+
 static void hud_layer_clear(HudLayer *layer)
 {
-    if (layer != NULL && layer->pixels != NULL) {
-        memset(layer->pixels, 0, (size_t)layer->stride * layer->height);
-        layer->region_count = 0U;
+    uint32_t y;
+
+    if (layer == NULL || layer->pixels == NULL) return;
+    for (y = 0U; y < layer->height; ++y) {
+        memset(layer->pixels + (size_t)y * layer->stride, 0U,
+               (size_t)layer->width * HUD_BYTES_PER_PIXEL);
     }
-}
-
-static void hud_layer_set_regions_from_base(const HudRenderer *renderer,
-                                            HudLayer *layer,
-                                            const HudRegion *base_regions,
-                                            size_t base_count)
-{
-    size_t index;
-
-    layer->region_count = base_count > HUD_MAX_REGIONS ? HUD_MAX_REGIONS :
-                          base_count;
-    for (index = 0U; index < layer->region_count; ++index) {
-        layer->regions[index].x = (uint32_t)hud_scaled_x(
-            renderer, (int)base_regions[index].x);
-        layer->regions[index].y = (uint32_t)hud_scaled_y(
-            renderer, (int)base_regions[index].y);
-        layer->regions[index].width = (uint32_t)hud_scaled_x(
-            renderer, (int)(base_regions[index].x + base_regions[index].width)) -
-            layer->regions[index].x;
-        layer->regions[index].height = (uint32_t)hud_scaled_y(
-            renderer, (int)(base_regions[index].y + base_regions[index].height)) -
-            layer->regions[index].y;
-    }
-}
-
-static void hud_layer_set_static_regions(const HudRenderer *renderer,
-                                         HudLayer *layer)
-{
-    static const HudRegion regions[] = {
-        { 15U, 0U, 145U, 25U },
-        { 15U, 40U, 158U, 221U },
-        /* Include the right ornament above the timing panel without
-         * overlapping the left status region in the CPU compositor. */
-        { 618U, 14U, 168U, 118U },
-        { 618U, 148U, 168U, 168U },
-        { 15U, 484U, 219U, 98U },
-        { 288U, 484U, 225U, 98U },
-        { 531U, 484U, 254U, 98U }
-    };
-
-    hud_layer_set_regions_from_base(renderer, layer, regions,
-                                     sizeof(regions) / sizeof(regions[0]));
-}
-
-static void hud_layer_set_dynamic_regions(const HudRenderer *renderer,
-                                          HudLayer *layer)
-{
-    static const HudRegion native_regions[] = {
-        /* Restore only pixels that can change between snapshots.  Keeping
-         * these regions tight avoids copying every complete panel each frame. */
-        { 15U, 0U, 140U, 25U },
-        { 27U, 68U, 137U, 180U },
-        { 690U, 32U, 90U, 60U },
-        { 640U, 168U, 125U, 136U },
-        { 27U, 492U, 193U, 83U },
-        { 305U, 493U, 180U, 45U },
-        { 542U, 498U, 242U, 45U }
-    };
-    static const HudRegion compatibility_regions[] = {
-        /* At scaled-down compatibility sizes the fixed one-pixel font can be
-         * wider than its transformed design bounds.  Restore whole groups so
-         * stale glyphs cannot survive between snapshots. */
-        { 15U, 0U, 770U, 25U },
-        { 15U, 40U, 158U, 221U },
-        { 618U, 19U, 168U, 113U },
-        { 618U, 148U, 168U, 168U },
-        { 15U, 484U, 219U, 98U },
-        { 288U, 484U, 225U, 98U },
-        { 531U, 484U, 254U, 98U }
-    };
-    const HudRegion *regions = native_regions;
-    size_t region_count = sizeof(native_regions) / sizeof(native_regions[0]);
-
-    if (renderer->width != HUD_BASE_WIDTH ||
-        renderer->height != HUD_BASE_HEIGHT) {
-        regions = compatibility_regions;
-        region_count = sizeof(compatibility_regions) /
-                       sizeof(compatibility_regions[0]);
-    }
-
-    hud_layer_set_regions_from_base(renderer, layer, regions, region_count);
-}
-
-static void hud_pixel(HudLayer *layer, int x, int y, HudColor color)
-{
-    uint8_t *pixel;
-
-    if (layer == NULL || layer->pixels == NULL || x < 0 || y < 0 ||
-        (uint32_t)x >= layer->width || (uint32_t)y >= layer->height ||
-        color.a == 0U) {
-        return;
-    }
-    pixel = layer->pixels + (size_t)y * layer->stride +
-            (size_t)x * VIDEO_FRAME_CHANNELS;
-    if (layer->pixel_format == HUD_PIXEL_FORMAT_ARGB8888) {
-        /* The T113 G2D ARGB8888 dma-buf is little-endian B,G,R,A. */
-        pixel[0] = color.b;
-        pixel[1] = color.g;
-        pixel[2] = color.r;
-    } else {
-        pixel[0] = color.r;
-        pixel[1] = color.g;
-        pixel[2] = color.b;
-    }
-    pixel[3] = color.a;
-}
-
-static void hud_fill_rect(const HudRenderer *renderer, HudLayer *layer,
-                          int x, int y, int width, int height,
-                          HudColor color)
-{
-    int left = hud_scaled_x(renderer, x);
-    int top = hud_scaled_y(renderer, y);
-    int right = hud_scaled_x(renderer, x + width);
-    int bottom = hud_scaled_y(renderer, y + height);
-    int row;
-
-    for (row = top; row < bottom; ++row) {
-        int column;
-        for (column = left; column < right; ++column) {
-            hud_pixel(layer, column, row, color);
-        }
-    }
-}
-
-static void hud_outline_rect(const HudRenderer *renderer, HudLayer *layer,
-                             int x, int y, int width, int height,
-                             HudColor color)
-{
-    hud_fill_rect(renderer, layer, x, y, width, 1, color);
-    hud_fill_rect(renderer, layer, x, y + height - 1, width, 1, color);
-    hud_fill_rect(renderer, layer, x, y, 1, height, color);
-    hud_fill_rect(renderer, layer, x + width - 1, y, 1, height, color);
-}
-
-static const uint8_t *hud_glyph(char character)
-{
-    unsigned int index;
-
-    if (character >= '0' && character <= '9') {
-        index = (unsigned int)(character - '0');
-    } else if (character >= 'A' && character <= 'Z') {
-        index = 10U + (unsigned int)(character - 'A');
-    } else {
-        switch (character) {
-        case '.': return hud_dot;
-        case ':': return hud_colon;
-        case '-': return hud_minus;
-        case '+': return hud_plus;
-        case '%': return hud_percent;
-        case '/': return hud_slash;
-        default: return NULL;
-        }
-    }
-    return hud_font[index];
-}
-
-static int hud_draw_text(const HudRenderer *renderer, HudLayer *layer,
-                         int x, int y, const char *text, int scale,
-                         HudColor color)
-{
-    const int actual_scale = hud_font_scale(renderer, scale);
-    const int advance = 6 * actual_scale;
-    int cursor = hud_scaled_x(renderer, x);
-    int top = hud_scaled_y(renderer, y);
-
-    if (text == NULL) {
-        return cursor;
-    }
-    while (*text != '\0') {
-        const uint8_t *glyph = hud_glyph(*text);
-        int glyph_row;
-
-        if (glyph != NULL) {
-            for (glyph_row = 0; glyph_row < 7; ++glyph_row) {
-                int glyph_column;
-                for (glyph_column = 0; glyph_column < 5; ++glyph_column) {
-                    if ((glyph[glyph_row] & (1U << (4 - glyph_column))) != 0U) {
-                        int yy;
-                        int xx;
-                        for (yy = 0; yy < actual_scale; ++yy) {
-                            for (xx = 0; xx < actual_scale; ++xx) {
-                                hud_pixel(layer, cursor + glyph_column * actual_scale +
-                                          xx, top + glyph_row * actual_scale + yy,
-                                          color);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        cursor += (*text == ' ' ? advance : advance);
-        ++text;
-    }
-    return cursor;
-}
-
-static void hud_draw_circle(const HudRenderer *renderer, HudLayer *layer,
-                            int center_x, int center_y, int radius,
-                            HudColor color)
-{
-    int y;
-
-    for (y = -radius; y <= radius; ++y) {
-        int x;
-        int limit = (int)sqrt((double)radius * radius - (double)y * y);
-        for (x = -limit; x <= limit; ++x) {
-            int distance = x * x + y * y;
-            int radius_squared = radius * radius;
-            if (distance >= radius_squared - radius * 2 &&
-                distance <= radius_squared + radius * 2) {
-                hud_pixel(layer, hud_scaled_x(renderer, center_x + x),
-                          hud_scaled_y(renderer, center_y + y), color);
-            }
-        }
-    }
-}
-
-static void hud_draw_line(const HudRenderer *renderer, HudLayer *layer,
-                          int x1, int y1, int x2, int y2, HudColor color)
-{
-    int dx = abs(x2 - x1);
-    int sx = x1 < x2 ? 1 : -1;
-    int dy = -abs(y2 - y1);
-    int sy = y1 < y2 ? 1 : -1;
-    int error = dx + dy;
-
-    for (;;) {
-        hud_pixel(layer, hud_scaled_x(renderer, x1), hud_scaled_y(renderer, y1),
-                  color);
-        if (x1 == x2 && y1 == y2) {
-            break;
-        }
-        if (2 * error >= dy) {
-            error += dy;
-            x1 += sx;
-        }
-        if (2 * error <= dx) {
-            error += dx;
-            y1 += sy;
-        }
-    }
-}
-
-static void hud_panel(const HudRenderer *renderer, HudLayer *layer,
-                      int x, int y, int width, int height)
-{
-    hud_fill_rect(renderer, layer, x, y, width, height, hud_black_panel);
-    hud_outline_rect(renderer, layer, x, y, width, height, hud_cyan);
-}
-
-static void hud_static_text(const HudRenderer *renderer, HudLayer *layer,
-                            int x, int y, const char *text)
-{
-    (void)hud_draw_text(renderer, layer, x, y, text, 1, hud_cyan);
-}
-
-static void hud_draw_segment_outline(const HudRenderer *renderer, HudLayer *layer,
-                                     int x, int y, int count, int width,
-                                     int height)
-{
-    int index;
-
-    for (index = 0; index < count; ++index) {
-        int left = x + index * (width + 3);
-        hud_outline_rect(renderer, layer, left, y, width, height, hud_muted);
-    }
-}
-
-static bool hud_has(const VehicleState *state, uint32_t bit)
-{
-    return state != NULL && (state->valid_mask & bit) == bit;
-}
-
-static bool hud_finite(const VehicleState *state, uint32_t bit, double value)
-{
-    return hud_has(state, bit) && isfinite(value);
-}
-
-static void hud_format_number(char *buffer, size_t buffer_size,
-                              bool valid, double value, const char *format,
-                              const char *unit)
-{
-    if (!valid || !isfinite(value)) {
-        (void)snprintf(buffer, buffer_size, "--");
-    } else {
-        (void)snprintf(buffer, buffer_size, format, value);
-        if (unit != NULL) {
-            size_t length = strlen(buffer);
-            (void)snprintf(buffer + length, buffer_size > length ?
-                           buffer_size - length : 0U, " %s", unit);
-        }
-    }
-}
-
-static void hud_format_time(char *buffer, size_t buffer_size, bool valid,
-                            double seconds)
-{
-    unsigned int minutes;
-    unsigned int whole_seconds;
-    unsigned int milliseconds;
-
-    if (!valid || !isfinite(seconds) || seconds < 0.0) {
-        (void)snprintf(buffer, buffer_size, "--");
-        return;
-    }
-    if (seconds > 5999.999) {
-        seconds = 5999.999;
-    }
-    minutes = (unsigned int)(seconds / 60.0);
-    whole_seconds = (unsigned int)seconds % 60U;
-    milliseconds = (unsigned int)lround((seconds - floor(seconds)) * 1000.0);
-    if (milliseconds >= 1000U) {
-        milliseconds = 0U;
-        whole_seconds++;
-    }
-    (void)snprintf(buffer, buffer_size, "%02u:%02u.%03u", minutes,
-                   whole_seconds, milliseconds);
-}
-
-static double hud_clamp_percent(double value)
-{
-    if (!isfinite(value) || value < 0.0) {
-        return 0.0;
-    }
-    return value > 100.0 ? 100.0 : value;
-}
-
-static void hud_draw_progress(const HudRenderer *renderer, HudLayer *layer,
-                              int x, int y, int count, int width, int height,
-                              double percent, HudColor color, bool valid)
-{
-    int index;
-    double clamped = hud_clamp_percent(percent);
-
-    for (index = 0; index < count; ++index) {
-        int left = x + index * (width + 3);
-        double threshold = ((double)(index + 1) / (double)count) * 100.0;
-        if (valid && clamped >= threshold - 0.001) {
-            hud_fill_rect(renderer, layer, left + 1, y + 1, width - 2,
-                          height - 2, color);
-        }
-    }
-}
-
-static const char *hud_drive_state_name(VehicleDriveState state)
-{
-    switch (state) {
-    case VEHICLE_DRIVE_STATE_OFF: return "OFF";
-    case VEHICLE_DRIVE_STATE_NEUTRAL: return "N";
-    case VEHICLE_DRIVE_STATE_DRIVE: return "D";
-    case VEHICLE_DRIVE_STATE_REVERSE: return "R";
-    case VEHICLE_DRIVE_STATE_READY: return "RTD";
-    case VEHICLE_DRIVE_STATE_UNKNOWN:
-    default: return "--";
-    }
-}
-
-static void hud_render_static_layer(HudRenderer *renderer, HudLayer *layer,
-                                    bool clear)
-{
-    int index;
-
-    if (clear) {
-        hud_layer_clear(layer);
-    }
-    /* Top status line intentionally has no panel to keep the road visible. */
-    hud_panel(renderer, layer, 15, 40, 158, 221);
-    hud_static_text(renderer, layer, 25, 50, "ELECTRIC SYSTEM");
-    hud_static_text(renderer, layer, 27, 72, "MOTOR RPM");
-    hud_static_text(renderer, layer, 27, 94, "TORQUE");
-    hud_fill_rect(renderer, layer, 27, 114, 134, 1, hud_cyan);
-    hud_static_text(renderer, layer, 27, 124, "HV VOLT");
-    hud_static_text(renderer, layer, 27, 146, "HV CURR");
-    hud_static_text(renderer, layer, 27, 168, "HV POWER");
-    hud_fill_rect(renderer, layer, 27, 188, 134, 1, hud_cyan);
-    hud_static_text(renderer, layer, 27, 198, "SOC");
-    hud_draw_segment_outline(renderer, layer, 27, 215, 16, 5, 8);
-    hud_static_text(renderer, layer, 27, 237, "LV VOLT");
-
-    hud_panel(renderer, layer, 618, 19, 168, 113);
-    hud_static_text(renderer, layer, 630, 28, "LAP TIME");
-    hud_static_text(renderer, layer, 630, 51, "BEST");
-    hud_static_text(renderer, layer, 630, 74, "DELTA");
-
-    hud_panel(renderer, layer, 618, 148, 168, 168);
-    hud_static_text(renderer, layer, 630, 158, "LATERAL G");
-    hud_static_text(renderer, layer, 630, 293, "LONG G");
-    hud_draw_circle(renderer, layer, 702, 228, 58, hud_cyan);
-    hud_draw_circle(renderer, layer, 702, 228, 29, hud_muted);
-    hud_draw_line(renderer, layer, 644, 228, 760, 228, hud_muted);
-    hud_draw_line(renderer, layer, 702, 170, 702, 286, hud_muted);
-
-    hud_panel(renderer, layer, 15, 484, 219, 98);
-    hud_static_text(renderer, layer, 27, 496, "THROTTLE");
-    hud_static_text(renderer, layer, 27, 544, "BRAKE");
-    hud_draw_segment_outline(renderer, layer, 27, 512, 12, 7, 8);
-    hud_draw_segment_outline(renderer, layer, 27, 560, 12, 7, 8);
-
-    hud_panel(renderer, layer, 288, 484, 225, 98);
-    hud_static_text(renderer, layer, 328, 556, "KM/H");
-    hud_static_text(renderer, layer, 450, 509, "STATE");
-
-    hud_panel(renderer, layer, 531, 484, 254, 98);
-    hud_static_text(renderer, layer, 546, 496, "MOTOR RPM");
-    hud_draw_segment_outline(renderer, layer, 546, 524, 20, 9, 11);
-    for (index = 0; index <= 5; ++index) {
-        char tick[8];
-        (void)snprintf(tick, sizeof(tick), "%uK", index * 2U);
-        (void)hud_draw_text(renderer, layer, 546 + index * 40, 559, tick, 1,
-                            hud_muted);
-    }
-    /* Keep both ornaments inside the top status region so CPU and G2D paths
-     * blend the same pixels.  Their y positions leave the status glyphs
-     * aligned around y=13 without creating a transparent top band. */
-    hud_fill_rect(renderer, layer, 20, 18, 81, 2, hud_cyan);
-    hud_fill_rect(renderer, layer, 697, 14, 78, 2, hud_cyan);
-    hud_layer_set_static_regions(renderer, layer);
-}
-
-static void hud_render_static(HudRenderer *renderer)
-{
-    hud_render_static_layer(renderer, &renderer->static_layer, true);
-}
-
-static void hud_value(const HudRenderer *renderer, HudLayer *layer,
-                      int x, int y, const char *value, HudColor color)
-{
-    (void)hud_draw_text(renderer, layer, x, y, value, 1, color);
-}
-
-static void hud_render_dynamic_values(HudRenderer *renderer, HudLayer *layer,
-                                      const VehicleState *state)
-{
-    VehicleState empty_state;
-    char value[64];
-    bool valid;
-    double lateral_g;
-    double longitudinal_g;
-
-    if (state == NULL) {
-        memset(&empty_state, 0, sizeof(empty_state));
-        state = &empty_state;
-    }
-
-    hud_value(renderer, layer, 25, 13, "LAP", hud_white);
-    if (state != NULL && state->lap_valid) {
-        (void)snprintf(value, sizeof(value), "%u", state->lap_number);
-    } else {
-        (void)snprintf(value, sizeof(value), "--");
-    }
-    hud_value(renderer, layer, 48, 13, value, hud_white);
-
-    valid = hud_finite(state, VEHICLE_STATE_VALID_MOTOR_RPM, state->motor_rpm);
-    hud_format_number(value, sizeof(value), valid, state->motor_rpm, "%.0f",
-                      "RPM");
-    hud_value(renderer, layer, 85, 72, value, hud_white);
-    valid = hud_finite(state, VEHICLE_STATE_VALID_TORQUE_NM, state->torque_nm);
-    hud_format_number(value, sizeof(value), valid, state->torque_nm, "%.0f",
-                      "NM");
-    hud_value(renderer, layer, 85, 94, value, hud_white);
-    valid = hud_finite(state, VEHICLE_STATE_VALID_HV_VOLTAGE_V,
-                       state->hv_voltage_v);
-    hud_format_number(value, sizeof(value), valid, state->hv_voltage_v, "%.0f",
-                      "V");
-    hud_value(renderer, layer, 85, 124, value, hud_white);
-    valid = hud_finite(state, VEHICLE_STATE_VALID_HV_CURRENT_A,
-                       state->hv_current_a);
-    hud_format_number(value, sizeof(value), valid, state->hv_current_a, "%.0f",
-                      "A");
-    hud_value(renderer, layer, 85, 146, value, hud_white);
-    valid = hud_finite(state, VEHICLE_STATE_VALID_HV_POWER_W,
-                       state->hv_power_w);
-    hud_format_number(value, sizeof(value), valid, state->hv_power_w / 1000.0,
-                      "%.1f", "KW");
-    hud_value(renderer, layer, 85, 168, value, hud_white);
-    valid = hud_finite(state, VEHICLE_STATE_VALID_HV_SOC_PERCENT,
-                       state->hv_soc_percent);
-    hud_format_number(value, sizeof(value), valid, state->hv_soc_percent,
-                      "%.0f", "%");
-    hud_value(renderer, layer, 85, 198, value, hud_green);
-    hud_draw_progress(renderer, layer, 27, 215, 16, 5, 8,
-                      state != NULL ? state->hv_soc_percent : 0.0,
-                      valid && state->hv_soc_percent < 20.0 ? hud_red :
-                      (valid && state->hv_soc_percent < 40.0 ? hud_yellow :
-                       hud_green), valid);
-    valid = hud_finite(state, VEHICLE_STATE_VALID_LV_VOLTAGE_V,
-                       state->lv_voltage_v);
-    hud_format_number(value, sizeof(value), valid, state->lv_voltage_v, "%.1f",
-                      "V");
-    hud_value(renderer, layer, 85, 237, value, hud_white);
-
-    hud_format_time(value, sizeof(value), state != NULL && state->lap_valid,
-                    state != NULL ? state->lap_time_s : 0.0);
-    hud_value(renderer, layer, 695, 37, value, hud_white);
-    hud_format_time(value, sizeof(value), state != NULL && state->lap_valid &&
-                    state->best_lap_time_s > 0.0,
-                    state != NULL ? state->best_lap_time_s : 0.0);
-    hud_value(renderer, layer, 695, 60, value, hud_white);
-    valid = state != NULL && state->lap_valid && isfinite(state->delta_time_s);
-    hud_format_number(value, sizeof(value), valid, state->delta_time_s, "%+.2f",
-                      "");
-    hud_value(renderer, layer, 695, 83, value, !valid ? hud_white :
-              (state->delta_time_s < -0.02 ? hud_green :
-               (state->delta_time_s > 0.02 ? hud_red : hud_white)));
-
-    valid = hud_finite(state, VEHICLE_STATE_VALID_ACC_Y_MPS2, state->acc_y);
-    lateral_g = valid ? state->acc_y / 9.80665 : 0.0;
-    hud_format_number(value, sizeof(value), valid, lateral_g, "%.2f", "");
-    hud_value(renderer, layer, 695, 174, value, hud_white);
-    valid = hud_finite(state, VEHICLE_STATE_VALID_ACC_X_MPS2, state->acc_x);
-    longitudinal_g = valid ? state->acc_x / 9.80665 : 0.0;
-    hud_format_number(value, sizeof(value), valid, longitudinal_g, "%+.2f", "");
-    hud_value(renderer, layer, 695, 293, value, hud_white);
-    if (valid || hud_finite(state, VEHICLE_STATE_VALID_ACC_Y_MPS2, state->acc_y)) {
-        int dot_x = 702 + (int)lround(hud_clamp_percent((lateral_g + 1.0) * 50.0) /
-                                      100.0 * 51.0);
-        int dot_y = 228 - (int)lround(hud_clamp_percent((longitudinal_g + 1.0) *
-                                      50.0) / 100.0 * 51.0);
-        hud_fill_rect(renderer, layer, dot_x - 5, dot_y - 5, 10, 10, hud_cyan);
-    }
-
-    valid = hud_finite(state, VEHICLE_STATE_VALID_THROTTLE_PERCENT,
-                       state->throttle_percent);
-    hud_format_number(value, sizeof(value), valid, state->throttle_percent,
-                      "%.0f", "%");
-    hud_value(renderer, layer, 180, 496, value, hud_green);
-    hud_draw_progress(renderer, layer, 27, 512, 12, 7, 8,
-                      state != NULL ? state->throttle_percent : 0.0,
-                      hud_green, valid);
-    valid = hud_finite(state, VEHICLE_STATE_VALID_BRAKE_PERCENT,
-                       state->brake_percent);
-    hud_format_number(value, sizeof(value), valid, state->brake_percent,
-                      "%.0f", "%");
-    hud_value(renderer, layer, 180, 544, value, hud_red);
-    hud_draw_progress(renderer, layer, 27, 560, 12, 7, 8,
-                      state != NULL ? state->brake_percent : 0.0,
-                      hud_red, valid);
-
-    valid = hud_finite(state, VEHICLE_STATE_VALID_SPEED_KMH, state->speed_kmh);
-    hud_format_number(value, sizeof(value), valid, state->speed_kmh, "%.0f", "");
-    hud_value(renderer, layer, 310, 497, value, hud_white);
-    if (state != NULL && hud_has(state, VEHICLE_STATE_VALID_DRIVE_STATE)) {
-        hud_value(renderer, layer, 450, 524,
-                  hud_drive_state_name(state->drive_state), hud_cyan);
-    } else {
-        hud_value(renderer, layer, 450, 524, "--", hud_cyan);
-    }
-
-    valid = hud_finite(state, VEHICLE_STATE_VALID_MOTOR_RPM, state->motor_rpm);
-    hud_format_number(value, sizeof(value), valid, state->motor_rpm, "%.0f", "");
-    hud_value(renderer, layer, 546, 502, value, hud_white);
-    hud_draw_progress(renderer, layer, 546, 524, 20, 9, 11,
-                      state != NULL ? state->motor_rpm / 100.0 : 0.0,
-                      valid && state->motor_rpm >= 8000.0 ? hud_red :
-                      (valid && state->motor_rpm >= 5000.0 ? hud_yellow : hud_cyan),
-                      valid);
+    layer->region_count = 0U;
 }
 
 static bool hud_surface_valid(const HudRenderer *renderer,
                               const HudSurface *surface)
 {
-    return renderer != NULL && surface != NULL && surface->pixels != NULL &&
-           surface->width == renderer->width &&
-           surface->height == renderer->height &&
-           surface->stride_bytes >= surface->width * VIDEO_FRAME_CHANNELS &&
-           (surface->pixel_format == HUD_PIXEL_FORMAT_RGBA8888 ||
-            surface->pixel_format == HUD_PIXEL_FORMAT_ARGB8888);
+    size_t minimum_stride;
+
+    if (renderer == NULL || surface == NULL || surface->pixels == NULL ||
+        surface->width != renderer->width ||
+        surface->height != renderer->height ||
+        (surface->pixel_format != HUD_PIXEL_FORMAT_RGBA8888 &&
+         surface->pixel_format != HUD_PIXEL_FORMAT_ARGB8888)) {
+        return false;
+    }
+    if (!hud_renderer_size_valid(surface->width, surface->height, NULL)) {
+        return false;
+    }
+    minimum_stride = (size_t)surface->width * HUD_BYTES_PER_PIXEL;
+    if ((size_t)surface->stride_bytes < minimum_stride ||
+        (size_t)surface->height > SIZE_MAX / surface->stride_bytes) {
+        return false;
+    }
+    return true;
 }
 
 static void hud_layer_set_surface(HudLayer *layer, const HudSurface *surface)
 {
+    if (layer == NULL || surface == NULL) return;
     memset(layer, 0, sizeof(*layer));
     layer->width = surface->width;
     layer->height = surface->height;
@@ -694,184 +103,170 @@ static const HudLayer *hud_renderer_render_ui_layer(
 {
     UiCanvas canvas;
     uint64_t start;
+    uint64_t after_clear;
+    uint64_t after_draw;
 
     if (renderer == NULL || renderer->ui_context == NULL || layer == NULL ||
         layer->pixels == NULL || layer->pixel_format != HUD_PIXEL_FORMAT_ARGB8888 ||
-        layer->width == 0U || layer->height == 0U ||
-        layer->width > (uint32_t)INT_MAX || layer->height > (uint32_t)INT_MAX ||
+        layer->width > (uint32_t)INT_MAX ||
+        layer->height > (uint32_t)INT_MAX ||
         layer->stride > (uint32_t)INT_MAX) {
         return NULL;
     }
-    canvas = (UiCanvas){ layer->pixels, (int)layer->width, (int)layer->height,
-                         (int)layer->stride };
+
     if (timing != NULL) memset(timing, 0, sizeof(*timing));
     start = hud_renderer_now_us();
+    canvas.pixels = layer->pixels;
+    canvas.width = (int)layer->width;
+    canvas.height = (int)layer->height;
+    canvas.stride = (int)layer->stride;
+    after_clear = hud_renderer_now_us();
     if (hud_render(renderer->ui_context, &canvas, state, recording) < 0) {
         return NULL;
     }
+    after_draw = hud_renderer_now_us();
     layer->region_count = 1U;
-    layer->regions[0] = (HudRegion){ 0U, 0U, layer->width, layer->height };
+    layer->regions[0].x = 0U;
+    layer->regions[0].y = 0U;
+    layer->regions[0].width = layer->width;
+    layer->regions[0].height = layer->height;
     if (timing != NULL) {
-        timing->draw_time_us = hud_renderer_now_us() - start;
-        timing->total_time_us = timing->draw_time_us;
+        timing->clear_time_us = after_clear - start;
+        timing->draw_time_us = after_draw - after_clear;
+        timing->total_time_us = after_draw - start;
     }
     return layer;
 }
 
-static const HudLayer *hud_renderer_render_dynamic_layer(
-    HudRenderer *renderer, HudLayer *layer, const VehicleState *state,
-    bool recording, HudRenderTiming *timing)
+static const HudLayer *hud_renderer_render_none_layer(
+    HudLayer *layer, HudRenderTiming *timing)
 {
-    uint64_t total_start;
-    uint64_t stage_start;
+    uint64_t start;
+    uint64_t finish;
 
-    if (timing != NULL) {
-        memset(timing, 0, sizeof(*timing));
-    }
-    total_start = hud_renderer_now_us();
-    stage_start = hud_renderer_now_us();
+    if (layer == NULL || layer->pixels == NULL) return NULL;
+    if (timing != NULL) memset(timing, 0, sizeof(*timing));
+    start = hud_renderer_now_us();
     hud_layer_clear(layer);
+    finish = hud_renderer_now_us();
     if (timing != NULL) {
-        timing->clear_time_us = hud_renderer_now_us() - stage_start;
-    }
-    stage_start = hud_renderer_now_us();
-    hud_render_dynamic_values(renderer, layer, state);
-    if (recording) {
-        hud_draw_circle(renderer, layer, 114, 18, 4, hud_red);
-        hud_value(renderer, layer, 121, 13, "REC", hud_red);
-    }
-    hud_layer_set_dynamic_regions(renderer, layer);
-    if (timing != NULL) {
-        timing->draw_time_us = hud_renderer_now_us() - stage_start;
-        timing->total_time_us = hud_renderer_now_us() - total_start;
+        timing->clear_time_us = finish - start;
+        timing->total_time_us = finish - start;
     }
     return layer;
 }
 
-static int hud_renderer_init_common(HudRenderer *renderer, uint32_t width,
-                                    uint32_t height, bool allocate_layers)
+int hud_renderer_init_style(HudRenderer *renderer, uint32_t width,
+                            uint32_t height, HudStyle style,
+                            const char *font_path,
+                            HudPixelFormat surface_format)
 {
-    double scale;
-    int scaled_width;
-    int scaled_height;
-    size_t bytes;
+    const char *selected_font = font_path;
+    HudPixelFormat layer_format;
+    size_t layer_bytes;
 
-    if (renderer == NULL || width == 0U || height == 0U) {
-        errno = EINVAL;
+    if (renderer == NULL || (style != HUD_STYLE_UI && style != HUD_STYLE_NONE) ||
+        !hud_renderer_size_valid(width, height, &layer_bytes)) {
         return -1;
     }
+    if (selected_font == NULL || selected_font[0] == '\0') {
+        selected_font = HUD_DEFAULT_FONT_PATH;
+    }
+    layer_format = style == HUD_STYLE_UI ||
+                   surface_format == HUD_PIXEL_FORMAT_ARGB8888 ?
+                   HUD_PIXEL_FORMAT_ARGB8888 : HUD_PIXEL_FORMAT_RGBA8888;
+
     memset(renderer, 0, sizeof(*renderer));
-    if ((uint64_t)width * VIDEO_FRAME_CHANNELS > SIZE_MAX ||
-        (uint64_t)height * (uint64_t)width * VIDEO_FRAME_CHANNELS > SIZE_MAX) {
-        errno = EOVERFLOW;
-        return -1;
-    }
-    bytes = (size_t)width * height * VIDEO_FRAME_CHANNELS;
     renderer->width = width;
     renderer->height = height;
-    scale = (double)width / HUD_BASE_WIDTH;
-    if ((double)height / HUD_BASE_HEIGHT < scale) {
-        scale = (double)height / HUD_BASE_HEIGHT;
+    renderer->style = style;
+    renderer->dynamic_surface_only = surface_format == HUD_PIXEL_FORMAT_ARGB8888;
+    hud_layer_init(&renderer->static_layer, width, height, layer_format);
+    hud_layer_init(&renderer->dynamic_layer, width, height, layer_format);
+    renderer->static_layer.pixels = calloc(1U, layer_bytes);
+    if (renderer->static_layer.pixels == NULL) goto fail;
+
+    if (!renderer->dynamic_surface_only) {
+        renderer->dynamic_layer.pixels = calloc(1U, layer_bytes);
+        if (renderer->dynamic_layer.pixels == NULL) goto fail;
     }
-    scaled_width = (int)lround(HUD_BASE_WIDTH * scale);
-    scaled_height = (int)lround(HUD_BASE_HEIGHT * scale);
-    renderer->scale_x = scale;
-    renderer->scale_y = scale;
-    renderer->offset_x = ((int)width - scaled_width) / 2;
-    renderer->offset_y = ((int)height - scaled_height) / 2;
-    renderer->static_layer.width = width;
-    renderer->static_layer.height = height;
-    renderer->static_layer.stride = width * VIDEO_FRAME_CHANNELS;
-    renderer->static_layer.pixel_format = HUD_PIXEL_FORMAT_RGBA8888;
-    renderer->dynamic_layer.width = width;
-    renderer->dynamic_layer.height = height;
-    renderer->dynamic_layer.stride = width * VIDEO_FRAME_CHANNELS;
-    renderer->dynamic_layer.pixel_format = HUD_PIXEL_FORMAT_RGBA8888;
-    renderer->dynamic_surface_only = !allocate_layers;
-    renderer->style = HUD_STYLE_LEGACY;
+    if (style == HUD_STYLE_UI && hud_init(&renderer->ui_context, selected_font) < 0) {
+        goto fail;
+    }
     renderer->initialized = true;
-    if (allocate_layers) {
-        renderer->static_layer.pixels = calloc(1U, bytes);
-        renderer->dynamic_layer.pixels = calloc(1U, bytes);
-        if (renderer->static_layer.pixels == NULL ||
-            renderer->dynamic_layer.pixels == NULL) {
-            hud_renderer_close(renderer);
-            return -1;
-        }
-        hud_render_static(renderer);
-    }
     return 0;
+
+fail:
+    hud_renderer_close(renderer);
+    return -1;
 }
 
-int hud_renderer_init(HudRenderer *renderer, uint32_t width, uint32_t height)
+const char *hud_style_name(HudStyle style)
 {
-    return hud_renderer_init_common(renderer, width, height, true);
+    switch (style) {
+    case HUD_STYLE_UI: return "ui";
+    case HUD_STYLE_NONE: return "none";
+    default: return "unknown";
+    }
 }
 
-int hud_renderer_init_external(HudRenderer *renderer, uint32_t width,
-                               uint32_t height)
+bool hud_style_parse(const char *value, HudStyle *style)
 {
-    size_t bytes;
-
-    if (hud_renderer_init_common(renderer, width, height, false) < 0) {
-        return -1;
+    if (value == NULL || style == NULL) return false;
+    if (strcmp(value, "ui") == 0) {
+        *style = HUD_STYLE_UI;
+        return true;
     }
-    bytes = (size_t)width * height * VIDEO_FRAME_CHANNELS;
-    renderer->static_layer.pixels = calloc(1U, bytes);
-    if (renderer->static_layer.pixels == NULL) {
-        hud_renderer_close(renderer);
-        return -1;
+    if (strcmp(value, "none") == 0) {
+        *style = HUD_STYLE_NONE;
+        return true;
     }
-    renderer->static_layer.pixel_format = HUD_PIXEL_FORMAT_ARGB8888;
-    hud_render_static(renderer);
-    return 0;
+    return false;
 }
 
 void hud_renderer_close(HudRenderer *renderer)
 {
-    if (renderer == NULL) {
-        return;
-    }
-    hud_text_atlas_close(&renderer->text_atlas);
-    hud_assets_close(&renderer->assets);
+    if (renderer == NULL) return;
     hud_shutdown(renderer->ui_context);
     free(renderer->static_layer.pixels);
     free(renderer->dynamic_layer.pixels);
     memset(renderer, 0, sizeof(*renderer));
 }
 
+size_t hud_renderer_resident_memory(const HudRenderer *renderer)
+{
+    size_t layer_bytes = 0U;
+
+    if (renderer == NULL || !renderer->initialized) return 0U;
+    if (hud_renderer_size_valid(renderer->static_layer.width,
+                                renderer->static_layer.height, &layer_bytes) &&
+        renderer->static_layer.pixels != NULL) {
+        if (renderer->dynamic_layer.pixels == NULL) return layer_bytes;
+        if (layer_bytes > SIZE_MAX / 2U) return 0U;
+        return layer_bytes * 2U;
+    }
+    return 0U;
+}
+
 const HudLayer *hud_renderer_static_layer(const HudRenderer *renderer)
 {
-    return renderer != NULL && renderer->initialized ?
-           &renderer->static_layer : NULL;
+    if (renderer == NULL || !renderer->initialized) return NULL;
+    return &renderer->static_layer;
 }
 
 const HudLayer *hud_renderer_render_dynamic(HudRenderer *renderer,
                                              const VehicleState *state,
                                              bool recording)
 {
-    if (renderer == NULL || !renderer->initialized) {
+    if (renderer == NULL || !renderer->initialized ||
+        renderer->dynamic_surface_only) {
         return NULL;
-    }
-    if (renderer->style == HUD_STYLE_PNG) {
-        return hud_png_render_dynamic(renderer, state, recording);
-    }
-    if (renderer->style == HUD_STYLE_UI) {
-        if (renderer->dynamic_surface_only ||
-            renderer->dynamic_layer.pixels == NULL) {
-            return NULL;
-        }
-        return hud_renderer_render_ui_layer(renderer, &renderer->dynamic_layer,
-                                            state, recording, NULL);
     }
     if (renderer->style == HUD_STYLE_NONE) {
-        return hud_none_render_dynamic(renderer, state, recording);
+        return hud_renderer_render_none_layer(&renderer->dynamic_layer, NULL);
     }
-    if (renderer->dynamic_surface_only || renderer->dynamic_layer.pixels == NULL) {
-        return NULL;
-    }
-    return hud_renderer_render_dynamic_layer(renderer, &renderer->dynamic_layer,
-                                              state, recording, NULL);
+    return hud_renderer_render_ui_layer(renderer, &renderer->dynamic_layer,
+                                         state, recording, NULL);
 }
 
 const HudLayer *hud_renderer_render_dynamic_to_surface(
@@ -882,109 +277,21 @@ const HudLayer *hud_renderer_render_dynamic_to_surface(
         !hud_surface_valid(renderer, surface)) {
         return NULL;
     }
-    if (renderer->style == HUD_STYLE_PNG) {
-        return hud_png_render_dynamic_to_surface(renderer, state, recording,
-                                                  surface, timing);
-    }
-    if (renderer->style == HUD_STYLE_UI) {
-        if (surface->pixel_format != HUD_PIXEL_FORMAT_ARGB8888) return NULL;
-        hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
-        return hud_renderer_render_ui_layer(renderer,
-                                             &renderer->external_dynamic_layer,
-                                             state, recording, timing);
-    }
-    if (renderer->style == HUD_STYLE_NONE) {
-        return hud_none_render_frame_to_surface(renderer, state, recording,
-                                                surface, timing);
-    }
     hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
-    return hud_renderer_render_dynamic_layer(renderer,
-                                              &renderer->external_dynamic_layer,
-                                              state, recording, timing);
+    if (renderer->style == HUD_STYLE_NONE) {
+        return hud_renderer_render_none_layer(&renderer->external_dynamic_layer,
+                                              timing);
+    }
+    if (surface->pixel_format != HUD_PIXEL_FORMAT_ARGB8888) return NULL;
+    return hud_renderer_render_ui_layer(renderer,
+                                        &renderer->external_dynamic_layer,
+                                        state, recording, timing);
 }
 
 const HudLayer *hud_renderer_render_frame_to_surface(
     HudRenderer *renderer, const VehicleState *state, bool recording,
     const HudSurface *surface, HudRenderTiming *timing)
 {
-    HudLayer *layer;
-    uint64_t total_start;
-    uint64_t stage_start;
-    size_t region_index;
-
-    if (renderer == NULL || !renderer->initialized ||
-        !hud_surface_valid(renderer, surface)) {
-        return NULL;
-    }
-    if (renderer->style == HUD_STYLE_PNG) {
-        return hud_png_render_frame_to_surface(renderer, state, recording,
-                                                surface, timing);
-    }
-    if (renderer->style == HUD_STYLE_UI) {
-        if (surface->pixel_format != HUD_PIXEL_FORMAT_ARGB8888) return NULL;
-        hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
-        return hud_renderer_render_ui_layer(renderer,
-                                             &renderer->external_dynamic_layer,
-                                             state, recording, timing);
-    }
-    if (renderer->style == HUD_STYLE_NONE) {
-        return hud_none_render_frame_to_surface(renderer, state, recording,
-                                                surface, timing);
-    }
-    if (timing != NULL) {
-        memset(timing, 0, sizeof(*timing));
-    }
-    hud_layer_set_surface(&renderer->external_dynamic_layer, surface);
-    layer = &renderer->external_dynamic_layer;
-    total_start = hud_renderer_now_us();
-    stage_start = total_start;
-    if (!renderer->external_surface_initialized ||
-        renderer->external_surface_pixels != surface->pixels) {
-        uint32_t row;
-
-        for (row = 0U; row < renderer->height; ++row) {
-            memcpy(layer->pixels + (size_t)row * layer->stride,
-                   renderer->static_layer.pixels +
-                       (size_t)row * renderer->static_layer.stride,
-                   (size_t)renderer->width * VIDEO_FRAME_CHANNELS);
-        }
-        renderer->external_surface_pixels = surface->pixels;
-        renderer->external_surface_initialized = true;
-    } else {
-        hud_layer_set_dynamic_regions(renderer, layer);
-        for (region_index = 0U; region_index < layer->region_count;
-             ++region_index) {
-            const HudRegion *region = &layer->regions[region_index];
-            uint32_t row;
-
-            for (row = region->y; row < region->y + region->height; ++row) {
-                memcpy(layer->pixels + (size_t)row * layer->stride +
-                           (size_t)region->x * VIDEO_FRAME_CHANNELS,
-                       renderer->static_layer.pixels +
-                           (size_t)row * renderer->static_layer.stride +
-                           (size_t)region->x * VIDEO_FRAME_CHANNELS,
-                       (size_t)region->width * VIDEO_FRAME_CHANNELS);
-            }
-        }
-    }
-    if (timing != NULL) {
-        timing->clear_time_us = hud_renderer_now_us() - stage_start;
-    }
-    stage_start = hud_renderer_now_us();
-    hud_render_dynamic_values(renderer, layer, state);
-    if (recording) {
-        hud_draw_circle(renderer, layer, 114, 18, 4, hud_red);
-        hud_value(renderer, layer, 121, 13, "REC", hud_red);
-    }
-    /* G2D blends the complete surface, not the CPU compositor region list. */
-    layer->region_count = 1U;
-    layer->regions[0].x = 0U;
-    layer->regions[0].y = 0U;
-    layer->regions[0].width = renderer->width;
-    layer->regions[0].height = renderer->height;
-    if (timing != NULL) {
-        timing->draw_time_us = hud_renderer_now_us() - stage_start;
-        timing->total_time_us = hud_renderer_now_us() - total_start;
-    }
-    return layer;
+    return hud_renderer_render_dynamic_to_surface(renderer, state, recording,
+                                                  surface, timing);
 }

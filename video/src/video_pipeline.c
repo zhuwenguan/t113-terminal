@@ -319,7 +319,6 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
             if (hud_renderer_init_style(&pipeline->hud, pipeline->config.width,
                                         pipeline->config.height,
                                         pipeline->config.hud_style,
-                                        pipeline->config.hud_asset_path,
                                         pipeline->config.hud_font_path,
                                         HUD_PIXEL_FORMAT_RGBA8888) < 0) {
                 LOG_ERROR("Video: CPU compositor fallback HUD allocation failed");
@@ -1046,7 +1045,6 @@ int video_pipeline_init(VideoPipeline *pipeline,
                                    config->height, compositor_mode) < 0 ||
         hud_renderer_init_style(
             &pipeline->hud, config->width, config->height, config->hud_style,
-            config->hud_asset_path,
             config->hud_font_path,
             video_compositor_active_mode(&pipeline->compositor) ==
                 VIDEO_COMPOSITOR_MODE_G2D ? HUD_PIXEL_FORMAT_ARGB8888 :
@@ -1078,13 +1076,9 @@ int video_pipeline_init(VideoPipeline *pipeline,
                  &pipeline->compositor)),
              video_compositor_is_g2d_healthy(&pipeline->compositor) ?
              "yes" : "no");
-    LOG_INFO("Video HUD: style=%s assets=%zu resident=%zu bytes ready=%s path=%s",
+    LOG_INFO("Video HUD: style=%s resident=%zu bytes",
              hud_style_name(pipeline->hud.style),
-             hud_renderer_asset_memory(&pipeline->hud),
-             hud_renderer_resident_memory(&pipeline->hud),
-             hud_renderer_png_assets_ready(&pipeline->hud) ? "yes" : "no",
-             config->hud_asset_path != NULL ? config->hud_asset_path :
-                                               "assets/hud");
+             hud_renderer_resident_memory(&pipeline->hud));
     if (config->compositor_mode == VIDEO_COMPOSITOR_MODE_AUTO &&
         video_compositor_active_mode(&pipeline->compositor) ==
             VIDEO_COMPOSITOR_MODE_CPU) {

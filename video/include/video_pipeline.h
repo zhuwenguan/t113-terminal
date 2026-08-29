@@ -34,7 +34,6 @@ typedef struct {
     bool mock_camera;
     VideoCompositorMode compositor_mode;
     HudStyle hud_style;
-    const char *hud_asset_path;
     const char *hud_font_path;
     VideoStateSnapshotGetter get_state;
     void *state_context;
