@@ -3,7 +3,7 @@
 #include "ui_image.h"
 #include "hud_renderer.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,9 +33,9 @@ static void write_test_png(const char *path)
 {
     FILE *file = fopen(path, "wb");
 
-    assert(file != NULL);
-    assert(fwrite(test_png, sizeof(test_png), 1U, file) == 1U);
-    assert(fclose(file) == 0);
+    TEST_CHECK(file != NULL);
+    TEST_CHECK(fwrite(test_png, sizeof(test_png), 1U, file) == 1U);
+    TEST_CHECK(fclose(file) == 0);
 }
 
 int main(int argc, char **argv)
@@ -50,12 +50,12 @@ int main(int argc, char **argv)
     size_t framebuffer_size = (size_t)TEST_WIDTH * TEST_HEIGHT * 4U;
     size_t index;
 
-    assert(argc >= 2);
-    assert(snprintf(image_path, sizeof(image_path),
+    TEST_CHECK(argc >= 2);
+    TEST_CHECK(snprintf(image_path, sizeof(image_path),
                     "/tmp/t113_ui_phase2_%ld.png", (long)getpid()) > 0);
     write_test_png(image_path);
     allocation = malloc(TEST_GUARD_SIZE * 2U + framebuffer_size);
-    assert(allocation != NULL);
+    TEST_CHECK(allocation != NULL);
     memset(allocation, TEST_GUARD_BYTE,
            TEST_GUARD_SIZE * 2U + framebuffer_size);
     pixels = allocation + TEST_GUARD_SIZE;
@@ -67,34 +67,34 @@ int main(int argc, char **argv)
 
     font = ui_font_load(argv[1], 24);
     image = ui_image_load_png(image_path);
-    assert(font != NULL && image != NULL);
+    TEST_CHECK(font != NULL && image != NULL);
     ui_fill_round_rect(&canvas, 140, 180, 520, 220, 20,
                        UI_ARGB(255U, 12U, 20U, 32U));
     ui_round_rect(&canvas, 140, 180, 520, 220, 20, 3,
                   UI_ARGB(255U, 44U, 210U, 232U));
-    assert(ui_text(&canvas, font, 170, 230,
+    TEST_CHECK(ui_text(&canvas, font, 170, 230,
                    UI_ARGB(255U, 255U, 255U, 255U), "SPEED") == 0);
-    assert(ui_text(&canvas, font, 400, 320,
+    TEST_CHECK(ui_text(&canvas, font, 400, 320,
                    UI_ARGB(255U, 255U, 210U, 64U), "86") == 0);
-    assert(ui_text(&canvas, font, 390, 360,
+    TEST_CHECK(ui_text(&canvas, font, 390, 360,
                    UI_ARGB(255U, 64U, 230U, 122U), "READY") == 0);
     ui_image_draw(&canvas, image, 760, 20);
 
     for (index = 3U; index < framebuffer_size; index += 4U) {
         if (pixels[index] != 0U) break;
     }
-    assert(index < framebuffer_size);
+    TEST_CHECK(index < framebuffer_size);
     for (index = 0U; index < TEST_GUARD_SIZE; ++index) {
-        assert(allocation[index] == TEST_GUARD_BYTE);
-        assert(allocation[TEST_GUARD_SIZE + framebuffer_size + index] ==
+        TEST_CHECK(allocation[index] == TEST_GUARD_BYTE);
+        TEST_CHECK(allocation[TEST_GUARD_SIZE + framebuffer_size + index] ==
                TEST_GUARD_BYTE);
     }
-    assert(surface.pixels == canvas.pixels);
-    assert(surface.stride_bytes == (uint32_t)canvas.stride);
-    assert(surface.pixel_format == HUD_PIXEL_FORMAT_ARGB8888);
+    TEST_CHECK(surface.pixels == canvas.pixels);
+    TEST_CHECK(surface.stride_bytes == (uint32_t)canvas.stride);
+    TEST_CHECK(surface.pixel_format == HUD_PIXEL_FORMAT_ARGB8888);
     ui_image_free(image);
     ui_font_free(font);
-    assert(remove(image_path) == 0);
+    TEST_CHECK(remove(image_path) == 0);
     free(allocation);
     puts("ui phase2 smoke: PASS");
     return EXIT_SUCCESS;

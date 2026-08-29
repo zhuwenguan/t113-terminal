@@ -1,6 +1,6 @@
 #include "hud_widget.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -79,11 +79,11 @@ static void guarded_canvas_init(GuardedCanvas *guarded, int width, int height,
 {
     size_t row;
 
-    assert(stride >= width * 4);
+    TEST_CHECK(stride >= width * 4);
     guarded->framebuffer_size = (size_t)stride * (size_t)height;
     guarded->allocation = malloc(TEST_GUARD_SIZE * 2U +
                                   guarded->framebuffer_size);
-    assert(guarded->allocation != NULL);
+    TEST_CHECK(guarded->allocation != NULL);
     memset(guarded->allocation, TEST_GUARD_BYTE,
            TEST_GUARD_SIZE * 2U + guarded->framebuffer_size);
     guarded->pixels = guarded->allocation + TEST_GUARD_SIZE;
@@ -114,13 +114,13 @@ static void guarded_canvas_close(const GuardedCanvas *guarded)
 
         for (index = (size_t)guarded->canvas.width * 4U;
              index < (size_t)guarded->canvas.stride; ++index) {
-            assert(padding[index - (size_t)guarded->canvas.width * 4U] ==
+            TEST_CHECK(padding[index - (size_t)guarded->canvas.width * 4U] ==
                    TEST_GUARD_BYTE);
         }
     }
     for (index = 0U; index < TEST_GUARD_SIZE; ++index) {
-        assert(guarded->allocation[index] == TEST_GUARD_BYTE);
-        assert(guarded->allocation[TEST_GUARD_SIZE +
+        TEST_CHECK(guarded->allocation[index] == TEST_GUARD_BYTE);
+        TEST_CHECK(guarded->allocation[TEST_GUARD_SIZE +
                                    guarded->framebuffer_size + index] ==
                TEST_GUARD_BYTE);
     }
@@ -145,13 +145,13 @@ static void test_panel(void)
 
     guarded_canvas_init(&guarded, 64, 48, 64 * 4 + 64);
     hud_panel(&guarded.canvas, (HudRect){ 4, 4, 20, 12 }, &style);
-    assert(pixel_color(&guarded.canvas, 8, 8) == style.background_color);
-    assert(pixel_color(&guarded.canvas, 4, 4) == style.border_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 8, 8) == style.background_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 4, 4) == style.border_color);
 
     style.radius = 4;
     style.border_width = 1;
     hud_panel(&guarded.canvas, (HudRect){ 30, 4, 24, 16 }, &style);
-    assert(pixel_color(&guarded.canvas, 42, 12) == style.background_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 42, 12) == style.background_color);
     hud_panel(&guarded.canvas, (HudRect){ -10, -6, 24, 18 }, &style);
     hud_panel(&guarded.canvas, (HudRect){ INT_MAX, INT_MAX, 8, 8 }, &style);
     hud_panel(&guarded.canvas, (HudRect){ 1, 1, 0, 8 }, &style);
@@ -180,32 +180,32 @@ static void test_text_value(void)
     reset_text_calls();
     hud_text_value(&guarded.canvas, (HudRect){ 10, 50, 180, 80 }, &style,
                    "SPEED", "86", "km/h");
-    assert(text_call_count == 3U);
-    assert(strcmp(text_calls[0].text, "SPEED") == 0);
-    assert(text_calls[0].x == 80);
-    assert(text_calls[0].baseline_y == 60);
-    assert(strcmp(text_calls[1].text, "86") == 0);
-    assert(text_calls[1].x == 66);
-    assert(text_calls[1].baseline_y == 86);
-    assert(strcmp(text_calls[2].text, "km/h") == 0);
-    assert(text_calls[2].x == 109);
-    assert(text_calls[2].baseline_y == 86);
+    TEST_CHECK(text_call_count == 3U);
+    TEST_CHECK(strcmp(text_calls[0].text, "SPEED") == 0);
+    TEST_CHECK(text_calls[0].x == 80);
+    TEST_CHECK(text_calls[0].baseline_y == 60);
+    TEST_CHECK(strcmp(text_calls[1].text, "86") == 0);
+    TEST_CHECK(text_calls[1].x == 66);
+    TEST_CHECK(text_calls[1].baseline_y == 86);
+    TEST_CHECK(strcmp(text_calls[2].text, "km/h") == 0);
+    TEST_CHECK(text_calls[2].x == 109);
+    TEST_CHECK(text_calls[2].baseline_y == 86);
 
     style.align = HUD_WIDGET_ALIGN_LEFT;
     reset_text_calls();
     hud_text_value(&guarded.canvas, (HudRect){ 10, 50, 180, 80 }, &style,
                    "A", "12", "V");
-    assert(text_calls[0].x == 10);
-    assert(text_calls[1].x == 10);
-    assert(text_calls[2].x == 53);
+    TEST_CHECK(text_calls[0].x == 10);
+    TEST_CHECK(text_calls[1].x == 10);
+    TEST_CHECK(text_calls[2].x == 53);
 
     style.align = HUD_WIDGET_ALIGN_RIGHT;
     reset_text_calls();
     hud_text_value(&guarded.canvas, (HudRect){ 10, 50, 180, 80 }, &style,
                    "A", "12", "V");
-    assert(text_calls[0].x == 182);
-    assert(text_calls[1].x == 141);
-    assert(text_calls[2].x == 184);
+    TEST_CHECK(text_calls[0].x == 182);
+    TEST_CHECK(text_calls[1].x == 141);
+    TEST_CHECK(text_calls[2].x == 184);
 
     reset_text_calls();
     hud_text_value(&guarded.canvas, (HudRect){ -50, -40, 80, 50 }, &style,
@@ -229,23 +229,23 @@ static void test_segment_bar(void)
     guarded_canvas_init(&guarded, 160, 80, 160 * 4 + 64);
     hud_segment_bar(&guarded.canvas, (HudRect){ 4, 4, 100, 8 }, &style,
                     -1.0f);
-    assert(pixel_color(&guarded.canvas, 5, 5) == style.inactive_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 5, 5) == style.inactive_color);
     hud_segment_bar(&guarded.canvas, (HudRect){ 4, 20, 100, 8 }, &style,
                     0.5f);
-    assert(pixel_color(&guarded.canvas, 5, 21) == style.active_color);
-    assert(pixel_color(&guarded.canvas, 97, 21) == style.inactive_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 5, 21) == style.active_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 97, 21) == style.inactive_color);
     hud_segment_bar(&guarded.canvas, (HudRect){ 4, 36, 100, 8 }, &style,
                     0.99f);
-    assert(pixel_color(&guarded.canvas, 97, 37) == style.inactive_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 97, 37) == style.inactive_color);
     hud_segment_bar(&guarded.canvas, (HudRect){ 4, 52, 100, 8 }, &style,
                     2.0f);
-    assert(pixel_color(&guarded.canvas, 97, 53) == style.active_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 97, 53) == style.active_color);
 
     style.segment_count = 1;
     style.gap = 1000;
     hud_segment_bar(&guarded.canvas, (HudRect){ 4, 64, 20, 8 }, &style,
                     1.0f);
-    assert(pixel_color(&guarded.canvas, 5, 65) == style.active_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 5, 65) == style.active_color);
     style.segment_count = 20;
     style.gap = 0;
     hud_segment_bar(&guarded.canvas, (HudRect){ 40, 64, 5, 8 }, &style,
@@ -276,13 +276,13 @@ static void test_status_indicator(void)
     guarded_canvas_init(&guarded, 160, 80, 160 * 4 + 64);
     reset_text_calls();
     hud_status_indicator(&guarded.canvas, 20, 20, &style, true, "READY");
-    assert(pixel_color(&guarded.canvas, 24, 26) == style.active_color);
-    assert(text_call_count == 1U);
-    assert(text_calls[0].x == 30);
-    assert(text_calls[0].baseline_y == 32);
+    TEST_CHECK(pixel_color(&guarded.canvas, 24, 26) == style.active_color);
+    TEST_CHECK(text_call_count == 1U);
+    TEST_CHECK(text_calls[0].x == 30);
+    TEST_CHECK(text_calls[0].baseline_y == 32);
 
     hud_status_indicator(&guarded.canvas, 60, 20, &style, false, "REC");
-    assert(pixel_color(&guarded.canvas, 64, 26) == style.inactive_color);
+    TEST_CHECK(pixel_color(&guarded.canvas, 64, 26) == style.inactive_color);
     hud_status_indicator(&guarded.canvas, -5, 74, &style, true, "GPS");
     style.dot_radius = 0;
     hud_status_indicator(&guarded.canvas, 100, 20, &style, true, "CAN");

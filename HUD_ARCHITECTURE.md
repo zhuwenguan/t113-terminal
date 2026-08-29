@@ -45,6 +45,18 @@ All production HUD rendering is CPU rasterization into an ARGB8888 surface;
 G2D performs the subsequent composition. CPU-visible ARGB8888 bytes are
 `B G R A`. The production resolution is fixed at 800x600.
 
+## Current release status
+
+- Status: Production / maintenance mode.
+- Resolution: 800x600 at a 30 FPS target.
+- Render architecture: one initialized static HUD cache plus a per-frame
+  dynamic data overlay.
+- Typical T113 HUD cost: approximately 3.5 ms/frame.
+- Static cache memory: one additional 1,920,000-byte 800x600 ARGB8888 buffer.
+
+Tests must not depend on `assert()` side effects because Release builds define
+`NDEBUG`; test conditions and required calls use `tests/test_check.h` instead.
+
 ## Change entry points
 
 - Position, size, spacing: `HUD_LAYOUT_800x600_DESIGNED.md` and
@@ -61,5 +73,6 @@ G2D performs the subsequent composition. CPU-visible ARGB8888 bytes are
 
 `hud_render()` does not load resources or allocate memory per frame. Fonts
 are loaded and warmed during initialization; the glyph cache is fixed at 384
-entries. Widgets receive drawing parameters only and do not depend on
-VehicleState, CAN, or LapPro.
+entries. Static page content is prepared during initialization and copied into
+the caller surface before dynamic values are drawn. Widgets receive drawing
+parameters only and do not depend on VehicleState, CAN, or LapPro.

@@ -1,7 +1,7 @@
 #include "hud_layout.h"
 #include "hud_render.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <limits.h>
 #include <math.h>
 #include <stdint.h>
@@ -26,10 +26,10 @@ UiFont *ui_font_load(const char *path, int pixel_size)
 {
     UiFont *font;
 
-    assert(path != NULL && path[0] != '\0');
-    assert(pixel_size > 0);
+    TEST_CHECK(path != NULL && path[0] != '\0');
+    TEST_CHECK(pixel_size > 0);
     font = malloc(sizeof(*font));
-    assert(font != NULL);
+    TEST_CHECK(font != NULL);
     font->pixel_size = pixel_size;
     font_load_calls++;
     return font;
@@ -97,7 +97,7 @@ static void guarded_canvas_init(GuardedCanvas *guarded, int width, int height,
     guarded->framebuffer_size = (size_t)stride * (size_t)height;
     guarded->allocation = malloc(TEST_GUARD_SIZE * 2U +
                                   guarded->framebuffer_size);
-    assert(guarded->allocation != NULL);
+    TEST_CHECK(guarded->allocation != NULL);
     memset(guarded->allocation, TEST_GUARD_BYTE,
            TEST_GUARD_SIZE * 2U + guarded->framebuffer_size);
     guarded->pixels = guarded->allocation + TEST_GUARD_SIZE;
@@ -128,13 +128,13 @@ static void guarded_canvas_close(const GuardedCanvas *guarded)
 
         for (index = (size_t)guarded->canvas.width * 4U;
              index < (size_t)guarded->canvas.stride; ++index) {
-            assert(padding[index - (size_t)guarded->canvas.width * 4U] ==
+            TEST_CHECK(padding[index - (size_t)guarded->canvas.width * 4U] ==
                    TEST_GUARD_BYTE);
         }
     }
     for (index = 0U; index < TEST_GUARD_SIZE; ++index) {
-        assert(guarded->allocation[index] == TEST_GUARD_BYTE);
-        assert(guarded->allocation[TEST_GUARD_SIZE +
+        TEST_CHECK(guarded->allocation[index] == TEST_GUARD_BYTE);
+        TEST_CHECK(guarded->allocation[TEST_GUARD_SIZE +
                                    guarded->framebuffer_size + index] ==
                TEST_GUARD_BYTE);
     }
@@ -186,9 +186,9 @@ static void assert_text_has_no_invalid_tokens(void)
     size_t index;
 
     for (index = 0U; index < rendered_text_count; ++index) {
-        assert(strstr(rendered_text[index], "nan") == NULL);
-        assert(strstr(rendered_text[index], "inf") == NULL);
-        assert(strstr(rendered_text[index], "-2147483648") == NULL);
+        TEST_CHECK(strstr(rendered_text[index], "nan") == NULL);
+        TEST_CHECK(strstr(rendered_text[index], "inf") == NULL);
+        TEST_CHECK(strstr(rendered_text[index], "-2147483648") == NULL);
     }
 }
 
@@ -202,31 +202,31 @@ static void test_layout_constants(void)
     size_t index;
 
     hud_ui_layout_default(&layout);
-    assert(layout.lap.x == 10 && layout.lap.y == 25 &&
+    TEST_CHECK(layout.lap.x == 10 && layout.lap.y == 25 &&
            layout.lap.w == 160 && layout.lap.h == 170);
-    assert(layout.accel_event.x == 10 && layout.accel_event.y == 205 &&
+    TEST_CHECK(layout.accel_event.x == 10 && layout.accel_event.y == 205 &&
            layout.accel_event.w == 160 && layout.accel_event.h == 80);
-    assert(layout.main.x == 115 && layout.main.y == 450 &&
+    TEST_CHECK(layout.main.x == 115 && layout.main.y == 450 &&
            layout.main.w == 640 && layout.main.h == 140);
-    assert(layout.main_div_1_x == 220 && layout.main_div_2_x == 435 &&
+    TEST_CHECK(layout.main_div_1_x == 220 && layout.main_div_2_x == 435 &&
            layout.main_div_3_x == 570);
-    assert(layout.main_div_y1 == 460 && layout.main_div_y2 == 580);
-    assert(layout.pedal_bar_x == 240 && layout.throttle_bar_y == 485 &&
+    TEST_CHECK(layout.main_div_y1 == 460 && layout.main_div_y2 == 580);
+    TEST_CHECK(layout.pedal_bar_x == 240 && layout.throttle_bar_y == 485 &&
            layout.brake_bar_y == 525);
-    assert(layout.rpm_bar_x == 240 && layout.rpm_bar_y == 565);
-    assert(layout.pedal_segment_count == 16 &&
+    TEST_CHECK(layout.rpm_bar_x == 240 && layout.rpm_bar_y == 565);
+    TEST_CHECK(layout.pedal_segment_count == 16 &&
            layout.pedal_segment_width == 6 &&
            layout.pedal_segment_gap == 2 && layout.pedal_segment_height == 10);
-    assert(layout.rpm_segment_count == 20 && layout.rpm_segment_width == 4 &&
+    TEST_CHECK(layout.rpm_segment_count == 20 && layout.rpm_segment_width == 4 &&
            layout.rpm_segment_gap == 2 && layout.rpm_segment_height == 9);
-    assert(layout.g_center_x == 502 && layout.g_center_y == 528 &&
+    TEST_CHECK(layout.g_center_x == 502 && layout.g_center_y == 528 &&
            layout.g_radius == 32);
-    assert(layout.rpm_max == 10000);
+    TEST_CHECK(layout.rpm_max == 10000);
     for (index = 0U; index < sizeof(rects) / sizeof(rects[0]); ++index) {
-        assert(rects[index]->x >= 0 && rects[index]->y >= 0);
-        assert(rects[index]->w > 0 && rects[index]->h > 0);
-        assert(rects[index]->x + rects[index]->w <= TEST_WIDTH);
-        assert(rects[index]->y + rects[index]->h <= TEST_HEIGHT);
+        TEST_CHECK(rects[index]->x >= 0 && rects[index]->y >= 0);
+        TEST_CHECK(rects[index]->w > 0 && rects[index]->h > 0);
+        TEST_CHECK(rects[index]->x + rects[index]->w <= TEST_WIDTH);
+        TEST_CHECK(rects[index]->y + rects[index]->h <= TEST_HEIGHT);
     }
 }
 
@@ -244,10 +244,10 @@ static void test_render_values_and_stride(HudContext *context)
     guarded_canvas_init(&guarded, TEST_WIDTH, TEST_HEIGHT,
                         TEST_WIDTH * 4 + 64);
     rendered_text_count = 0U;
-    assert(hud_render(context, &guarded.canvas, &state, false) == 0);
-    assert(pixel_color(&guarded.canvas, 40, 40) != UI_COLOR_TRANSPARENT);
-    assert(pixel_color(&guarded.canvas, 130, 500) != UI_COLOR_TRANSPARENT);
-    assert(rendered_text_count > 0U);
+    TEST_CHECK(hud_render(context, &guarded.canvas, &state, false) == 0);
+    TEST_CHECK(pixel_color(&guarded.canvas, 40, 40) != UI_COLOR_TRANSPARENT);
+    TEST_CHECK(pixel_color(&guarded.canvas, 130, 500) != UI_COLOR_TRANSPARENT);
+    TEST_CHECK(rendered_text_count > 0U);
     assert_text_has_no_invalid_tokens();
 
     for (iteration = 0; iteration < 5; ++iteration) {
@@ -258,7 +258,7 @@ static void test_render_values_and_stride(HudContext *context)
         state.delta_time_s = deltas[iteration];
         state.throttle_percent = speeds[iteration] / 10.0;
         state.brake_percent = 100.0 - state.throttle_percent;
-        assert(hud_render(context, &guarded.canvas, &state,
+        TEST_CHECK(hud_render(context, &guarded.canvas, &state,
                           iteration == 4) == 0);
     }
     assert_text_has_no_invalid_tokens();
@@ -308,14 +308,14 @@ static void test_invalid_values_and_accel_visibility(HudContext *context)
     guarded_canvas_init(&guarded, TEST_WIDTH, TEST_HEIGHT,
                         TEST_WIDTH * 4 + 64);
     rendered_text_count = 0U;
-    assert(hud_render(context, &guarded.canvas, &invalid, false) == 0);
+    TEST_CHECK(hud_render(context, &guarded.canvas, &invalid, false) == 0);
     assert_text_has_no_invalid_tokens();
 
     invalid = make_state();
     invalid.accel_50m_time_s = 0.0;
     invalid.accel_time_s = 0.0;
-    assert(hud_render(context, &guarded.canvas, &invalid, false) == 0);
-    assert(pixel_color(&guarded.canvas, 20, 215) != UI_COLOR_TRANSPARENT);
+    TEST_CHECK(hud_render(context, &guarded.canvas, &invalid, false) == 0);
+    TEST_CHECK(pixel_color(&guarded.canvas, 20, 215) != UI_COLOR_TRANSPARENT);
     guarded_canvas_close(&guarded);
 }
 
@@ -325,8 +325,8 @@ int main(void)
 
     test_layout_constants();
     test_extreme_geometry_clipping();
-    assert(hud_init(&context, "stub-font.ttf") == 0);
-    assert(font_load_calls == 3U);
+    TEST_CHECK(hud_init(&context, "stub-font.ttf") == 0);
+    TEST_CHECK(font_load_calls == 3U);
     test_render_values_and_stride(context);
     test_invalid_values_and_accel_visibility(context);
     hud_shutdown(context);

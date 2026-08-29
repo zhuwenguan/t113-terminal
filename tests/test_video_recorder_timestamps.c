@@ -2,7 +2,7 @@
 
 #include "video_recorder.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -13,9 +13,9 @@ static void write_sentinel(const char *path, const char *value)
 {
     FILE *file = fopen(path, "wb");
 
-    assert(file != NULL);
-    assert(fwrite(value, 1U, strlen(value), file) == strlen(value));
-    assert(fclose(file) == 0);
+    TEST_CHECK(file != NULL);
+    TEST_CHECK(fwrite(value, 1U, strlen(value), file) == strlen(value));
+    TEST_CHECK(fclose(file) == 0);
 }
 
 static void assert_sentinel(const char *path, const char *value)
@@ -23,11 +23,11 @@ static void assert_sentinel(const char *path, const char *value)
     char buffer[32] = { 0 };
     FILE *file = fopen(path, "rb");
 
-    assert(file != NULL);
-    assert(fread(buffer, 1U, sizeof(buffer), file) == strlen(value));
-    assert(!ferror(file));
-    assert(fclose(file) == 0);
-    assert(memcmp(buffer, value, strlen(value)) == 0);
+    TEST_CHECK(file != NULL);
+    TEST_CHECK(fread(buffer, 1U, sizeof(buffer), file) == strlen(value));
+    TEST_CHECK(!ferror(file));
+    TEST_CHECK(fclose(file) == 0);
+    TEST_CHECK(memcmp(buffer, value, strlen(value)) == 0);
 }
 
 static uint32_t read_be32(const uint8_t *value)
@@ -60,55 +60,55 @@ int main(void)
     memset(&frame, 0, sizeof(frame));
     (void)snprintf(path, sizeof(path), "/tmp/t113_recorder_%ld.mp4",
                    (long)getpid());
-    assert(snprintf(index_path, sizeof(index_path), "%s.idx", path) > 0);
+    TEST_CHECK(snprintf(index_path, sizeof(index_path), "%s.idx", path) > 0);
 
     write_sentinel(path, "existing-mp4");
-    assert(video_recorder_init(&recorder, path, 16U, 16U, 30U) < 0);
+    TEST_CHECK(video_recorder_init(&recorder, path, 16U, 16U, 30U) < 0);
     assert_sentinel(path, "existing-mp4");
-    assert(access(index_path, F_OK) < 0 && errno == ENOENT);
-    assert(unlink(path) == 0);
+    TEST_CHECK(access(index_path, F_OK) < 0 && errno == ENOENT);
+    TEST_CHECK(unlink(path) == 0);
 
     write_sentinel(index_path, "existing-index");
-    assert(video_recorder_init(&recorder, path, 16U, 16U, 30U) < 0);
-    assert(access(path, F_OK) < 0 && errno == ENOENT);
+    TEST_CHECK(video_recorder_init(&recorder, path, 16U, 16U, 30U) < 0);
+    TEST_CHECK(access(path, F_OK) < 0 && errno == ENOENT);
     assert_sentinel(index_path, "existing-index");
-    assert(unlink(index_path) == 0);
+    TEST_CHECK(unlink(index_path) == 0);
 
-    assert(video_frame_init(&frame, 16U, 16U) == 0);
+    TEST_CHECK(video_frame_init(&frame, 16U, 16U) == 0);
     memset(frame.pixels, 0x40, frame.capacity);
-    assert(video_recorder_init(&recorder, path, 16U, 16U, 30U) == 0);
+    TEST_CHECK(video_recorder_init(&recorder, path, 16U, 16U, 30U) == 0);
     frame.timestamp_us = 1000000U;
-    assert(video_recorder_write_frame(&recorder, &frame));
+    TEST_CHECK(video_recorder_write_frame(&recorder, &frame));
     frame.timestamp_us = 1050000U;
-    assert(video_recorder_write_frame(&recorder, &frame));
+    TEST_CHECK(video_recorder_write_frame(&recorder, &frame));
     frame.timestamp_us = 1150000U;
-    assert(video_recorder_write_frame(&recorder, &frame));
-    assert(video_recorder_finalize(&recorder) == 0);
+    TEST_CHECK(video_recorder_write_frame(&recorder, &frame));
+    TEST_CHECK(video_recorder_finalize(&recorder) == 0);
     video_recorder_get_stats(&recorder, &recorder_stats);
     video_recorder_get_queue_stats(&recorder, &queue_stats);
-    assert(recorder_stats.encoded_frames == 3U);
-    assert(recorder_stats.enqueued_frames == 3U);
-    assert(recorder_stats.written_frames == 3U);
-    assert(recorder_stats.dropped_frames == 0U);
-    assert(!recorder_stats.writer_failed);
-    assert(recorder_stats.write_latency.samples == 3U);
-    assert(recorder_stats.writer_write_calls == 5U);
-    assert(recorder_stats.writer_write_call_bytes >
+    TEST_CHECK(recorder_stats.encoded_frames == 3U);
+    TEST_CHECK(recorder_stats.enqueued_frames == 3U);
+    TEST_CHECK(recorder_stats.written_frames == 3U);
+    TEST_CHECK(recorder_stats.dropped_frames == 0U);
+    TEST_CHECK(!recorder_stats.writer_failed);
+    TEST_CHECK(recorder_stats.write_latency.samples == 3U);
+    TEST_CHECK(recorder_stats.writer_write_calls == 5U);
+    TEST_CHECK(recorder_stats.writer_write_call_bytes >
            recorder_stats.bytes_written);
-    assert(queue_stats.current_depth == 0U);
-    assert(queue_stats.pushed_frames == 3U && queue_stats.popped_frames == 3U);
+    TEST_CHECK(queue_stats.current_depth == 0U);
+    TEST_CHECK(queue_stats.pushed_frames == 3U && queue_stats.popped_frames == 3U);
     video_recorder_close(&recorder);
     video_frame_close(&frame);
 
     file = fopen(path, "rb");
-    assert(file != NULL);
+    TEST_CHECK(file != NULL);
     size = fread(data, 1U, sizeof(data), file);
-    assert(!ferror(file));
-    assert(fclose(file) == 0);
-    assert(size > 40U);
-    assert(read_be32(data + 24U) == 1U);
-    assert(memcmp(data + 28U, "mdat", 4U) == 0);
-    assert(read_be64(data + 32U) > 16U);
+    TEST_CHECK(!ferror(file));
+    TEST_CHECK(fclose(file) == 0);
+    TEST_CHECK(size > 40U);
+    TEST_CHECK(read_be32(data + 24U) == 1U);
+    TEST_CHECK(memcmp(data + 28U, "mdat", 4U) == 0);
+    TEST_CHECK(read_be64(data + 32U) > 16U);
     for (index = 4U; index + 36U <= size; ++index) {
         size_t entry;
 
@@ -117,15 +117,15 @@ int main(void)
             continue;
         }
         for (entry = 0U; entry < 3U; ++entry) {
-            assert(read_be32(data + index + 12U + entry * 8U) == 1U);
-            assert(read_be32(data + index + 16U + entry * 8U) ==
+            TEST_CHECK(read_be32(data + index + 12U + entry * 8U) == 1U);
+            TEST_CHECK(read_be32(data + index + 16U + entry * 8U) ==
                    expected_duration[entry]);
         }
         found = true;
         break;
     }
-    assert(found);
-    assert(access(index_path, F_OK) < 0 && errno == ENOENT);
-    assert(unlink(path) == 0);
+    TEST_CHECK(found);
+    TEST_CHECK(access(index_path, F_OK) < 0 && errno == ENOENT);
+    TEST_CHECK(unlink(path) == 0);
     return 0;
 }

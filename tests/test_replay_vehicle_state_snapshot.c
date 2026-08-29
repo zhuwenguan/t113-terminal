@@ -5,7 +5,7 @@
 #include "replay.h"
 #include "vehicle_state_snapshot.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -70,7 +70,7 @@ static void test_can_sink(const CanMessage *message, void *context)
 {
     TestCounts *counts = context;
 
-    assert(message != NULL);
+    TEST_CHECK(message != NULL);
     counts->can_count++;
 }
 
@@ -79,8 +79,8 @@ static void test_lappro_sample_sink(uint64_t timestamp_us,
 {
     TestCounts *counts = context;
 
-    assert(state != NULL);
-    assert(timestamp_us >= 1000000ULL);
+    TEST_CHECK(state != NULL);
+    TEST_CHECK(timestamp_us >= 1000000ULL);
     counts->lappro_count++;
 }
 
@@ -91,7 +91,7 @@ static void test_snapshot_sink(uint64_t timestamp_us, void *context)
     if (counts->snapshot_count == 0U) {
         counts->first_snapshot_us = timestamp_us;
     } else {
-        assert(timestamp_us - counts->last_snapshot_us ==
+        TEST_CHECK(timestamp_us - counts->last_snapshot_us ==
                VEHICLE_STATE_SNAPSHOT_PERIOD_US);
     }
     counts->last_snapshot_us = timestamp_us;
@@ -102,7 +102,7 @@ static bool test_state_getter(VehicleState *state, void *context)
 {
     TestCounts *counts = context;
 
-    assert(state != NULL);
+    TEST_CHECK(state != NULL);
     memset(state, 0, sizeof(*state));
     state->speed_kmh = 42.0;
     counts->state_get_count++;
@@ -117,13 +117,13 @@ static void test_write_inputs(const char *directory, unsigned int rows)
     FILE *lappro_file;
     unsigned int row;
 
-    assert(snprintf(can_path, sizeof(can_path), "%s/can0.csv", directory) >
+    TEST_CHECK(snprintf(can_path, sizeof(can_path), "%s/can0.csv", directory) >
            0);
-    assert(snprintf(lappro_path, sizeof(lappro_path), "%s/lappro.csv",
+    TEST_CHECK(snprintf(lappro_path, sizeof(lappro_path), "%s/lappro.csv",
                     directory) > 0);
     can_file = fopen(can_path, "w");
     lappro_file = fopen(lappro_path, "w");
-    assert(can_file != NULL && lappro_file != NULL);
+    TEST_CHECK(can_file != NULL && lappro_file != NULL);
     fputs("timestamp_us,bus,id,flags,dlc,data\n", can_file);
     fputs("timestamp_us,gps_time,connected,authenticated,streaming,fix_type,"
           "num_sv,speed_kmh,heading_deg,hacc_m,altitude,longitude,latitude,"
@@ -132,15 +132,15 @@ static void test_write_inputs(const char *directory, unsigned int rows)
     for (row = 0U; row < rows; ++row) {
         uint64_t timestamp_us = 1000000ULL + (uint64_t)row * 1000ULL;
 
-        assert(fprintf(can_file, "%llu,0,0x121,0,4,00 00 00 00\n",
+        TEST_CHECK(fprintf(can_file, "%llu,0,0x121,0,4,00 00 00 00\n",
                        (unsigned long long)timestamp_us) > 0);
-        assert(fprintf(lappro_file,
+        TEST_CHECK(fprintf(lappro_file,
                        "%llu,n/a,1,1,1,3,10,50.0,90.0,1.0,100.0,"
                        "120.0,30.0,0.1,0.2,0.3\n",
                        (unsigned long long)timestamp_us) > 0);
     }
-    assert(fclose(can_file) == 0);
-    assert(fclose(lappro_file) == 0);
+    TEST_CHECK(fclose(can_file) == 0);
+    TEST_CHECK(fclose(lappro_file) == 0);
 }
 
 int main(void)
@@ -151,7 +151,7 @@ int main(void)
     char *directory;
 
     directory = mkdtemp(directory_template);
-    assert(directory != NULL);
+    TEST_CHECK(directory != NULL);
     test_write_inputs(directory, 2001U);
 
     memset(&counts, 0, sizeof(counts));
@@ -163,29 +163,29 @@ int main(void)
     config.vehicle_state_getter = test_state_getter;
     config.vehicle_state_snapshot_sink = test_snapshot_sink;
     config.sink_context = &counts;
-    assert(replay_run(&config) == 0);
+    TEST_CHECK(replay_run(&config) == 0);
 
     /* Two 1 kHz raw inputs must remain lossless at the replay callback path;
      * Vehicle State advances independently at 10 Hz over the same 2-second
      * source-time interval. */
-    assert(counts.can_count == 2001U);
-    assert(counts.lappro_count == 2001U);
-    assert(counts.snapshot_count == 20U);
-    assert(counts.first_snapshot_us == 1100000ULL);
-    assert(counts.last_snapshot_us == 3000000ULL);
-    assert(counts.state_get_count > 0U);
+    TEST_CHECK(counts.can_count == 2001U);
+    TEST_CHECK(counts.lappro_count == 2001U);
+    TEST_CHECK(counts.snapshot_count == 20U);
+    TEST_CHECK(counts.first_snapshot_us == 1100000ULL);
+    TEST_CHECK(counts.last_snapshot_us == 3000000ULL);
+    TEST_CHECK(counts.state_get_count > 0U);
 
     {
         char can_path[256];
         char lappro_path[256];
 
-        assert(snprintf(can_path, sizeof(can_path), "%s/can0.csv",
+        TEST_CHECK(snprintf(can_path, sizeof(can_path), "%s/can0.csv",
                         directory) > 0);
-        assert(snprintf(lappro_path, sizeof(lappro_path), "%s/lappro.csv",
+        TEST_CHECK(snprintf(lappro_path, sizeof(lappro_path), "%s/lappro.csv",
                         directory) > 0);
-        assert(unlink(can_path) == 0);
-        assert(unlink(lappro_path) == 0);
+        TEST_CHECK(unlink(can_path) == 0);
+        TEST_CHECK(unlink(lappro_path) == 0);
     }
-    assert(rmdir(directory) == 0);
+    TEST_CHECK(rmdir(directory) == 0);
     return 0;
 }

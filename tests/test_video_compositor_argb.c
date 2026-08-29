@@ -1,7 +1,7 @@
 #include "video_compositor.h"
 #include "video_frame.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <stdint.h>
 #include <string.h>
 
@@ -19,9 +19,9 @@ static void test_layer_format(HudPixelFormat format)
     memset(&output, 0, sizeof(output));
     memset(&static_layer, 0, sizeof(static_layer));
     memset(&dynamic_layer, 0, sizeof(dynamic_layer));
-    assert(video_compositor_init(&compositor, 2U, 1U) == 0);
-    assert(video_frame_init(&camera, 2U, 1U) == 0);
-    assert(video_frame_init(&output, 2U, 1U) == 0);
+    TEST_CHECK(video_compositor_init(&compositor, 2U, 1U) == 0);
+    TEST_CHECK(video_frame_init(&camera, 2U, 1U) == 0);
+    TEST_CHECK(video_frame_init(&output, 2U, 1U) == 0);
 
     camera.pixels[0] = 10U;
     camera.pixels[1] = 20U;
@@ -52,14 +52,14 @@ static void test_layer_format(HudPixelFormat format)
     dynamic_layer.region_count = 1U;
     dynamic_layer.regions[0] = (HudRegion){ 0U, 0U, 1U, 1U };
 
-    assert(video_compositor_compose(&compositor, &camera, &static_layer,
+    TEST_CHECK(video_compositor_compose(&compositor, &camera, &static_layer,
                                     &dynamic_layer, &output));
-    assert(output.pixels[0] == 255U);
-    assert(output.pixels[1] == 0U);
-    assert(output.pixels[2] == 0U);
-    assert(output.pixels[4] == 40U);
-    assert(output.pixels[5] == 50U);
-    assert(output.pixels[6] == 60U);
+    TEST_CHECK(output.pixels[0] == 255U);
+    TEST_CHECK(output.pixels[1] == 0U);
+    TEST_CHECK(output.pixels[2] == 0U);
+    TEST_CHECK(output.pixels[4] == 40U);
+    TEST_CHECK(output.pixels[5] == 50U);
+    TEST_CHECK(output.pixels[6] == 60U);
 
     video_frame_close(&output);
     video_frame_close(&camera);

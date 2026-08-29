@@ -1,6 +1,6 @@
 #include "ui_image.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -49,7 +49,7 @@ static void guarded_canvas_init(GuardedCanvas *guarded, int width, int height,
     guarded->allocation_size = TEST_GUARD_SIZE * 2U +
                                (size_t)stride * (size_t)height;
     guarded->allocation = malloc(guarded->allocation_size);
-    assert(guarded->allocation != NULL);
+    TEST_CHECK(guarded->allocation != NULL);
     memset(guarded->allocation, TEST_GUARD_BYTE, guarded->allocation_size);
     guarded->pixels = guarded->allocation + TEST_GUARD_SIZE;
     guarded->canvas = (UiCanvas){ guarded->pixels, width, height, stride };
@@ -69,8 +69,8 @@ static void guarded_canvas_close(const GuardedCanvas *guarded)
                               (size_t)guarded->canvas.height;
 
     for (index = 0U; index < TEST_GUARD_SIZE; ++index) {
-        assert(guarded->allocation[index] == TEST_GUARD_BYTE);
-        assert(guarded->allocation[TEST_GUARD_SIZE + framebuffer_size + index] ==
+        TEST_CHECK(guarded->allocation[index] == TEST_GUARD_BYTE);
+        TEST_CHECK(guarded->allocation[TEST_GUARD_SIZE + framebuffer_size + index] ==
                TEST_GUARD_BYTE);
     }
     for (int row = 0; row < guarded->canvas.height; ++row) {
@@ -81,7 +81,7 @@ static void guarded_canvas_close(const GuardedCanvas *guarded)
         for (int column = 0;
              column < guarded->canvas.stride - guarded->canvas.width * 4;
              ++column) {
-            assert(padding[column] == TEST_PADDING_BYTE);
+            TEST_CHECK(padding[column] == TEST_PADDING_BYTE);
         }
     }
     free(guarded->allocation);
@@ -91,9 +91,9 @@ static void write_test_png(const char *path)
 {
     FILE *file = fopen(path, "wb");
 
-    assert(file != NULL);
-    assert(fwrite(test_png, sizeof(test_png), 1U, file) == 1U);
-    assert(fclose(file) == 0);
+    TEST_CHECK(file != NULL);
+    TEST_CHECK(fwrite(test_png, sizeof(test_png), 1U, file) == 1U);
+    TEST_CHECK(fclose(file) == 0);
 }
 
 static void test_load_and_binary_alpha(const char *path)
@@ -109,21 +109,21 @@ static void test_load_and_binary_alpha(const char *path)
     int column;
 
     image = ui_image_load_png(path);
-    assert(image != NULL);
-    assert(image->width == 4 && image->height == 4 && image->stride == 16);
+    TEST_CHECK(image != NULL);
+    TEST_CHECK(image->width == 4 && image->height == 4 && image->stride == 16);
     for (row = 0; row < image->height; ++row) {
         for (column = 0; column < image->width; ++column) {
             const uint8_t *pixel = image->pixels +
                 (size_t)row * (size_t)image->stride + (size_t)column * 4U;
 
-            assert(pixel[3] == expected_alpha[row * image->width + column]);
+            TEST_CHECK(pixel[3] == expected_alpha[row * image->width + column]);
         }
     }
     /* Source pixel (3, 0) is RGBA (100, 20, 33, 128), stored as BGRA. */
-    assert(image->pixels[12U] == 33U);
-    assert(image->pixels[13U] == 20U);
-    assert(image->pixels[14U] == 100U);
-    assert(image->pixels[15U] == 255U);
+    TEST_CHECK(image->pixels[12U] == 33U);
+    TEST_CHECK(image->pixels[13U] == 20U);
+    TEST_CHECK(image->pixels[14U] == 100U);
+    TEST_CHECK(image->pixels[15U] == 255U);
     ui_image_free(image);
 }
 
@@ -137,21 +137,21 @@ static void test_draw_clipping_stride_and_reuse(const char *path)
     const uint8_t *pixel;
     int row;
 
-    assert(image != NULL);
+    TEST_CHECK(image != NULL);
     memcpy(original_pixels, image->pixels, sizeof(original_pixels));
     guarded_canvas_init(&guarded, TEST_WIDTH, TEST_HEIGHT,
                         TEST_WIDTH * 4 + 64);
     ui_image_draw(&guarded.canvas, image, 10, 10);
     pixel = test_pixel(&guarded.canvas, 13, 10);
-    assert(pixel[0] == 33U && pixel[1] == 20U && pixel[2] == 100U &&
+    TEST_CHECK(pixel[0] == 33U && pixel[1] == 20U && pixel[2] == 100U &&
            pixel[3] == 255U);
     pixel = test_pixel(&guarded.canvas, 10, 10);
-    assert(pixel[0] == 0U && pixel[1] == 0U && pixel[2] == 0U &&
+    TEST_CHECK(pixel[0] == 0U && pixel[1] == 0U && pixel[2] == 0U &&
            pixel[3] == 0U);
 
     ui_image_draw(&guarded.canvas, image, -1, -1);
     pixel = test_pixel(&guarded.canvas, 0, 0);
-    assert(pixel[0] == 32U && pixel[1] == 50U && pixel[2] == 40U &&
+    TEST_CHECK(pixel[0] == 32U && pixel[1] == 50U && pixel[2] == 40U &&
            pixel[3] == 255U);
     ui_image_draw(&guarded.canvas, image, 795, 595);
     ui_image_draw(&guarded.canvas, image, 900, 900);
@@ -166,13 +166,13 @@ static void test_draw_clipping_stride_and_reuse(const char *path)
     padded_image = (UiImage){ padded_pixels, 4, 4, 20 };
     ui_image_draw(&guarded.canvas, &padded_image, 30, 30);
     pixel = test_pixel(&guarded.canvas, 33, 30);
-    assert(pixel[0] == 33U && pixel[1] == 20U && pixel[2] == 100U &&
+    TEST_CHECK(pixel[0] == 33U && pixel[1] == 20U && pixel[2] == 100U &&
            pixel[3] == 255U);
 
     for (int repeat = 0; repeat < 1000; ++repeat) {
         ui_image_draw(&guarded.canvas, image, 100, 100);
     }
-    assert(memcmp(original_pixels, image->pixels, sizeof(original_pixels)) == 0);
+    TEST_CHECK(memcmp(original_pixels, image->pixels, sizeof(original_pixels)) == 0);
     guarded_canvas_close(&guarded);
     ui_image_free(image);
 }
@@ -184,8 +184,8 @@ static void test_load_real_icon(const char *path)
     size_t index;
     bool has_opaque_pixel = false;
 
-    assert(image != NULL);
-    assert(image->width > 0 && image->height > 0);
+    TEST_CHECK(image != NULL);
+    TEST_CHECK(image->width > 0 && image->height > 0);
     pixel_count = (size_t)image->width * (size_t)image->height;
     for (index = 0U; index < pixel_count; ++index) {
         if (image->pixels[index * 4U + 3U] == 255U) {
@@ -193,7 +193,7 @@ static void test_load_real_icon(const char *path)
             break;
         }
     }
-    assert(has_opaque_pixel);
+    TEST_CHECK(has_opaque_pixel);
     ui_image_free(image);
 }
 
@@ -207,7 +207,7 @@ int main(int argc, char **argv)
     test_load_and_binary_alpha(path);
     test_draw_clipping_stride_and_reuse(path);
     if (argc > 1) test_load_real_icon(argv[1]);
-    assert(remove(path) == 0);
+    TEST_CHECK(remove(path) == 0);
     puts("ui_image tests: PASS");
     return EXIT_SUCCESS;
 }

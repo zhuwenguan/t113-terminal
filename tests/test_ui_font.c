@@ -1,6 +1,6 @@
 #include "ui_font.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -24,7 +24,7 @@ static void guarded_canvas_init(GuardedCanvas *guarded)
     size_t framebuffer_size = (size_t)TEST_WIDTH * TEST_HEIGHT * 4U;
 
     guarded->allocation = malloc(TEST_GUARD_SIZE * 2U + framebuffer_size);
-    assert(guarded->allocation != NULL);
+    TEST_CHECK(guarded->allocation != NULL);
     memset(guarded->allocation, TEST_GUARD_BYTE,
            TEST_GUARD_SIZE * 2U + framebuffer_size);
     guarded->pixels = guarded->allocation + TEST_GUARD_SIZE;
@@ -39,8 +39,8 @@ static void guarded_canvas_close(const GuardedCanvas *guarded)
     size_t index;
 
     for (index = 0U; index < TEST_GUARD_SIZE; ++index) {
-        assert(guarded->allocation[index] == TEST_GUARD_BYTE);
-        assert(guarded->allocation[TEST_GUARD_SIZE + framebuffer_size + index] ==
+        TEST_CHECK(guarded->allocation[index] == TEST_GUARD_BYTE);
+        TEST_CHECK(guarded->allocation[TEST_GUARD_SIZE + framebuffer_size + index] ==
                TEST_GUARD_BYTE);
     }
     free(guarded->allocation);
@@ -74,9 +74,9 @@ static void test_text_measure(UiFont *font)
         int width;
         int height;
 
-        assert(ui_text_measure(font, texts[index], &width, &height) == 0);
-        assert(width > 0);
-        assert(height > 0);
+        TEST_CHECK(ui_text_measure(font, texts[index], &width, &height) == 0);
+        TEST_CHECK(width > 0);
+        TEST_CHECK(height > 0);
     }
 }
 
@@ -89,32 +89,32 @@ int main(int argc, char **argv)
     int large_width;
     int large_height;
 
-    assert(argc >= 2);
+    TEST_CHECK(argc >= 2);
     small_font = ui_font_load(argv[1], 24);
     large_font = ui_font_load(argv[1], 48);
-    assert(small_font != NULL && large_font != NULL);
+    TEST_CHECK(small_font != NULL && large_font != NULL);
     test_text_measure(small_font);
-    assert(ui_text_measure(large_font, "398 V", &large_width,
+    TEST_CHECK(ui_text_measure(large_font, "398 V", &large_width,
                            &large_height) == 0);
-    assert(large_width > 0 && large_height > 0);
+    TEST_CHECK(large_width > 0 && large_height > 0);
 
     guarded_canvas_init(&guarded);
-    assert(ui_text(&guarded.canvas, small_font, 24, 48,
+    TEST_CHECK(ui_text(&guarded.canvas, small_font, 24, 48,
                    UI_ARGB(255U, 255U, 255U, 255U), "SPEED") == 0);
-    assert(ui_text(&guarded.canvas, small_font, -5, -5,
+    TEST_CHECK(ui_text(&guarded.canvas, small_font, -5, -5,
                    UI_ARGB(255U, 44U, 210U, 232U), "LAP") == 0);
-    assert(ui_text(&guarded.canvas, small_font, 799, 120,
+    TEST_CHECK(ui_text(&guarded.canvas, small_font, 799, 120,
                    UI_ARGB(255U, 255U, 66U, 72U), "DELTA") == 0);
-    assert(ui_text(&guarded.canvas, small_font, 100, 595,
+    TEST_CHECK(ui_text(&guarded.canvas, small_font, 100, 595,
                    UI_ARGB(255U, 64U, 230U, 122U), "READY") == 0);
-    assert(ui_text(&guarded.canvas, small_font, INT_MIN, INT_MIN,
+    TEST_CHECK(ui_text(&guarded.canvas, small_font, INT_MIN, INT_MIN,
                    UI_ARGB(255U, 255U, 255U, 255U), "POWER") == 0);
-    assert(ui_text(&guarded.canvas, small_font, INT_MAX, INT_MAX,
+    TEST_CHECK(ui_text(&guarded.canvas, small_font, INT_MAX, INT_MAX,
                    UI_ARGB(255U, 255U, 255U, 255U), "BATTERY") == 0);
-    assert(ui_text(&guarded.canvas, large_font, 360, 280,
+    TEST_CHECK(ui_text(&guarded.canvas, large_font, 360, 280,
                    UI_ARGB(255U, 255U, 255U, 255U), "86") == 0);
-    assert(canvas_has_pixels(&guarded.canvas, &has_antialias));
-    assert(has_antialias);
+    TEST_CHECK(canvas_has_pixels(&guarded.canvas, &has_antialias));
+    TEST_CHECK(has_antialias);
     guarded_canvas_close(&guarded);
 
     ui_font_free(small_font);

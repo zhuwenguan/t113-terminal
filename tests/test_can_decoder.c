@@ -1,6 +1,6 @@
 #include "can_decoder.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <string.h>
 
 static CanMessage make_message(uint64_t timestamp_us, uint32_t id,
@@ -38,29 +38,29 @@ int main(void)
     current = make_message(start_us + 200U, CAN_DECODER_ID_DC_CURRENT, 0U,
                            1010U);
 
-    assert(can_decoder_process(&decoder, &motor, &state));
-    assert(can_decoder_process(&decoder, &voltage, &state));
-    assert(can_decoder_process(&decoder, &current, &state));
-    assert((state.valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) ==
+    TEST_CHECK(can_decoder_process(&decoder, &motor, &state));
+    TEST_CHECK(can_decoder_process(&decoder, &voltage, &state));
+    TEST_CHECK(can_decoder_process(&decoder, &current, &state));
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) ==
            VEHICLE_STATE_CAN_REQUIRED_MASK);
-    assert(state.motor_rpm == 1.0);
-    assert(state.torque_nm == 2.0);
-    assert(state.hv_voltage_v == 400.0);
-    assert(state.hv_current_a == 10.0);
-    assert(state.hv_power_w == 4000.0);
+    TEST_CHECK(state.motor_rpm == 1.0);
+    TEST_CHECK(state.torque_nm == 2.0);
+    TEST_CHECK(state.hv_voltage_v == 400.0);
+    TEST_CHECK(state.hv_current_a == 10.0);
+    TEST_CHECK(state.hv_power_w == 4000.0);
 
     can_decoder_expire_stale(
         &decoder, start_us + CAN_DECODER_FRESHNESS_TIMEOUT_US + 201U, &state);
-    assert((state.valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) == 0U);
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) == 0U);
 
     voltage.timestamp_us = start_us + CAN_DECODER_FRESHNESS_TIMEOUT_US + 300U;
-    assert(can_decoder_process(&decoder, &voltage, &state));
-    assert((state.valid_mask & VEHICLE_STATE_VALID_HV_VOLTAGE_V) != 0U);
-    assert((state.valid_mask & VEHICLE_STATE_VALID_HV_POWER_W) == 0U);
+    TEST_CHECK(can_decoder_process(&decoder, &voltage, &state));
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_VALID_HV_VOLTAGE_V) != 0U);
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_VALID_HV_POWER_W) == 0U);
 
     /* A delayed callback with an older timestamp must not expire newer CAN. */
     can_decoder_expire_stale(&decoder, 1U, &state);
-    assert((state.valid_mask & VEHICLE_STATE_VALID_HV_VOLTAGE_V) != 0U);
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_VALID_HV_VOLTAGE_V) != 0U);
 
     return 0;
 }
