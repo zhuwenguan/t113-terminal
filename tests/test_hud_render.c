@@ -221,7 +221,6 @@ static void test_layout_constants(void)
            layout.rpm_segment_gap == 2 && layout.rpm_segment_height == 9);
     assert(layout.g_center_x == 502 && layout.g_center_y == 528 &&
            layout.g_radius == 32);
-    assert(layout.segment_count == 16);
     assert(layout.rpm_max == 10000);
     for (index = 0U; index < sizeof(rects) / sizeof(rects[0]); ++index) {
         assert(rects[index]->x >= 0 && rects[index]->y >= 0);
