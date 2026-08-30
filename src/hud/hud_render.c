@@ -612,17 +612,8 @@ static void hud_draw_vehicle_info_static(HudContext *hud)
     hud_draw_rule(&hud->canvas, 590, 525, 742, hud->theme->segment_inactive);
 
     ui_image_draw(&hud->canvas, hud->engine_icon, 592, 530);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 614,
-                      530 + HUD_MAIN_TEXT_Y_OFFSET,
-                      hud->theme->text_secondary, "-- C");
     ui_image_draw(&hud->canvas, hud->cpu_icon, 647, 530);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 669,
-                      530 + HUD_MAIN_TEXT_Y_OFFSET,
-                      hud->theme->text_secondary, "-- C");
     ui_image_draw(&hud->canvas, hud->battery_temperature_icon, 702, 530);
-    hud_draw_text_top(&hud->canvas, hud->font_small, 724,
-                      530 + HUD_MAIN_TEXT_Y_OFFSET,
-                      hud->theme->text_secondary, "-- C");
     hud_draw_rule(&hud->canvas, 590, 555, 742, hud->theme->segment_inactive);
 
     ui_image_draw(&hud->canvas, hud->flag_checkered_icon, 592, 562);

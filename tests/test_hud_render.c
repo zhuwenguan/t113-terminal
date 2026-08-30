@@ -313,6 +313,7 @@ static void test_render_values_and_stride(HudContext *context)
     TEST_CHECK(rendered_text_call_found("72 C", 614, 542));
     TEST_CHECK(rendered_text_call_found("64 C", 669, 542));
     TEST_CHECK(rendered_text_call_found("31 C", 724, 542));
+    TEST_CHECK(!rendered_text_found("-- C"));
     TEST_CHECK(rendered_text_call_found("1", 680, 575));
     assert_text_has_no_invalid_tokens();
 
