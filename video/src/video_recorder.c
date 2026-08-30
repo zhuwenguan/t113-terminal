@@ -288,7 +288,8 @@ static bool mp4_build_movie(Mp4Buffer *buffer, const VideoRecorder *recorder,
     }
     sample_entry = mp4_begin(buffer, "mjpg");
     if (sample_entry == SIZE_MAX || !mp4_append_u32(buffer, 0U) ||
-        !mp4_append_u16(buffer, 1U) || !mp4_append_u16(buffer, 0U) ||
+        !mp4_append_u16(buffer, 0U) || !mp4_append_u16(buffer, 1U) ||
+        !mp4_append_u16(buffer, 0U) ||
         !mp4_append_u16(buffer, 0U) || !mp4_append_u32(buffer, 0U) ||
         !mp4_append_u32(buffer, 0U) || !mp4_append_u32(buffer, 0U) ||
         !mp4_append_u16(buffer, (uint16_t)recorder->width) ||
@@ -304,7 +305,17 @@ static bool mp4_build_movie(Mp4Buffer *buffer, const VideoRecorder *recorder,
         compressor_name[0] = 10U;
         if (!mp4_append_bytes(buffer, compressor_name, sizeof(compressor_name)) ||
             !mp4_append_u16(buffer, 0x0018U) ||
-            !mp4_append_u16(buffer, 0xffffU) || !mp4_end(buffer, sample_entry)) {
+            !mp4_append_u16(buffer, 0xffffU)) {
+            return false;
+        }
+    }
+    {
+        size_t pasp = mp4_begin(buffer, "pasp");
+
+        /* Explicit square pixels keep display aspect equal to 800:600 = 4:3. */
+        if (pasp == SIZE_MAX || !mp4_append_u32(buffer, 1U) ||
+            !mp4_append_u32(buffer, 1U) || !mp4_end(buffer, pasp) ||
+            !mp4_end(buffer, sample_entry)) {
             return false;
         }
     }
