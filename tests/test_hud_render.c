@@ -158,11 +158,15 @@ static VehicleState make_state(void)
                        VEHICLE_STATE_VALID_HV_CURRENT_A |
                        VEHICLE_STATE_VALID_HV_POWER_W |
                        VEHICLE_STATE_VALID_HV_SOC_PERCENT |
+                       VEHICLE_STATE_VALID_MOTOR_TEMPERATURE_C |
+                       VEHICLE_STATE_VALID_CONTROLLER_TEMPERATURE_C |
+                       VEHICLE_STATE_VALID_BATTERY_TEMPERATURE_C |
                        VEHICLE_STATE_VALID_ACC_X_MPS2 |
                        VEHICLE_STATE_VALID_ACC_Y_MPS2 |
                        VEHICLE_STATE_VALID_THROTTLE_PERCENT |
                        VEHICLE_STATE_VALID_BRAKE_PERCENT |
-                       VEHICLE_STATE_VALID_DRIVE_STATE;
+                       VEHICLE_STATE_VALID_DRIVE_STATE |
+                       VEHICLE_STATE_VALID_MODE;
     state.speed_kmh = 86.0;
     state.motor_rpm = 8200.0;
     state.throttle_percent = 63.0;
@@ -171,9 +175,13 @@ static VehicleState make_state(void)
     state.hv_current_a = 81.0;
     state.hv_power_w = 32200.0;
     state.hv_soc_percent = 72.0;
+    state.motor_temperature_c = 72.0;
+    state.controller_temperature_c = 64.0;
+    state.battery_temperature_c = 31.0;
     state.acc_x = 1.2 * 9.80665;
     state.acc_y = -0.4 * 9.80665;
     state.drive_state = VEHICLE_DRIVE_STATE_READY;
+    state.mode = 1U;
     state.can_valid = true;
     state.gps_valid = true;
     state.gps_fix_type = 4U;
@@ -302,6 +310,10 @@ static void test_render_values_and_stride(HudContext *context)
     TEST_CHECK(rendered_text_call_found("63%", 396, 492));
     TEST_CHECK(rendered_text_call_found("18%", 396, 532));
     TEST_CHECK(rendered_text_call_found("8200", 388, 572));
+    TEST_CHECK(rendered_text_call_found("72 C", 614, 542));
+    TEST_CHECK(rendered_text_call_found("64 C", 669, 542));
+    TEST_CHECK(rendered_text_call_found("31 C", 724, 542));
+    TEST_CHECK(rendered_text_call_found("1", 680, 575));
     assert_text_has_no_invalid_tokens();
 
     for (iteration = 0; iteration < 5; ++iteration) {

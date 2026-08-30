@@ -294,7 +294,7 @@ Battery temp          (724, 530)
 ```text
 图标      (592, 562)
 MODE      (618, 563)
-TRACK     x≈680
+VehicleState mode (numeric) x≈680
 ```
 
 ## 10. 推荐 C 布局常量

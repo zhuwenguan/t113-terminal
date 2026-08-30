@@ -629,18 +629,28 @@ static void hud_draw_vehicle_info_static(HudContext *hud)
     hud_draw_text_top(&hud->canvas, hud->font_small, 618,
                       563 + HUD_MAIN_TEXT_Y_OFFSET,
                       hud->theme->text_secondary, "MODE");
-    hud_draw_text_top(&hud->canvas, hud->font_small, 680,
-                      563 + HUD_MAIN_TEXT_Y_OFFSET,
-                      hud->theme->text_primary, "TRACK");
 }
 
 static void hud_draw_vehicle_info_dynamic(HudContext *hud,
                                           const VehicleState *state)
 {
+    char motor_temperature[24];
+    char controller_temperature[24];
+    char battery_temperature[24];
     char soc[24];
     char voltage[24];
     char power[24];
     char current[24];
+    char mode[24];
+    bool motor_temperature_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_MOTOR_TEMPERATURE_C,
+        state != NULL ? state->motor_temperature_c : 0.0);
+    bool controller_temperature_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_CONTROLLER_TEMPERATURE_C,
+        state != NULL ? state->controller_temperature_c : 0.0);
+    bool battery_temperature_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_BATTERY_TEMPERATURE_C,
+        state != NULL ? state->battery_temperature_c : 0.0);
     bool soc_valid = hud_state_valid(
         state, VEHICLE_STATE_VALID_HV_SOC_PERCENT,
         state != NULL ? state->hv_soc_percent : 0.0);
@@ -653,6 +663,34 @@ static void hud_draw_vehicle_info_dynamic(HudContext *hud,
     bool current_valid = hud_state_valid(
         state, VEHICLE_STATE_VALID_HV_CURRENT_A,
         state != NULL ? state->hv_current_a : 0.0);
+    bool mode_valid = hud_state_valid(
+        state, VEHICLE_STATE_VALID_MODE,
+        state != NULL ? (double)state->mode : 0.0);
+
+    hud_format_number(motor_temperature, sizeof(motor_temperature),
+                      motor_temperature_valid,
+                      state != NULL ? state->motor_temperature_c : 0.0,
+                      "%.0f", " C");
+    hud_draw_text_top(&hud->canvas, hud->font_small, 614,
+                      530 + HUD_MAIN_TEXT_Y_OFFSET,
+                      motor_temperature_valid ? hud->theme->text_primary :
+                      hud->theme->text_secondary, motor_temperature);
+    hud_format_number(controller_temperature, sizeof(controller_temperature),
+                      controller_temperature_valid,
+                      state != NULL ? state->controller_temperature_c : 0.0,
+                      "%.0f", " C");
+    hud_draw_text_top(&hud->canvas, hud->font_small, 669,
+                      530 + HUD_MAIN_TEXT_Y_OFFSET,
+                      controller_temperature_valid ? hud->theme->text_primary :
+                      hud->theme->text_secondary, controller_temperature);
+    hud_format_number(battery_temperature, sizeof(battery_temperature),
+                      battery_temperature_valid,
+                      state != NULL ? state->battery_temperature_c : 0.0,
+                      "%.0f", " C");
+    hud_draw_text_top(&hud->canvas, hud->font_small, 724,
+                      530 + HUD_MAIN_TEXT_Y_OFFSET,
+                      battery_temperature_valid ? hud->theme->text_primary :
+                      hud->theme->text_secondary, battery_temperature);
 
     hud_format_number(soc, sizeof(soc), soc_valid,
                       state != NULL ? state->hv_soc_percent : 0.0,
@@ -682,6 +720,13 @@ static void hud_draw_vehicle_info_dynamic(HudContext *hud,
                         498 + HUD_MAIN_TEXT_Y_OFFSET,
                         current_valid ? hud->theme->text_primary :
                         hud->theme->text_secondary, current);
+    hud_format_number(mode, sizeof(mode), mode_valid,
+                      state != NULL ? (double)state->mode : 0.0,
+                      "%.0f", "");
+    hud_draw_text_top(&hud->canvas, hud->font_small, 680,
+                      563 + HUD_MAIN_TEXT_Y_OFFSET,
+                      mode_valid ? hud->theme->text_primary :
+                      hud->theme->text_secondary, mode);
 }
 
 static void hud_draw_main_static(HudContext *hud)
