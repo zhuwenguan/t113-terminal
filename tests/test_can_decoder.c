@@ -29,6 +29,7 @@ int main(void)
     CanDecoder decoder;
     VehicleState state;
     CanMessage motor;
+    CanMessage vcu_status;
     CanMessage temperatures;
     CanMessage battery_temperature;
     CanMessage voltage;
@@ -42,6 +43,12 @@ int main(void)
                          CAN_DECODER_ID_MOTOR_STATUS);
     put_u16_le(&motor, 0U, 15001U);
     put_u16_le(&motor, 2U, 5002U);
+    vcu_status = make_message(start_us + 25U, CAN_DECODER_BUS_CAN0,
+                              CAN_DECODER_ID_VCU_STATUS);
+    vcu_status.data[0] = 125U;
+    vcu_status.data[1] = 18U;
+    vcu_status.data[2] = 2U;
+    vcu_status.data[3] = 1U;
     temperatures = make_message(start_us + 50U, CAN_DECODER_BUS_CAN0,
                                 CAN_DECODER_ID_TEMPERATURE_STATUS);
     temperatures.data[0] = 72U;
@@ -62,6 +69,7 @@ int main(void)
     TEST_CHECK(!can_decoder_process(&decoder, &wrong_bus_voltage, &state));
 
     TEST_CHECK(can_decoder_process(&decoder, &motor, &state));
+    TEST_CHECK(can_decoder_process(&decoder, &vcu_status, &state));
     TEST_CHECK(can_decoder_process(&decoder, &temperatures, &state));
     TEST_CHECK(can_decoder_process(&decoder, &battery_temperature, &state));
     TEST_CHECK(can_decoder_process(&decoder, &voltage, &state));
@@ -76,9 +84,21 @@ int main(void)
     TEST_CHECK(state.hv_voltage_v == 360.0);
     TEST_CHECK(state.hv_current_a == 10.0);
     TEST_CHECK(state.hv_power_w == 3600.0);
+    TEST_CHECK(state.throttle_percent == 62.5);
+    TEST_CHECK(state.brake_percent == 9.0);
+    TEST_CHECK(state.mode == 2U);
+    TEST_CHECK(state.drive_state == VEHICLE_DRIVE_STATE_READY);
+
+    vcu_status.timestamp_us = start_us + 250U;
+    vcu_status.data[0] = 0xffU;
+    TEST_CHECK(can_decoder_process(&decoder, &vcu_status, &state));
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_VALID_THROTTLE_PERCENT) == 0U);
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_VALID_BRAKE_PERCENT) != 0U);
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_VALID_MODE) != 0U);
+    TEST_CHECK((state.valid_mask & VEHICLE_STATE_VALID_DRIVE_STATE) != 0U);
 
     can_decoder_expire_stale(
-        &decoder, start_us + CAN_DECODER_FRESHNESS_TIMEOUT_US + 201U, &state);
+        &decoder, start_us + CAN_DECODER_FRESHNESS_TIMEOUT_US + 501U, &state);
     TEST_CHECK((state.valid_mask & VEHICLE_STATE_CAN_REQUIRED_MASK) == 0U);
 
     voltage.timestamp_us = start_us + CAN_DECODER_FRESHNESS_TIMEOUT_US + 300U;

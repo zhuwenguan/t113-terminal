@@ -24,6 +24,15 @@ typedef struct {
 typedef struct {
     uint8_t bus;
     uint32_t id;
+    CanSignalDefinition throttle_percent;
+    CanSignalDefinition brake_percent;
+    CanSignalDefinition mode;
+    CanSignalDefinition drive_state;
+} VcuStatusDefinition;
+
+typedef struct {
+    uint8_t bus;
+    uint32_t id;
     CanSignalDefinition signal;
 } SingleSignalDefinition;
 
@@ -47,6 +56,15 @@ static const TemperatureStatusDefinition temperature_status_definition = {
     { 8U, 8U, 1.0, -40.0, false } /* controller_temperature_c */
 };
 
+static const VcuStatusDefinition vcu_status_definition = {
+    CAN_DECODER_BUS_CAN0,
+    CAN_DECODER_ID_VCU_STATUS,
+    { 0U, 8U, 0.5, 0.0, false }, /* throttle_percent */
+    { 8U, 8U, 0.5, 0.0, false }, /* brake_percent */
+    { 16U, 8U, 1.0, 0.0, false }, /* mode */
+    { 24U, 8U, 1.0, 0.0, false } /* drive_state */
+};
+
 static const SingleSignalDefinition battery_temperature_definition = {
     CAN_DECODER_BUS_CAN0,
     CAN_DECODER_ID_BATTERY_TEMPERATURE,
@@ -66,6 +84,10 @@ static const SingleSignalDefinition dc_current_definition = {
 };
 
 static const uint32_t can_decoder_source_masks[CAN_DECODER_SOURCE_COUNT] = {
+    [CAN_DECODER_SOURCE_VCU_STATUS] =
+        VEHICLE_STATE_VALID_THROTTLE_PERCENT |
+        VEHICLE_STATE_VALID_BRAKE_PERCENT |
+        VEHICLE_STATE_VALID_DRIVE_STATE | VEHICLE_STATE_VALID_MODE,
     [CAN_DECODER_SOURCE_MOTOR_STATUS] =
         VEHICLE_STATE_VALID_MOTOR_RPM | VEHICLE_STATE_VALID_TORQUE_NM,
     [CAN_DECODER_SOURCE_TEMPERATURE_STATUS] =
@@ -147,6 +169,23 @@ static bool can_decoder_apply_signal(const CanMessage *message,
     return true;
 }
 
+static bool can_decoder_read_integer_range(
+    const CanMessage *message, const CanSignalDefinition *definition,
+    uint32_t minimum, uint32_t maximum, uint32_t *value)
+{
+    double decoded;
+
+    if (value == NULL || !can_decoder_read_signal(message, definition,
+                                                   &decoded) ||
+        decoded < (double)minimum || decoded > (double)maximum ||
+        decoded != (double)(uint32_t)decoded) {
+        return false;
+    }
+
+    *value = (uint32_t)decoded;
+    return true;
+}
+
 void can_decoder_init(CanDecoder *decoder)
 {
     if (decoder != NULL) {
@@ -220,7 +259,82 @@ bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
 
     can_decoder_expire_stale(decoder, message->timestamp_us, state);
 
-    if (message->bus == motor_status_definition.bus &&
+    if (message->bus == vcu_status_definition.bus &&
+        message->id == vcu_status_definition.id &&
+        message->id != CAN_DECODER_ID_UNASSIGNED) {
+        double throttle_value;
+        double brake_value;
+        uint32_t mode_value = 0U;
+        uint32_t drive_state_value = 0U;
+        bool throttle_updated = can_decoder_read_signal(
+            message, &vcu_status_definition.throttle_percent,
+            &throttle_value);
+        bool brake_updated = can_decoder_read_signal(
+            message, &vcu_status_definition.brake_percent, &brake_value);
+        bool mode_updated = can_decoder_read_integer_range(
+            message, &vcu_status_definition.mode, 0U, 254U, &mode_value);
+        bool drive_state_updated = can_decoder_read_integer_range(
+            message, &vcu_status_definition.drive_state, 0U, 1U,
+            &drive_state_value);
+
+        /* The physical range is 0..100 percent; raw 0xff is therefore
+         * reserved as invalid for the two one-byte percentage signals. */
+        if (throttle_updated &&
+            (throttle_value < 0.0 || throttle_value > 100.0)) {
+            throttle_updated = false;
+        }
+        if (brake_updated && (brake_value < 0.0 || brake_value > 100.0)) {
+            brake_updated = false;
+        }
+        if (throttle_updated) {
+            state->throttle_percent = throttle_value;
+            state->valid_mask |= VEHICLE_STATE_VALID_THROTTLE_PERCENT;
+        } else {
+            state->valid_mask &= ~VEHICLE_STATE_VALID_THROTTLE_PERCENT;
+        }
+        if (brake_updated) {
+            state->brake_percent = brake_value;
+            state->valid_mask |= VEHICLE_STATE_VALID_BRAKE_PERCENT;
+        } else {
+            state->valid_mask &= ~VEHICLE_STATE_VALID_BRAKE_PERCENT;
+        }
+        if (mode_updated) {
+            state->mode = mode_value;
+            state->valid_mask |= VEHICLE_STATE_VALID_MODE;
+        } else {
+            state->valid_mask &= ~VEHICLE_STATE_VALID_MODE;
+        }
+        if (drive_state_updated) {
+            state->drive_state = (VehicleDriveState)drive_state_value;
+            state->valid_mask |= VEHICLE_STATE_VALID_DRIVE_STATE;
+        } else {
+            state->valid_mask &= ~VEHICLE_STATE_VALID_DRIVE_STATE;
+        }
+
+        updated = throttle_updated || brake_updated || mode_updated ||
+                  drive_state_updated;
+        if (updated) {
+            can_decoder_mark_source(decoder, CAN_DECODER_SOURCE_VCU_STATUS,
+                                    message->timestamp_us);
+        }
+        if (throttle_updated) {
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> throttle=%.3f%%",
+                      message->id, state->throttle_percent);
+        }
+        if (brake_updated) {
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> brake=%.3f%%",
+                      message->id, state->brake_percent);
+        }
+        if (mode_updated) {
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> mode=%u", message->id,
+                      state->mode);
+        }
+        if (drive_state_updated) {
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> drive_state=%s",
+                      message->id,
+                      vehicle_drive_state_name(state->drive_state));
+        }
+    } else if (message->bus == motor_status_definition.bus &&
         message->id == motor_status_definition.id &&
         message->id != CAN_DECODER_ID_UNASSIGNED) {
         bool rpm_updated = can_decoder_apply_signal(
