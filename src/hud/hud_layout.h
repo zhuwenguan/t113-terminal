@@ -58,7 +58,7 @@ static inline void hud_ui_layout_default(HudLayout *layout)
         .rpm = { 220, 530, 215, 60 },
         .g_meter = { 435, 450, 135, 140 },
         .vehicle_info = { 570, 450, 185, 140 },
-        .rpm_max = 10000,
+        .rpm_max = 8000,
         .rpm_red_start = 8000,
         .main_div_1_x = 220,
         .main_div_2_x = 435,

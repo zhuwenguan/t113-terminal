@@ -275,7 +275,7 @@ static void test_layout_constants(void)
            layout.rpm_segment_gap == 2 && layout.rpm_segment_height == 9);
     TEST_CHECK(layout.g_center_x == 502 && layout.g_center_y == 528 &&
            layout.g_radius == 32);
-    TEST_CHECK(layout.rpm_max == 10000);
+    TEST_CHECK(layout.rpm_max == 8000);
     for (index = 0U; index < sizeof(rects) / sizeof(rects[0]); ++index) {
         TEST_CHECK(rects[index]->x >= 0 && rects[index]->y >= 0);
         TEST_CHECK(rects[index]->w > 0 && rects[index]->h > 0);
@@ -309,7 +309,7 @@ static void test_render_values_and_stride(HudContext *context)
     TEST_CHECK(rendered_text_call_found("86", 152, 521));
     TEST_CHECK(rendered_text_call_found("63%", 396, 492));
     TEST_CHECK(rendered_text_call_found("18%", 396, 532));
-    TEST_CHECK(rendered_text_call_found("8200", 388, 572));
+    TEST_CHECK(rendered_text_call_found("8000", 388, 572));
     TEST_CHECK(rendered_text_call_found("72 C", 614, 542));
     TEST_CHECK(rendered_text_call_found("64 C", 669, 542));
     TEST_CHECK(rendered_text_call_found("31 C", 724, 542));
