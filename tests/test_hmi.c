@@ -1,6 +1,6 @@
 #define _GNU_SOURCE
 
-#include <assert.h>
+#include "test_check.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stddef.h>
@@ -27,8 +27,8 @@ static ssize_t capture_write(void *context, const void *buffer, size_t length)
     Capture *capture = context;
     size_t accepted = length > 7U ? 7U : length;
 
-    assert(capture != NULL);
-    assert(capture->length + accepted <= sizeof(capture->buffer));
+    TEST_CHECK(capture != NULL);
+    TEST_CHECK(capture->length + accepted <= sizeof(capture->buffer));
     memcpy(capture->buffer + capture->length, buffer, accepted);
     capture->length += accepted;
     capture->write_calls++;
@@ -39,7 +39,7 @@ static int capture_drain(void *context)
 {
     Capture *capture = context;
 
-    assert(capture != NULL);
+    TEST_CHECK(capture != NULL);
     capture->drain_calls++;
     return 0;
 }
@@ -60,16 +60,16 @@ static void assert_commands_are_terminated(const Capture *capture,
                  capture->buffer[command_end + 2U] == 0xFFU)) {
             command_end++;
         }
-        assert(command_end + HMI_COMMAND_TERMINATOR_LENGTH <=
+        TEST_CHECK(command_end + HMI_COMMAND_TERMINATOR_LENGTH <=
                capture->length);
         offset = command_end + HMI_COMMAND_TERMINATOR_LENGTH;
         command_count++;
     }
-    assert(command_count == expected_commands);
-    assert(capture->length >= HMI_COMMAND_TERMINATOR_LENGTH);
-    assert(capture->buffer[capture->length - 3U] == 0xFFU);
-    assert(capture->buffer[capture->length - 2U] == 0xFFU);
-    assert(capture->buffer[capture->length - 1U] == 0xFFU);
+    TEST_CHECK(command_count == expected_commands);
+    TEST_CHECK(capture->length >= HMI_COMMAND_TERMINATOR_LENGTH);
+    TEST_CHECK(capture->buffer[capture->length - 3U] == 0xFFU);
+    TEST_CHECK(capture->buffer[capture->length - 2U] == 0xFFU);
+    TEST_CHECK(capture->buffer[capture->length - 1U] == 0xFFU);
 }
 
 static void make_test_state(VehicleState *state)
@@ -106,7 +106,7 @@ static uint64_t monotonic_us(void)
 {
     struct timespec now;
 
-    assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+    TEST_CHECK(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
     return (uint64_t)now.tv_sec * 1000000ULL +
            (uint64_t)now.tv_nsec / 1000ULL;
 }
@@ -119,19 +119,19 @@ static void test_serial_failure_is_nonblocking(const VehicleState *state)
     int master_fd;
 
     master_fd = posix_openpt(O_RDWR | O_NOCTTY | O_CLOEXEC);
-    assert(master_fd >= 0);
-    assert(grantpt(master_fd) == 0);
-    assert(unlockpt(master_fd) == 0);
+    TEST_CHECK(master_fd >= 0);
+    TEST_CHECK(grantpt(master_fd) == 0);
+    TEST_CHECK(unlockpt(master_fd) == 0);
     slave_path = ptsname(master_fd);
-    assert(slave_path != NULL);
-    assert(hmi_init(&serial_hmi, slave_path) == 0);
-    assert((fcntl(serial_hmi.fd, F_GETFL) & O_NONBLOCK) != 0);
-    assert(serial_hmi.transport.drain == NULL);
+    TEST_CHECK(slave_path != NULL);
+    TEST_CHECK(hmi_init(&serial_hmi, slave_path) == 0);
+    TEST_CHECK((fcntl(serial_hmi.fd, F_GETFL) & O_NONBLOCK) != 0);
+    TEST_CHECK(serial_hmi.transport.drain == NULL);
 
-    assert(close(master_fd) == 0);
+    TEST_CHECK(close(master_fd) == 0);
     start_us = monotonic_us();
-    assert(hmi_update(&serial_hmi, state->timestamp_us, state) < 0);
-    assert(monotonic_us() - start_us < 100000ULL);
+    TEST_CHECK(hmi_update(&serial_hmi, state->timestamp_us, state) < 0);
+    TEST_CHECK(monotonic_us() - start_us < 100000ULL);
     hmi_close(&serial_hmi);
 }
 
@@ -145,14 +145,14 @@ int main(int argc, char *argv[])
     size_t first_length;
     int sent;
 
-    assert(argc <= 2);
+    TEST_CHECK(argc <= 2);
     make_test_state(&state);
     if (argc == 2) {
         console_log_set_level(CONSOLE_LOG_DEBUG);
-        assert(hmi_init(&hmi, argv[1]) == 0);
-        assert((fcntl(hmi.fd, F_GETFL) & O_NONBLOCK) != 0);
-        assert(hmi.transport.drain == NULL);
-        assert(hmi_update(&hmi, state.timestamp_us, &state) == HMI_FIELD_COUNT);
+        TEST_CHECK(hmi_init(&hmi, argv[1]) == 0);
+        TEST_CHECK((fcntl(hmi.fd, F_GETFL) & O_NONBLOCK) != 0);
+        TEST_CHECK(hmi.transport.drain == NULL);
+        TEST_CHECK(hmi_update(&hmi, state.timestamp_us, &state) == HMI_FIELD_COUNT);
         hmi_close(&hmi);
         return 0;
     }
@@ -161,35 +161,35 @@ int main(int argc, char *argv[])
     transport.write = capture_write;
     transport.drain = capture_drain;
     transport.context = &capture;
-    assert(hmi_init_transport(&hmi, &transport) == 0);
+    TEST_CHECK(hmi_init_transport(&hmi, &transport) == 0);
 
     sent = hmi_update(&hmi, state.timestamp_us, &state);
-    assert(sent == HMI_FIELD_COUNT);
-    assert(capture.write_calls > 1U);
-    assert(capture.drain_calls == 1U);
+    TEST_CHECK(sent == HMI_FIELD_COUNT);
+    TEST_CHECK(capture.write_calls > 1U);
+    TEST_CHECK(capture.drain_calls == 1U);
     first_length = capture.length;
-    assert(memcmp(capture.buffer, "t0.txt=\"1234\"\xff\xff\xff",
+    TEST_CHECK(memcmp(capture.buffer, "t0.txt=\"1234\"\xff\xff\xff",
                   strlen("t0.txt=\"1234\"\xff\xff\xff")) == 0);
     assert_commands_are_terminated(&capture, HMI_FIELD_COUNT);
 
-    assert(hmi_update(&hmi, state.timestamp_us + 1000U, &state) == 0);
-    assert(capture.length == first_length);
+    TEST_CHECK(hmi_update(&hmi, state.timestamp_us + 1000U, &state) == 0);
+    TEST_CHECK(capture.length == first_length);
 
     state.motor_rpm = 1235.0;
     state.speed_kmh = 53.0;
     state.hv_soc_percent = 78.6;
     sent = hmi_update(&hmi, state.timestamp_us + 50000ULL, &state);
-    assert(sent == 2);
-    assert(capture.drain_calls == 2U);
+    TEST_CHECK(sent == 2);
+    TEST_CHECK(capture.drain_calls == 2U);
     assert_commands_are_terminated(&capture, HMI_FIELD_COUNT + 2U);
 
     state.hv_soc_percent = 78.7;
-    assert(hmi_update(&hmi, state.timestamp_us + 100000ULL, &state) == 0);
-    assert(hmi_update(&hmi, state.timestamp_us + 1000000ULL, &state) == 1);
-    assert(capture.drain_calls == 3U);
+    TEST_CHECK(hmi_update(&hmi, state.timestamp_us + 100000ULL, &state) == 0);
+    TEST_CHECK(hmi_update(&hmi, state.timestamp_us + 1000000ULL, &state) == 1);
+    TEST_CHECK(capture.drain_calls == 3U);
 
-    assert(hmi_get_field_map(&mapping_count) != NULL);
-    assert(mapping_count == HMI_FIELD_COUNT);
+    TEST_CHECK(hmi_get_field_map(&mapping_count) != NULL);
+    TEST_CHECK(mapping_count == HMI_FIELD_COUNT);
     hmi_close(&hmi);
     test_serial_failure_is_nonblocking(&state);
     return 0;

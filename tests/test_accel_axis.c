@@ -4,7 +4,7 @@
 #include "accel_test.h"
 #include "console_log.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <math.h>
 #include <string.h>
 
@@ -33,7 +33,7 @@ static void arm(AccelTest *test, VehicleState *state, uint64_t start_us)
     feed(test, state, start_us + 500000ULL, 0.0, 0.0, 2.0, 0.0, 200.0);
     feed(test, state, start_us + 1500000ULL, 0.0, 0.0, 2.0, 0.0,
          315.0);
-    assert(test->state == ACCEL_TEST_ARMED);
+    TEST_CHECK(test->state == ACCEL_TEST_ARMED);
 }
 
 static void feed_acquisition(AccelTest *test, VehicleState *state,
@@ -61,7 +61,7 @@ static void finish_line_run(AccelTest *test, VehicleState *state,
 
     feed_acquisition(test, state, launch_us, x_values, y_values, headings,
                      sizeof(x_values) / sizeof(x_values[0]));
-    assert(test->axis_locked);
+    TEST_CHECK(test->axis_locked);
     if (axis_x != NULL) {
         *axis_x = test->axis_x;
     }
@@ -72,13 +72,13 @@ static void finish_line_run(AccelTest *test, VehicleState *state,
          heading_deg);
     feed(test, state, launch_us + 1000000ULL, 76.2, 0.0, 50.0, 0.2,
          heading_deg);
-    assert(test->state == ACCEL_TEST_IDLE);
-    assert(test->result_valid);
-    assert(test->accel_distance_m == 75.0);
-    assert(test->accel_50m_time_s > 0.0);
-    assert(test->accel_time_s > test->accel_50m_time_s);
-    assert(!test->axis_locked);
-    assert(test->axis_sample_count == 0U);
+    TEST_CHECK(test->state == ACCEL_TEST_IDLE);
+    TEST_CHECK(test->result_valid);
+    TEST_CHECK(test->accel_distance_m == 75.0);
+    TEST_CHECK(test->accel_50m_time_s > 0.0);
+    TEST_CHECK(test->accel_time_s > test->accel_50m_time_s);
+    TEST_CHECK(!test->axis_locked);
+    TEST_CHECK(test->axis_sample_count == 0U);
 }
 
 static void test_correct_heading(void)
@@ -92,8 +92,8 @@ static void test_correct_heading(void)
     accel_test_init(&test);
     arm(&test, &state, 1000000ULL);
     finish_line_run(&test, &state, 3000000ULL, 90.0, &axis_x, &axis_y);
-    assert(axis_x > 0.99);
-    assert(fabs(axis_y) < 0.02);
+    TEST_CHECK(axis_x > 0.99);
+    TEST_CHECK(fabs(axis_y) < 0.02);
     accel_test_close(&test);
 }
 
@@ -116,14 +116,14 @@ static void test_launch_heading_is_ignored(void)
         feed_acquisition(&test, &state, 3000000ULL, x_values, y_values,
                          headings, sizeof(x_values) / sizeof(x_values[0]));
     }
-    assert(test.axis_locked);
+    TEST_CHECK(test.axis_locked);
     axis_x = test.axis_x;
     axis_y = test.axis_y;
-    assert(axis_x > 0.99);
-    assert(fabs(axis_y) < 0.02);
+    TEST_CHECK(axis_x > 0.99);
+    TEST_CHECK(fabs(axis_y) < 0.02);
     feed(&test, &state, 3700000ULL, 51.2, 0.0, 50.0, 0.2, 80.0);
     feed(&test, &state, 4000000ULL, 76.2, 0.0, 50.0, 0.2, 270.0);
-    assert(test.result_valid);
+    TEST_CHECK(test.result_valid);
     accel_test_close(&test);
 }
 
@@ -140,11 +140,11 @@ static void test_position_noise(void)
     arm(&test, &state, 1000000ULL);
     feed_acquisition(&test, &state, 3000000ULL, x_values, y_values,
                      headings, sizeof(x_values) / sizeof(x_values[0]));
-    assert(test.axis_locked);
-    assert(fabs(test.axis_y) < 0.05);
+    TEST_CHECK(test.axis_locked);
+    TEST_CHECK(fabs(test.axis_y) < 0.05);
     feed(&test, &state, 3700000ULL, 51.2, 0.2, 50.0, 0.2, 90.0);
     feed(&test, &state, 4000000ULL, 76.2, -0.2, 50.0, 0.2, 90.0);
-    assert(test.result_valid);
+    TEST_CHECK(test.result_valid);
     accel_test_close(&test);
 }
 
@@ -162,11 +162,11 @@ static void test_single_acquisition_outlier(void)
     arm(&test, &state, 1000000ULL);
     feed_acquisition(&test, &state, 3000000ULL, x_values, y_values,
                      headings, sizeof(x_values) / sizeof(x_values[0]));
-    assert(test.axis_locked);
-    assert(fabs(test.axis_y) < 0.12);
+    TEST_CHECK(test.axis_locked);
+    TEST_CHECK(fabs(test.axis_y) < 0.12);
     feed(&test, &state, 3900000ULL, 51.2, 0.0, 50.0, 0.2, 90.0);
     feed(&test, &state, 4200000ULL, 76.2, 0.0, 50.0, 0.2, 90.0);
-    assert(test.result_valid);
+    TEST_CHECK(test.result_valid);
     accel_test_close(&test);
 }
 
@@ -184,16 +184,16 @@ static void test_axis_sign_and_reset(void)
     arm(&test, &state, 1000000ULL);
     feed_acquisition(&test, &state, 3000000ULL, x_values, y_values,
                      headings, sizeof(x_values) / sizeof(x_values[0]));
-    assert(test.axis_locked);
-    assert(test.axis_x > 0.99);
-    assert(test.previous_along_m > 6.0);
+    TEST_CHECK(test.axis_locked);
+    TEST_CHECK(test.axis_x > 0.99);
+    TEST_CHECK(test.previous_along_m > 6.0);
 
     /* Abort after locking and ensure neither the axis nor its cache leaks. */
     feed(&test, &state, 3700000ULL, 6.2, 12.0, 50.0, 0.2, 90.0);
-    assert(test.state == ACCEL_TEST_IDLE);
-    assert(!test.axis_locked);
-    assert(test.axis_sample_count == 0U);
-    assert(!test.result_valid);
+    TEST_CHECK(test.state == ACCEL_TEST_IDLE);
+    TEST_CHECK(!test.axis_locked);
+    TEST_CHECK(test.axis_sample_count == 0U);
+    TEST_CHECK(!test.result_valid);
 
     arm(&test, &state, 10000000ULL);
     finish_line_run(&test, &state, 12000000ULL, 45.0, NULL, NULL);
@@ -223,14 +223,14 @@ static void test_timing_offset_replay(void)
          headings[4]);
     feed(&test, &state, 3600000ULL, x_values[5], y_values[5], 20.0, 0.2,
          headings[5]);
-    assert(test.axis_locked);
-    assert(test.timing_started);
-    assert(test.timing_start_timestamp_us == 3100000ULL);
+    TEST_CHECK(test.axis_locked);
+    TEST_CHECK(test.timing_started);
+    TEST_CHECK(test.timing_start_timestamp_us == 3100000ULL);
     feed(&test, &state, 8100000ULL, 51.2, 0.0, 50.0, 0.2, 15.0);
     feed(&test, &state, 10600000ULL, 76.2, 0.0, 50.0, 0.2, 15.0);
-    assert(test.result_valid);
-    assert(fabs(test.accel_50m_time_s - 5.0) < 0.05);
-    assert(fabs(test.accel_time_s - 7.5) < 0.05);
+    TEST_CHECK(test.result_valid);
+    TEST_CHECK(fabs(test.accel_50m_time_s - 5.0) < 0.05);
+    TEST_CHECK(fabs(test.accel_time_s - 7.5) < 0.05);
     accel_test_close(&test);
 }
 

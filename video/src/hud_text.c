@@ -414,6 +414,8 @@ bool hud_text_draw(HudTextAtlas *atlas, HudLayer *layer, int x, int baseline_y,
         size_t consumed;
         HudTextGlyph *glyph;
         int64_t glyph_x_26_6;
+        int64_t glyph_x_64;
+        int64_t glyph_y_64;
         int glyph_x;
         int glyph_y;
 
@@ -422,8 +424,13 @@ bool hud_text_draw(HudTextAtlas *atlas, HudLayer *layer, int x, int baseline_y,
         if (glyph == NULL) return false;
         glyph_x_26_6 = pen + (int64_t)glyph->bitmap_left *
                        HUD_TEXT_FIXED_POINT_ONE;
-        glyph_x = x + hud_text_floor_26_6(glyph_x_26_6) - alignment_offset;
-        glyph_y = baseline_y - glyph->bitmap_top;
+        glyph_x_64 = (int64_t)x + hud_text_floor_26_6(glyph_x_26_6) -
+                     (int64_t)alignment_offset;
+        glyph_y_64 = (int64_t)baseline_y - (int64_t)glyph->bitmap_top;
+        glyph_x = glyph_x_64 < INT_MIN ? INT_MIN :
+                  (glyph_x_64 > INT_MAX ? INT_MAX : (int)glyph_x_64);
+        glyph_y = glyph_y_64 < INT_MIN ? INT_MIN :
+                  (glyph_y_64 > INT_MAX ? INT_MAX : (int)glyph_y_64);
         if (glyph->bitmap != NULL && glyph->width != 0U &&
             glyph->height != 0U) {
             if (!hud_blend_coverage(layer, glyph_x, glyph_y, glyph->width,

@@ -4,7 +4,7 @@
 #include "console_log.h"
 #include "race_event.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -84,22 +84,22 @@ static void test_unknown_running_time(void)
     memset(&state, 0, sizeof(state));
     race_event_init(&event, NULL);
     update_local(&event, &state, 1000000ULL, 0.0, 0.0, 0.0, 90.0);
-    assert(state.lap_time_s == 0.0);
+    TEST_CHECK(state.lap_time_s == 0.0);
     update_local(&event, &state, 2000000ULL, 0.0, 0.0, 2.0, 90.0);
-    assert(!event.movement_started);
-    assert(state.lap_time_s == 0.0);
+    TEST_CHECK(!event.movement_started);
+    TEST_CHECK(state.lap_time_s == 0.0);
     update_local(&event, &state, 3000000ULL, 0.0, 0.0, 2.1, 90.0);
-    assert(event.movement_started);
-    assert(state.lap_time_s == 0.0);
+    TEST_CHECK(event.movement_started);
+    TEST_CHECK(state.lap_time_s == 0.0);
     update_local(&event, &state, 4000000ULL, 5.0, 0.0, 10.0, 90.0);
-    assert(fabs(state.lap_time_s - 1.0) < 0.001);
+    TEST_CHECK(fabs(state.lap_time_s - 1.0) < 0.001);
     update_local(&event, &state, 8000000ULL, 25.0, 0.0, 10.0, 90.0);
-    assert(fabs(state.lap_time_s - 5.0) < 0.001);
+    TEST_CHECK(fabs(state.lap_time_s - 5.0) < 0.001);
     update_local(&event, &state, 13000000ULL, 50.0, 0.0, 10.0, 90.0);
-    assert(fabs(state.lap_time_s - 10.0) < 0.001);
-    assert(event.mode == RACE_EVENT_UNKNOWN);
-    assert(!state.lap_valid);
-    assert(state.delta_time_s == 0.0);
+    TEST_CHECK(fabs(state.lap_time_s - 10.0) < 0.001);
+    TEST_CHECK(event.mode == RACE_EVENT_UNKNOWN);
+    TEST_CHECK(!state.lap_valid);
+    TEST_CHECK(state.delta_time_s == 0.0);
     race_event_close(&event);
 }
 
@@ -131,16 +131,16 @@ static void test_loop_transition_and_next_lap(void)
                 (double)(timestamp_us - event.movement_start_timestamp_us) /
                 1000000.0;
 
-            assert(fabs(state.lap_time_s - expected) < 0.01);
-            assert(state.lap_time_s >= previous_lap_time);
-            assert(state.lap_valid);
+            TEST_CHECK(fabs(state.lap_time_s - expected) < 0.01);
+            TEST_CHECK(state.lap_time_s >= previous_lap_time);
+            TEST_CHECK(state.lap_valid);
             saw_circuit = true;
             detection_index = index;
             break;
         }
         previous_lap_time = state.lap_time_s;
     }
-    assert(saw_circuit);
+    TEST_CHECK(saw_circuit);
 
     /* Continue until the next real crossing. The current LapTimer owns the
      * formal lap fields after circuit mode is established. */
@@ -151,11 +151,11 @@ static void test_loop_transition_and_next_lap(void)
                            TEST_LOOP_STEP_US;
         update_loop_point(&event, &state, timestamp_us, index);
     }
-    assert(event.mode == RACE_EVENT_CIRCUIT_MODE);
-    assert(event.lap_timer.lap_number >= 2U);
-    assert(state.last_lap_time_s > 0.0);
-    assert(state.lap_time_s >= 0.0);
-    assert(state.best_lap_time_s > 0.0);
+    TEST_CHECK(event.mode == RACE_EVENT_CIRCUIT_MODE);
+    TEST_CHECK(event.lap_timer.lap_number >= 2U);
+    TEST_CHECK(state.last_lap_time_s > 0.0);
+    TEST_CHECK(state.lap_time_s >= 0.0);
+    TEST_CHECK(state.best_lap_time_s > 0.0);
     race_event_close(&event);
 }
 
@@ -182,9 +182,9 @@ static void test_high_rate_ninety_second_loop(void)
                      2000000ULL + (uint64_t)step * TEST_HIGH_RATE_STEP_US,
                      x_m, y_m, 25.0, heading_deg);
     }
-    assert(event.mode == RACE_EVENT_CIRCUIT_MODE);
-    assert(event.gps_track.point_count > 400U);
-    assert(event.gps_track.point_count < 600U);
+    TEST_CHECK(event.mode == RACE_EVENT_CIRCUIT_MODE);
+    TEST_CHECK(event.gps_track.point_count > 400U);
+    TEST_CHECK(event.gps_track.point_count < 600U);
     race_event_close(&event);
 }
 
@@ -197,14 +197,14 @@ static void test_nine_hundred_second_storage_budget(void)
 
     gps_track_init(&track);
     for (sample = 0U; sample <= 45000U; ++sample) {
-        assert(gps_track_sample(
+        TEST_CHECK(gps_track_sample(
             &track, 1000000ULL + (uint64_t)sample * TEST_HIGH_RATE_STEP_US,
             TEST_ORIGIN_LATITUDE,
             TEST_ORIGIN_LONGITUDE + (double)sample / 1000000000.0,
             25.0, 90.0, 1.0, 200000ULL, &point, &stored));
     }
-    assert(track.point_count == 4501U);
-    assert(track.point_count < GPS_TRACK_MAX_POINTS);
+    TEST_CHECK(track.point_count == 4501U);
+    TEST_CHECK(track.point_count < GPS_TRACK_MAX_POINTS);
 }
 
 int main(void)

@@ -24,6 +24,7 @@ cmake --build build -j
 ```bash
 export T113_HOST=192.168.34.238
 scp build/t113_terminal root@$T113_HOST:/mnt/UDISK/t113_terminal
+scp -r assets root@$T113_HOST:/mnt/UDISK/
 ssh root@$T113_HOST 'chmod +x /mnt/UDISK/t113_terminal'
 ```
 

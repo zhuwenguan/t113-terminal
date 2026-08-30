@@ -1,6 +1,6 @@
 #include "race_event.h"
 
-#include <assert.h>
+#include "test_check.h"
 #include <string.h>
 
 static void update(RaceEvent *event, VehicleState *state,
@@ -31,7 +31,7 @@ static void wait_until_armed(RaceEvent *event, VehicleState *state,
            longitude, latitude);
     update(event, state, start_us + 1500000ULL, 2.7, 0.2, 90.0,
            longitude, latitude);
-    assert(event->accel_test.state == ACCEL_TEST_ARMED);
+    TEST_CHECK(event->accel_test.state == ACCEL_TEST_ARMED);
 }
 
 static void finish_run(RaceEvent *event, VehicleState *state,
@@ -41,37 +41,37 @@ static void finish_run(RaceEvent *event, VehicleState *state,
 
     /* Crossing either launch signal starts a run from the current point. */
     update(event, state, start_us, 4.0, 0.2, 90.0, longitude, latitude);
-    assert(event->accel_test.state == ACCEL_TEST_RUNNING);
+    TEST_CHECK(event->accel_test.state == ACCEL_TEST_RUNNING);
     update(event, state, start_us + 40000ULL, 5.0, 2.0, 90.0,
            longitude, latitude);
-    assert(event->accel_test.state == ACCEL_TEST_RUNNING);
+    TEST_CHECK(event->accel_test.state == ACCEL_TEST_RUNNING);
     update(event, state, start_us + 80000ULL, 7.0, 2.0, 90.0,
            longitude + 0.000014, latitude);
-    assert(!event->accel_test.timing_started);
+    TEST_CHECK(!event->accel_test.timing_started);
 
     /* Sub-metre GPS backtracking is noise, not evidence of a turn. */
     update(event, state, start_us + 120000ULL, 7.0, 0.2, 90.0,
            longitude + 0.000010, latitude);
-    assert(event->accel_test.state == ACCEL_TEST_RUNNING);
+    TEST_CHECK(event->accel_test.state == ACCEL_TEST_RUNNING);
 
     for (index = 1U; index <= 7U; ++index) {
         update(event, state, start_us + 120000ULL + index * 40000ULL,
                40.0, 0.2, index >= 6U ? 55.0 : 90.0,
                longitude + index * 0.000130, latitude);
         if (index == 1U) {
-            assert(event->accel_test.axis_locked);
-            assert(event->accel_test.timing_started);
+            TEST_CHECK(event->accel_test.axis_locked);
+            TEST_CHECK(event->accel_test.timing_started);
         }
     }
 
-    assert(event->accel_test.state == ACCEL_TEST_IDLE);
-    assert(event->accel_test.result_valid);
-    assert(event->accel_test.finish_timestamp_us < start_us + 400000ULL);
-    assert(event->accel_test.result_hold_until_us ==
+    TEST_CHECK(event->accel_test.state == ACCEL_TEST_IDLE);
+    TEST_CHECK(event->accel_test.result_valid);
+    TEST_CHECK(event->accel_test.finish_timestamp_us < start_us + 400000ULL);
+    TEST_CHECK(event->accel_test.result_hold_until_us ==
            start_us + 5400000ULL);
-    assert(state->accel_distance_m == 75.0);
-    assert(state->accel_50m_time_s > 0.0);
-    assert(state->accel_time_s > state->accel_50m_time_s);
+    TEST_CHECK(state->accel_distance_m == 75.0);
+    TEST_CHECK(state->accel_50m_time_s > 0.0);
+    TEST_CHECK(state->accel_time_s > state->accel_50m_time_s);
 }
 
 int main(void)
@@ -89,30 +89,30 @@ int main(void)
     wait_until_armed(&event, &state, 1000000ULL, start_longitude,
                      start_latitude);
     finish_run(&event, &state, 3000000ULL, start_longitude, start_latitude);
-    assert(event.mode == RACE_EVENT_UNKNOWN);
-    assert(state.event_mode == RACE_EVENT_UNKNOWN);
-    assert(event.gps_track.point_count > 0U);
+    TEST_CHECK(event.mode == RACE_EVENT_UNKNOWN);
+    TEST_CHECK(state.event_mode == RACE_EVENT_UNKNOWN);
+    TEST_CHECK(event.gps_track.point_count > 0U);
     first_50m_time_s = state.accel_50m_time_s;
     first_75m_time_s = state.accel_time_s;
 
     /* Results remain available while the next run waits for a new launch. */
     wait_until_armed(&event, &state, 5000000ULL,
                      start_longitude + 0.001200, start_latitude);
-    assert(state.accel_50m_time_s == first_50m_time_s);
-    assert(state.accel_time_s == first_75m_time_s);
+    TEST_CHECK(state.accel_50m_time_s == first_50m_time_s);
+    TEST_CHECK(state.accel_time_s == first_75m_time_s);
 
     /* A new launch cannot overwrite the result during its five-second hold. */
     update(&event, &state, 8399999ULL, 4.0, 2.0, 90.0,
            start_longitude + 0.001200, start_latitude);
-    assert(event.accel_test.state == ACCEL_TEST_ARMED);
-    assert(event.accel_test.result_valid);
-    assert(state.accel_distance_m == 75.0);
-    assert(state.accel_50m_time_s == first_50m_time_s);
-    assert(state.accel_time_s == first_75m_time_s);
+    TEST_CHECK(event.accel_test.state == ACCEL_TEST_ARMED);
+    TEST_CHECK(event.accel_test.result_valid);
+    TEST_CHECK(state.accel_distance_m == 75.0);
+    TEST_CHECK(state.accel_50m_time_s == first_50m_time_s);
+    TEST_CHECK(state.accel_time_s == first_75m_time_s);
 
     finish_run(&event, &state, 9000000ULL,
                start_longitude + 0.001200, start_latitude);
-    assert(event.mode == RACE_EVENT_UNKNOWN);
+    TEST_CHECK(event.mode == RACE_EVENT_UNKNOWN);
 
     race_event_close(&event);
 
@@ -133,14 +133,14 @@ int main(void)
            start_longitude + 0.000045, start_latitude);
     update(&event, &state, 12500000ULL, 30.0, 0.2, 90.0,
            start_longitude + 0.000075, start_latitude);
-    assert(event.accel_test.timing_started);
+    TEST_CHECK(event.accel_test.timing_started);
     update(&event, &state, 12600000ULL, 30.0, 0.2, 0.0,
            start_longitude + 0.000068, start_latitude);
     update(&event, &state, 12700000ULL, 30.0, 0.2, 0.0,
            start_longitude + 0.000050, start_latitude);
-    assert(event.accel_test.state == ACCEL_TEST_IDLE);
-    assert(!event.accel_test.result_valid);
-    assert(event.mode == RACE_EVENT_UNKNOWN);
+    TEST_CHECK(event.accel_test.state == ACCEL_TEST_IDLE);
+    TEST_CHECK(!event.accel_test.result_valid);
+    TEST_CHECK(event.mode == RACE_EVENT_UNKNOWN);
     race_event_close(&event);
 
     /* Backtrack tolerance is relative to the furthest forward position. */
@@ -158,14 +158,14 @@ int main(void)
            start_longitude + 0.000040, start_latitude);
     update(&event, &state, 32400000ULL, 20.0, 0.2, 90.0,
            start_longitude + 0.000075, start_latitude);
-    assert(event.accel_test.state == ACCEL_TEST_RUNNING);
+    TEST_CHECK(event.accel_test.state == ACCEL_TEST_RUNNING);
     update(&event, &state, 32500000ULL, 20.0, 0.2, 90.0,
            start_longitude + 0.000068, start_latitude);
-    assert(event.accel_test.state == ACCEL_TEST_RUNNING);
+    TEST_CHECK(event.accel_test.state == ACCEL_TEST_RUNNING);
     update(&event, &state, 32600000ULL, 20.0, 0.2, 90.0,
            start_longitude + 0.000050, start_latitude);
-    assert(event.accel_test.state == ACCEL_TEST_IDLE);
-    assert(!event.accel_test.result_valid);
+    TEST_CHECK(event.accel_test.state == ACCEL_TEST_IDLE);
+    TEST_CHECK(!event.accel_test.result_valid);
     race_event_close(&event);
 
     /* A 75 m run is still measured while circuit timing owns the mode. */
@@ -175,8 +175,8 @@ int main(void)
     wait_until_armed(&event, &state, 20000000ULL, start_longitude,
                      start_latitude);
     finish_run(&event, &state, 22000000ULL, start_longitude, start_latitude);
-    assert(event.mode == RACE_EVENT_CIRCUIT_MODE);
-    assert(state.event_mode == RACE_EVENT_CIRCUIT_MODE);
+    TEST_CHECK(event.mode == RACE_EVENT_CIRCUIT_MODE);
+    TEST_CHECK(state.event_mode == RACE_EVENT_CIRCUIT_MODE);
     race_event_close(&event);
     return 0;
 }
