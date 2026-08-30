@@ -7,15 +7,22 @@
 #include "can_receiver.h"
 #include <race/vehicle_state.h>
 
-/* CAN IDs are centralized here; add future signals as the matrix expands. */
+/* CAN buses and IDs are centralized here; add future signals as the matrix
+ * expands. */
+#define CAN_DECODER_BUS_CAN0 0U
+#define CAN_DECODER_BUS_CAN1 1U
 #define CAN_DECODER_ID_UNASSIGNED 0xffffffffU
 #define CAN_DECODER_ID_MOTOR_STATUS 0x121U
-#define CAN_DECODER_ID_TOTAL_VOLTAGE 0x201U
-#define CAN_DECODER_ID_DC_CURRENT 0x123U
+#define CAN_DECODER_ID_TEMPERATURE_STATUS 0x122U
+#define CAN_DECODER_ID_BATTERY_TEMPERATURE 0x201U
+#define CAN_DECODER_ID_TOTAL_VOLTAGE 0x01eU
+#define CAN_DECODER_ID_DC_CURRENT 0x00eU
 #define CAN_DECODER_FRESHNESS_TIMEOUT_US 1000000ULL
 
 typedef enum {
     CAN_DECODER_SOURCE_MOTOR_STATUS = 0,
+    CAN_DECODER_SOURCE_TEMPERATURE_STATUS,
+    CAN_DECODER_SOURCE_BATTERY_TEMPERATURE,
     CAN_DECODER_SOURCE_TOTAL_VOLTAGE,
     CAN_DECODER_SOURCE_DC_CURRENT,
     CAN_DECODER_SOURCE_COUNT

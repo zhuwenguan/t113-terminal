@@ -207,7 +207,11 @@ static bool main_hud_demo_state_getter(VehicleState *state, void *context)
                         VEHICLE_STATE_VALID_LV_VOLTAGE_V |
                         VEHICLE_STATE_VALID_THROTTLE_PERCENT |
                         VEHICLE_STATE_VALID_BRAKE_PERCENT |
-                        VEHICLE_STATE_VALID_DRIVE_STATE;
+                        VEHICLE_STATE_VALID_DRIVE_STATE |
+                        VEHICLE_STATE_VALID_MOTOR_TEMPERATURE_C |
+                        VEHICLE_STATE_VALID_CONTROLLER_TEMPERATURE_C |
+                        VEHICLE_STATE_VALID_BATTERY_TEMPERATURE_C |
+                        VEHICLE_STATE_VALID_MODE;
     state->lap_valid = true;
     state->lap_number = 2U;
     state->lap_time_s = 83.486;
@@ -218,6 +222,9 @@ static bool main_hud_demo_state_getter(VehicleState *state, void *context)
     state->acc_y = 8.43;
     state->motor_rpm = 4280.0;
     state->torque_nm = 96.0;
+    state->motor_temperature_c = 72.0;
+    state->controller_temperature_c = 64.0;
+    state->battery_temperature_c = 31.0;
     state->hv_voltage_v = 356.0;
     state->hv_current_a = 118.0;
     state->hv_power_w = 42000.0;
@@ -225,7 +232,8 @@ static bool main_hud_demo_state_getter(VehicleState *state, void *context)
     state->lv_voltage_v = 13.6;
     state->throttle_percent = 68.0;
     state->brake_percent = 18.0;
-    state->drive_state = VEHICLE_DRIVE_STATE_DRIVE;
+    state->mode = 1U;
+    state->drive_state = VEHICLE_DRIVE_STATE_READY;
     return true;
 }
 #endif

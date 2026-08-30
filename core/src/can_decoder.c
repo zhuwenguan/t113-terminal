@@ -8,39 +8,71 @@
 #include <string.h>
 
 typedef struct {
+    uint8_t bus;
     uint32_t id;
     CanSignalDefinition motor_rpm;
     CanSignalDefinition torque_nm;
 } MotorStatusDefinition;
 
 typedef struct {
+    uint8_t bus;
+    uint32_t id;
+    CanSignalDefinition motor_temperature;
+    CanSignalDefinition controller_temperature;
+} TemperatureStatusDefinition;
+
+typedef struct {
+    uint8_t bus;
     uint32_t id;
     CanSignalDefinition signal;
 } SingleSignalDefinition;
 
 /*
- * bit_offset uses LSB-first bit numbering within the CAN payload. The
- * configured values below come from the currently available CAN matrix.
+ * bit_offset uses LSB-first bit numbering within the CAN payload. Byte
+ * numbers in the CAN matrix are 0-based, so Byte4 starts at bit 32 and
+ * Byte6 starts at bit 48. The configured values below come from the current
+ * CAN matrix.
  */
 static const MotorStatusDefinition motor_status_definition = {
+    CAN_DECODER_BUS_CAN0,
     CAN_DECODER_ID_MOTOR_STATUS,
     { 0U, 16U, 1.0, -15000.0, false }, /* motor_rpm */
     { 16U, 16U, 1.0, -5000.0, false } /* torque_nm */
 };
 
+static const TemperatureStatusDefinition temperature_status_definition = {
+    CAN_DECODER_BUS_CAN0,
+    CAN_DECODER_ID_TEMPERATURE_STATUS,
+    { 0U, 8U, 1.0, -40.0, false }, /* motor_temperature_c */
+    { 8U, 8U, 1.0, -40.0, false } /* controller_temperature_c */
+};
+
+static const SingleSignalDefinition battery_temperature_definition = {
+    CAN_DECODER_BUS_CAN0,
+    CAN_DECODER_ID_BATTERY_TEMPERATURE,
+    { 24U, 8U, 1.0, 0.0, false } /* battery_temperature_c */
+};
+
 static const SingleSignalDefinition total_voltage_definition = {
+    CAN_DECODER_BUS_CAN1,
     CAN_DECODER_ID_TOTAL_VOLTAGE,
-    { 0U, 16U, 0.1, 0.0, false } /* hv_voltage_v */
+    { 32U, 16U, 0.15, 0.0, false } /* hv_voltage_v */
 };
 
 static const SingleSignalDefinition dc_current_definition = {
+    CAN_DECODER_BUS_CAN1,
     CAN_DECODER_ID_DC_CURRENT,
-    { 16U, 16U, 1.0, -1000.0, false } /* hv_current_a */
+    { 48U, 16U, 0.02, -650.0, false } /* hv_current_a */
 };
 
 static const uint32_t can_decoder_source_masks[CAN_DECODER_SOURCE_COUNT] = {
     [CAN_DECODER_SOURCE_MOTOR_STATUS] =
         VEHICLE_STATE_VALID_MOTOR_RPM | VEHICLE_STATE_VALID_TORQUE_NM,
+    [CAN_DECODER_SOURCE_TEMPERATURE_STATUS] =
+        VEHICLE_STATE_VALID_MOTOR_TEMPERATURE_C |
+        VEHICLE_STATE_VALID_CONTROLLER_TEMPERATURE_C,
+    [CAN_DECODER_SOURCE_BATTERY_TEMPERATURE] =
+        VEHICLE_STATE_VALID_BATTERY_TEMPERATURE_C,
     [CAN_DECODER_SOURCE_TOTAL_VOLTAGE] = VEHICLE_STATE_VALID_HV_VOLTAGE_V,
     [CAN_DECODER_SOURCE_DC_CURRENT] = VEHICLE_STATE_VALID_HV_CURRENT_A
 };
@@ -188,7 +220,8 @@ bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
 
     can_decoder_expire_stale(decoder, message->timestamp_us, state);
 
-    if (message->id == motor_status_definition.id &&
+    if (message->bus == motor_status_definition.bus &&
+        message->id == motor_status_definition.id &&
         message->id != CAN_DECODER_ID_UNASSIGNED) {
         bool rpm_updated = can_decoder_apply_signal(
             message, &motor_status_definition.motor_rpm,
@@ -210,7 +243,50 @@ bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> torque=%.3fNm",
                       message->id, state->torque_nm);
         }
-    } else if (message->id == total_voltage_definition.id &&
+    } else if (message->bus == temperature_status_definition.bus &&
+               message->id == temperature_status_definition.id &&
+               message->id != CAN_DECODER_ID_UNASSIGNED) {
+        bool motor_temperature_updated = can_decoder_apply_signal(
+            message, &temperature_status_definition.motor_temperature,
+            VEHICLE_STATE_VALID_MOTOR_TEMPERATURE_C,
+            &state->motor_temperature_c, state);
+        bool controller_temperature_updated = can_decoder_apply_signal(
+            message, &temperature_status_definition.controller_temperature,
+            VEHICLE_STATE_VALID_CONTROLLER_TEMPERATURE_C,
+            &state->controller_temperature_c, state);
+
+        updated = motor_temperature_updated || controller_temperature_updated;
+        if (updated) {
+            can_decoder_mark_source(decoder,
+                                    CAN_DECODER_SOURCE_TEMPERATURE_STATUS,
+                                    message->timestamp_us);
+        }
+        if (motor_temperature_updated) {
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> motor_temperature=%.3fC",
+                      message->id, state->motor_temperature_c);
+        }
+        if (controller_temperature_updated) {
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> controller_temperature=%.3fC",
+                      message->id, state->controller_temperature_c);
+        }
+    } else if (message->bus == battery_temperature_definition.bus &&
+               message->id == battery_temperature_definition.id &&
+               message->id != CAN_DECODER_ID_UNASSIGNED) {
+        bool battery_temperature_updated = can_decoder_apply_signal(
+            message, &battery_temperature_definition.signal,
+            VEHICLE_STATE_VALID_BATTERY_TEMPERATURE_C,
+            &state->battery_temperature_c, state);
+
+        updated = battery_temperature_updated;
+        if (battery_temperature_updated) {
+            can_decoder_mark_source(decoder,
+                                    CAN_DECODER_SOURCE_BATTERY_TEMPERATURE,
+                                    message->timestamp_us);
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> battery_temperature=%.3fC",
+                      message->id, state->battery_temperature_c);
+        }
+    } else if (message->bus == total_voltage_definition.bus &&
+               message->id == total_voltage_definition.id &&
                message->id != CAN_DECODER_ID_UNASSIGNED) {
         bool voltage_updated = can_decoder_apply_signal(
             message, &total_voltage_definition.signal,
@@ -235,7 +311,8 @@ bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_power=%.3fW",
                       message->id, state->hv_power_w);
         }
-    } else if (message->id == dc_current_definition.id &&
+    } else if (message->bus == dc_current_definition.bus &&
+               message->id == dc_current_definition.id &&
                message->id != CAN_DECODER_ID_UNASSIGNED) {
         bool current_updated = can_decoder_apply_signal(
             message, &dc_current_definition.signal,

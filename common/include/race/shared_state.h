@@ -7,7 +7,7 @@
 #include <race/vehicle_state.h>
 #define RACE_SHARED_STATE_NAME "/race_vehicle_state"
 #define RACE_SHM_MAGIC UINT32_C(0x52414345)
-#define RACE_SHM_VERSION 1U
+#define RACE_SHM_VERSION 2U
 #define RACE_STATE_STALE_US UINT64_C(1000000)
 #define RACE_SHARED_READ_RETRIES 1000U
 typedef struct {

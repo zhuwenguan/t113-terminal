@@ -7,9 +7,11 @@ BEGIN {
         exit 2
     }
 
-    can_path = output_dir "/can0.csv"
+    can0_path = output_dir "/can0.csv"
+    can1_path = output_dir "/can1.csv"
     lappro_path = output_dir "/lappro.csv"
-    print "timestamp_us,bus,id,flags,dlc,data" > can_path
+    print "timestamp_us,bus,id,flags,dlc,data" > can0_path
+    print "timestamp_us,bus,id,flags,dlc,data" > can1_path
     print "timestamp_us,gps_time,connected,authenticated,streaming,fix_type," \
           "num_sv,speed_kmh,heading_deg,hacc_m,altitude,longitude,latitude," \
           "acc_x,acc_y,acc_z" > lappro_path
@@ -42,11 +44,14 @@ BEGIN {
 
     for (sample = 0; sample <= duration_s * 20; ++sample) {
         timestamp_us = first_timestamp_us + sample * 50000
-        print timestamp_us ",0,0x121,0,4,99 3a 8a 13" > can_path
-        print timestamp_us + 1 ",0,0x201,0,4,a0 0f 00 00" > can_path
-        print timestamp_us + 2 ",0,0x123,0,4,00 00 f2 03" > can_path
+        print timestamp_us ",0,0x121,0,4,99 3a 8a 13" > can0_path
+        print timestamp_us + 3 ",0,0x122,0,2,48 55" > can0_path
+        print timestamp_us + 4 ",0,0x201,0,4,00 00 00 23" > can0_path
+        print timestamp_us + 1 ",1,0x01e,0,8,00 00 00 00 60 09 00 00" > can1_path
+        print timestamp_us + 2 ",1,0x00e,0,8,00 00 00 00 00 00 e8 80" > can1_path
     }
 
-    close(can_path)
+    close(can0_path)
+    close(can1_path)
     close(lappro_path)
 }
