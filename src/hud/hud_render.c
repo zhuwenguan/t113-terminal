@@ -200,15 +200,7 @@ static void hud_format_time(char *buffer, size_t size, bool valid,
 
 static const char *hud_drive_state_name(VehicleDriveState state)
 {
-    switch (state) {
-    case VEHICLE_DRIVE_STATE_OFF: return "OFF";
-    case VEHICLE_DRIVE_STATE_NEUTRAL: return "N";
-    case VEHICLE_DRIVE_STATE_DRIVE: return "D";
-    case VEHICLE_DRIVE_STATE_REVERSE: return "R";
-    case VEHICLE_DRIVE_STATE_READY: return "READY";
-    case VEHICLE_DRIVE_STATE_UNKNOWN:
-    default: return "--";
-    }
+    return vehicle_drive_state_name(state);
 }
 
 static HudPanelStyle hud_panel_style(const HudContext *hud, int radius)

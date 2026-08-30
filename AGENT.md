@@ -23,7 +23,7 @@
 - logger 使用一个线程和固定容量 `LogRecord` 队列；CAN/LapPro/Vehicle State producer 只入队，不直接执行文件写入；队列为低频 LapPro/Vehicle State 保留 32 个槽位，并按记录类型统计入队、写入、丢弃和写错误。
 - logger 每最多 32 条记录或首条记录起 1 秒批量写入一次 CSV，不对每条记录执行 `fsync`。
 - 每次运行原子创建 `/mnt/usb/sda/log/session_YYYYMMDD_HHMMSS[_NNN]/` 会话目录，并在其中生成 `can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv`、`vehicle_state_YYYYMMDD_HHMMSS.csv` 和 `lap_XXX[_NNN].csv`；所有文件以不覆盖方式创建，文件内记录时间戳仍使用 `CLOCK_MONOTONIC`。
-- Vehicle State 框架包含车速、航向/GPS 坐标、加速度、圈速/赛道字段，以及 `motor_rpm`、`torque_nm`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent` 和 `lv_voltage_v`；`hacc_m` 与 `altitude` 仅保留在 LapPro 原始日志，`hacc_m` 同时进入 GPS Track 用于虚拟起点质量过滤，不在 Vehicle State 中重复保存；当前 CAN Decoder 已接入 `0x121`、`0x201`、`0x123`，`hv_power_w` 由高压电压和电流计算，圈速字段及其他未提供字段保持预留状态。
+- Vehicle State 框架包含车速、航向/GPS 坐标、加速度、圈速/赛道字段，以及 `motor_rpm`、`torque_nm`、`motor_temperature_c`、`controller_temperature_c`、`battery_temperature_c`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent`、`lv_voltage_v`、`mode`、`throttle_percent`、`brake_percent` 和 `drive_state`；`drive_state` 当前定义为 `IDLE`/`READY`；`hacc_m` 与 `altitude` 仅保留在 LapPro 原始日志，`hacc_m` 同时进入 GPS Track 用于虚拟起点质量过滤，不在 Vehicle State 中重复保存；当前 CAN Decoder 在 CAN0 接入 `0x121`、`0x122`、`0x201`，在 CAN1 接入 `0x01e` 和 `0x00e`，`hv_power_w` 由高压电压和电流计算，`mode`、油门、刹车和 `drive_state` 暂未配置 CAN 映射。
 - `race_event` 始终维护闭环检测和圈速状态，`CIRCUIT_MODE` 不会被直线加速测试抢占；初始闭环匹配使用 8m 紧阈值排除近距离赛道交叉点，多个候选同时匹配时按历史时间更早者作为维修区汇入赛道点。
 - `gps_track` 使用固定容量 4096 点缓存将有效 GPS 转换为局部 XY，并保留时间、速度、航向和累计距离；缓存满后仅保留最近一半样本，闭环连续匹配不允许回退到初始历史锚点之前。
 - `lap_timer` 从重复 GPS 轨迹学习临时赛道，只在闭环点沿赛道前进方向的前 15% 范围内选择最直区域作为虚拟起终点；当前圈从车辆首次有效运动开始计时，首次识别后等待真实虚拟起点通过，再输出当前圈、最佳圈、Delta 和圈轨迹。圈轨迹通过固定容量队列和独立 writer 线程异步写入，赛事状态锁内不执行文件 I/O。
