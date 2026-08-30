@@ -18,7 +18,32 @@
 #define CAN_DECODER_ID_BATTERY_TEMPERATURE 0x201U
 #define CAN_DECODER_ID_TOTAL_VOLTAGE 0x01eU
 #define CAN_DECODER_ID_DC_CURRENT 0x00eU
+#define CAN_DECODER_ID_METER_CHARGE_DELTA CAN_DECODER_ID_DC_CURRENT
 #define CAN_DECODER_FRESHNESS_TIMEOUT_US 1000000ULL
+#define CAN_DECODER_METER_DELTA_MAS_OFFSET (-6000.0)
+#define CAN_DECODER_MAS_PER_AH 3600000.0
+#define CAN_DECODER_DEFAULT_SOC_INITIAL_PERCENT 100.0
+
+/* The currently available matrix does not provide a separate ID for the
+ * meter integral. It is therefore Byte0..1 of the existing 0x00e CAN1
+ * current frame. Change this alias when the meter protocol is confirmed. */
+
+typedef enum {
+    CAN_DECODER_SOC_INITIALIZATION_CONFIG = 0,
+    CAN_DECODER_SOC_INITIALIZATION_BMS,
+    CAN_DECODER_SOC_INITIALIZATION_FULL_CHARGE,
+    CAN_DECODER_SOC_INITIALIZATION_OCV,
+    CAN_DECODER_SOC_INITIALIZATION_MANUAL
+} CanDecoderSocInitialization;
+
+typedef struct {
+    double soc_initial_percent;
+    double battery_usable_capacity_ah;
+    CanDecoderSocInitialization soc_initialization;
+    /* Parser-layer signs normalize device polarity to discharge-positive. */
+    double current_discharge_sign;
+    double meter_delta_discharge_sign;
+} CanDecoderConfig;
 
 typedef enum {
     CAN_DECODER_SOURCE_VCU_STATUS = 0,
@@ -27,12 +52,21 @@ typedef enum {
     CAN_DECODER_SOURCE_BATTERY_TEMPERATURE,
     CAN_DECODER_SOURCE_TOTAL_VOLTAGE,
     CAN_DECODER_SOURCE_DC_CURRENT,
+    CAN_DECODER_SOURCE_METER_CHARGE_DELTA,
     CAN_DECODER_SOURCE_COUNT
 } CanDecoderSource;
 
 typedef struct {
     uint64_t source_timestamp_us[CAN_DECODER_SOURCE_COUNT];
     bool source_seen[CAN_DECODER_SOURCE_COUNT];
+    CanDecoderConfig config;
+    double meter_session_ah;
+    double software_session_ah;
+    bool software_current_seen;
+    uint64_t software_current_timestamp_us;
+    bool meter_frame_seen;
+    CanMessage meter_last_frame;
+    bool soc_config_valid;
 } CanDecoder;
 
 typedef struct {
@@ -44,6 +78,11 @@ typedef struct {
 } CanSignalDefinition;
 
 void can_decoder_init(CanDecoder *decoder);
+
+void can_decoder_config_default(CanDecoderConfig *config);
+
+void can_decoder_init_with_config(CanDecoder *decoder,
+                                  const CanDecoderConfig *config);
 
 /*
  * Decode one raw CAN message into the accumulated vehicle state.

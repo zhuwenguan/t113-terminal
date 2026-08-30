@@ -18,7 +18,9 @@ enum {
     VEHICLE_STATE_VALID_MOTOR_TEMPERATURE_C = 1U << 21,
     VEHICLE_STATE_VALID_CONTROLLER_TEMPERATURE_C = 1U << 22,
     VEHICLE_STATE_VALID_BATTERY_TEMPERATURE_C = 1U << 23,
-    VEHICLE_STATE_VALID_MODE = 1U << 24
+    VEHICLE_STATE_VALID_MODE = 1U << 24,
+    VEHICLE_STATE_VALID_HV_DISCHARGE_AH = 1U << 25,
+    VEHICLE_STATE_VALID_HV_SOFTWARE_DISCHARGE_AH = 1U << 26
 };
 typedef enum { VEHICLE_DRIVE_STATE_IDLE = 0, VEHICLE_DRIVE_STATE_READY = 1 }
     VehicleDriveState;
@@ -59,10 +61,11 @@ typedef struct {
     double torque_nm; double motor_temperature_c;
     double controller_temperature_c; double battery_temperature_c;
     double hv_voltage_v; double hv_current_a;
-    double hv_power_w; double hv_soc_percent; double lv_voltage_v;
+    double hv_power_w; double hv_soc_percent; double hv_discharge_ah;
+    double hv_software_discharge_ah; double lv_voltage_v;
     double accel_distance_m; double accel_50m_time_s; double accel_time_s;
     double max_acceleration; double throttle_percent; double brake_percent;
-    VehicleDriveState drive_state; uint32_t mode;
+    VehicleDriveState drive_state; uint32_t mode; bool hv_soc_valid;
     uint8_t reserved[32];
 } VehicleState;
 #endif

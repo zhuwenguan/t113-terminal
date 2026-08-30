@@ -253,7 +253,7 @@ static int logger_write_header(Logger *logger, LogRecordType type)
         }
     } else if (type == LOG_RECORD_TYPE_VEHICLE_STATE) {
         if (fprintf(logger->file[type],
-                    "# t113 Vehicle State log v6\n"
+                    "# t113 Vehicle State log v7\n"
                     "# timestamp_us,valid_mask,lap_number,lap_valid,"
                     "lap_time_s,last_lap_time_s,"
                     "best_lap_time_s,delta_time_s,"
@@ -264,6 +264,7 @@ static int logger_write_header(Logger *logger, LogRecordType type)
                     "motor_rpm,torque_nm,motor_temperature_c,"
                     "controller_temperature_c,battery_temperature_c,"
                     "hv_voltage_v,hv_current_a,hv_power_w,hv_soc_percent,"
+                    "hv_discharge_ah,hv_software_discharge_ah,hv_soc_valid,"
                     "lv_voltage_v,mode,throttle_percent,brake_percent,"
                     "drive_state,event_mode,accel_distance_m,"
                     "accel_50m_time_s,accel_time_s,max_acceleration\n") < 0) {
@@ -448,8 +449,8 @@ static int logger_write_vehicle_state_record(FILE *file,
     return fprintf(file,
                    "%llu,0x%08x,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u,%u,%u,%u,"
                    "%.6f,%.6f,%.8f,%.8f,%.6f,%.6f,%.6f,"
-                   "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,"
-                   "%u,%.3f,%.3f,%s,%s,%.3f,%.3f,%.3f,%.3f\n",
+                   "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,"
+                   "%u,%.3f,%u,%.3f,%.3f,%s,%s,%.3f,%.3f,%.3f,%.3f\n",
                    (unsigned long long)record->timestamp_us,
                    state->valid_mask,
                    (unsigned int)state->lap_number,
@@ -468,7 +469,10 @@ static int logger_write_vehicle_state_record(FILE *file,
                    state->controller_temperature_c,
                    state->battery_temperature_c, state->hv_voltage_v,
                    state->hv_current_a, state->hv_power_w,
-                   state->hv_soc_percent, state->lv_voltage_v, state->mode,
+                   state->hv_soc_percent, state->hv_discharge_ah,
+                   state->hv_software_discharge_ah,
+                   state->hv_soc_valid ? 1U : 0U, state->lv_voltage_v,
+                   state->mode,
                    state->throttle_percent, state->brake_percent,
                    vehicle_drive_state_name(state->drive_state),
                    vehicle_state_event_mode_name(state->event_mode),

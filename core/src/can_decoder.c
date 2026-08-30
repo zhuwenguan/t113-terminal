@@ -4,6 +4,7 @@
 #include "can_decoder.h"
 #include "console_log.h"
 
+#include <math.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -83,6 +84,13 @@ static const SingleSignalDefinition dc_current_definition = {
     { 48U, 16U, 0.02, -650.0, false } /* hv_current_a */
 };
 
+static const SingleSignalDefinition meter_charge_delta_definition = {
+    CAN_DECODER_BUS_CAN1,
+    CAN_DECODER_ID_METER_CHARGE_DELTA,
+    { 0U, 16U, 1.0, CAN_DECODER_METER_DELTA_MAS_OFFSET, false }
+    /* meter delta: Byte0..1, mA.s/bit, offset -6000 mA.s */
+};
+
 static const uint32_t can_decoder_source_masks[CAN_DECODER_SOURCE_COUNT] = {
     [CAN_DECODER_SOURCE_VCU_STATUS] =
         VEHICLE_STATE_VALID_THROTTLE_PERCENT |
@@ -96,21 +104,57 @@ static const uint32_t can_decoder_source_masks[CAN_DECODER_SOURCE_COUNT] = {
     [CAN_DECODER_SOURCE_BATTERY_TEMPERATURE] =
         VEHICLE_STATE_VALID_BATTERY_TEMPERATURE_C,
     [CAN_DECODER_SOURCE_TOTAL_VOLTAGE] = VEHICLE_STATE_VALID_HV_VOLTAGE_V,
-    [CAN_DECODER_SOURCE_DC_CURRENT] = VEHICLE_STATE_VALID_HV_CURRENT_A
+    [CAN_DECODER_SOURCE_DC_CURRENT] = VEHICLE_STATE_VALID_HV_CURRENT_A,
+    [CAN_DECODER_SOURCE_METER_CHARGE_DELTA] =
+        VEHICLE_STATE_VALID_HV_SOC_PERCENT |
+        VEHICLE_STATE_VALID_HV_DISCHARGE_AH
 };
 
-/* No CAN mapping has been supplied yet for HV SOC or LV voltage. */
-
-static bool can_decoder_read_signal(const CanMessage *message,
-                                    const CanSignalDefinition *definition,
-                                    double *value)
+static bool can_decoder_sign_is_valid(double sign)
 {
-    uint64_t raw_value = 0;
+    return isfinite(sign) && (sign == 1.0 || sign == -1.0);
+}
+
+static bool can_decoder_config_is_valid(const CanDecoderConfig *config)
+{
+    if (config == NULL || !isfinite(config->soc_initial_percent) ||
+        config->soc_initial_percent < 0.0 ||
+        config->soc_initial_percent > 100.0 ||
+        !isfinite(config->battery_usable_capacity_ah) ||
+        config->battery_usable_capacity_ah <= 0.0 ||
+        config->soc_initialization < CAN_DECODER_SOC_INITIALIZATION_CONFIG ||
+        config->soc_initialization > CAN_DECODER_SOC_INITIALIZATION_MANUAL ||
+        !can_decoder_sign_is_valid(config->current_discharge_sign) ||
+        !can_decoder_sign_is_valid(config->meter_delta_discharge_sign)) {
+        return false;
+    }
+    return true;
+}
+
+void can_decoder_config_default(CanDecoderConfig *config)
+{
+    if (config == NULL) {
+        return;
+    }
+    memset(config, 0, sizeof(*config));
+    config->soc_initial_percent = CAN_DECODER_DEFAULT_SOC_INITIAL_PERCENT;
+    /* Zero deliberately means that the vehicle pack capacity is not yet
+     * configured; SOC stays invalid instead of presenting a made-up value. */
+    config->battery_usable_capacity_ah = 0.0;
+    config->soc_initialization = CAN_DECODER_SOC_INITIALIZATION_CONFIG;
+    config->current_discharge_sign = 1.0;
+    config->meter_delta_discharge_sign = 1.0;
+}
+
+static bool can_decoder_read_raw_signal(const CanMessage *message,
+                                        const CanSignalDefinition *definition,
+                                        uint64_t *raw_value)
+{
     uint64_t mask;
     uint8_t bit;
     uint16_t available_bits;
 
-    if (message == NULL || definition == NULL || value == NULL ||
+    if (message == NULL || definition == NULL || raw_value == NULL ||
         definition->bit_length == 0U || definition->bit_length > 64U) {
         return false;
     }
@@ -121,20 +165,41 @@ static bool can_decoder_read_signal(const CanMessage *message,
         return false;
     }
 
+    *raw_value = 0U;
+
     for (bit = 0U; bit < definition->bit_length; ++bit) {
         uint16_t payload_bit = (uint16_t)definition->bit_offset + bit;
         uint8_t byte_index = (uint8_t)(payload_bit / 8U);
         uint8_t bit_index = (uint8_t)(payload_bit % 8U);
 
         if ((message->data[byte_index] & (uint8_t)(1U << bit_index)) != 0U) {
-            raw_value |= 1ULL << bit;
+            *raw_value |= 1ULL << bit;
         }
     }
 
     mask = definition->bit_length == 64U
                ? UINT64_MAX
                : (1ULL << definition->bit_length) - 1ULL;
-    raw_value &= mask;
+    *raw_value &= mask;
+
+    return true;
+}
+
+static bool can_decoder_read_signal(const CanMessage *message,
+                                    const CanSignalDefinition *definition,
+                                    double *value)
+{
+    uint64_t raw_value = 0;
+    uint64_t mask;
+
+    if (value == NULL || !can_decoder_read_raw_signal(message, definition,
+                                                       &raw_value)) {
+        return false;
+    }
+
+    mask = definition->bit_length == 64U
+               ? UINT64_MAX
+               : (1ULL << definition->bit_length) - 1ULL;
 
     if (definition->is_signed && definition->bit_length < 64U &&
         (raw_value & (1ULL << (definition->bit_length - 1U))) != 0U) {
@@ -188,8 +253,35 @@ static bool can_decoder_read_integer_range(
 
 void can_decoder_init(CanDecoder *decoder)
 {
-    if (decoder != NULL) {
-        memset(decoder, 0, sizeof(*decoder));
+    CanDecoderConfig config;
+
+    can_decoder_config_default(&config);
+    can_decoder_init_with_config(decoder, &config);
+}
+
+void can_decoder_init_with_config(CanDecoder *decoder,
+                                  const CanDecoderConfig *config)
+{
+    CanDecoderConfig default_config;
+
+    if (decoder == NULL) {
+        return;
+    }
+    if (config == NULL) {
+        can_decoder_config_default(&default_config);
+        config = &default_config;
+    }
+    memset(decoder, 0, sizeof(*decoder));
+    decoder->config = *config;
+    decoder->soc_config_valid = can_decoder_config_is_valid(config);
+    /* Keep parser polarity usable even when the rest of the SOC config is
+     * incomplete. Invalid signs are never allowed to reach state fields. */
+    if (!can_decoder_sign_is_valid(decoder->config.current_discharge_sign)) {
+        decoder->config.current_discharge_sign = 1.0;
+    }
+    if (!can_decoder_sign_is_valid(
+            decoder->config.meter_delta_discharge_sign)) {
+        decoder->config.meter_delta_discharge_sign = 1.0;
     }
 }
 
@@ -235,20 +327,162 @@ void can_decoder_expire_stale(CanDecoder *decoder, uint64_t timestamp_us,
     if (!voltage_fresh || !current_fresh) {
         state->valid_mask &= ~VEHICLE_STATE_VALID_HV_POWER_W;
     }
+    if (!can_decoder_source_is_fresh(
+            decoder, CAN_DECODER_SOURCE_METER_CHARGE_DELTA,
+            timestamp_us)) {
+        state->valid_mask &= ~can_decoder_source_masks[
+            CAN_DECODER_SOURCE_METER_CHARGE_DELTA];
+        state->hv_soc_valid = false;
+    }
 }
 
 static void can_decoder_mark_source(CanDecoder *decoder,
                                     CanDecoderSource source,
                                     uint64_t timestamp_us)
 {
-    decoder->source_timestamp_us[source] = timestamp_us;
-    decoder->source_seen[source] = true;
+    if (!decoder->source_seen[source] ||
+        timestamp_us > decoder->source_timestamp_us[source]) {
+        decoder->source_timestamp_us[source] = timestamp_us;
+        decoder->source_seen[source] = true;
+    }
+}
+
+static bool can_decoder_same_meter_frame(const CanDecoder *decoder,
+                                         const CanMessage *message)
+{
+    if (decoder == NULL || message == NULL || !decoder->meter_frame_seen) {
+        return false;
+    }
+    return decoder->meter_last_frame.timestamp_us == message->timestamp_us &&
+           decoder->meter_last_frame.bus == message->bus &&
+           decoder->meter_last_frame.id == message->id &&
+           decoder->meter_last_frame.flags == message->flags &&
+           decoder->meter_last_frame.dlc == message->dlc &&
+           memcmp(decoder->meter_last_frame.data, message->data,
+                  sizeof(message->data)) == 0;
+}
+
+static bool can_decoder_read_meter_delta(const CanMessage *message,
+                                         double *delta_mas)
+{
+    uint64_t raw_value = 0U;
+
+    if (delta_mas == NULL ||
+        !can_decoder_read_raw_signal(
+            message, &meter_charge_delta_definition.signal, &raw_value) ||
+        raw_value > UINT16_MAX) {
+        return false;
+    }
+
+    /* This is already the meter's per-frame integral. Do not apply the
+     * nominal 40 ms period here or it would integrate the signal twice. */
+    *delta_mas = (double)raw_value * 1.0 +
+                 CAN_DECODER_METER_DELTA_MAS_OFFSET;
+    return isfinite(*delta_mas);
+}
+
+static bool can_decoder_update_software_session(
+    CanDecoder *decoder, uint64_t timestamp_us, double current_a)
+{
+    uint64_t elapsed_us;
+    double delta_ah;
+    double next_session_ah;
+
+    if (decoder == NULL || !isfinite(current_a)) {
+        return false;
+    }
+    if (!decoder->software_current_seen) {
+        decoder->software_current_seen = true;
+        decoder->software_current_timestamp_us = timestamp_us;
+        return false;
+    }
+    if (timestamp_us <= decoder->software_current_timestamp_us) {
+        return false;
+    }
+
+    elapsed_us = timestamp_us - decoder->software_current_timestamp_us;
+    decoder->software_current_timestamp_us = timestamp_us;
+    /* Do not turn a long current-signal outage into a diagnostic jump. The
+     * next valid sample becomes the new integration baseline after timeout. */
+    if (elapsed_us > CAN_DECODER_FRESHNESS_TIMEOUT_US) {
+        return false;
+    }
+    delta_ah = current_a * ((double)elapsed_us / 1000000.0) / 3600.0;
+    next_session_ah = decoder->software_session_ah + delta_ah;
+    if (!isfinite(next_session_ah)) {
+        return false;
+    }
+    decoder->software_session_ah = next_session_ah;
+    return true;
+}
+
+static double can_decoder_clamp_soc(double soc_percent)
+{
+    if (soc_percent < 0.0) {
+        return 0.0;
+    }
+    if (soc_percent > 100.0) {
+        return 100.0;
+    }
+    return soc_percent;
+}
+
+static bool can_decoder_update_meter_state(CanDecoder *decoder,
+                                           const CanMessage *message,
+                                           double *delta_mas,
+                                           VehicleState *state)
+{
+    double delta_ah;
+    double next_session_ah;
+    double soc_percent;
+
+    if (decoder == NULL || message == NULL || delta_mas == NULL ||
+        state == NULL || message->bus != meter_charge_delta_definition.bus ||
+        message->id != meter_charge_delta_definition.id ||
+        message->id == CAN_DECODER_ID_UNASSIGNED ||
+        can_decoder_same_meter_frame(decoder, message) ||
+        !can_decoder_read_meter_delta(message, delta_mas)) {
+        return false;
+    }
+
+    delta_ah = *delta_mas * decoder->config.meter_delta_discharge_sign /
+               CAN_DECODER_MAS_PER_AH;
+    next_session_ah = decoder->meter_session_ah + delta_ah;
+    if (!isfinite(delta_ah) || !isfinite(next_session_ah)) {
+        return false;
+    }
+    decoder->meter_session_ah = next_session_ah;
+    decoder->meter_last_frame = *message;
+    decoder->meter_frame_seen = true;
+    state->hv_discharge_ah = decoder->meter_session_ah;
+    state->valid_mask |= VEHICLE_STATE_VALID_HV_DISCHARGE_AH;
+
+    if (!decoder->soc_config_valid) {
+        state->hv_soc_valid = false;
+        state->valid_mask &= ~VEHICLE_STATE_VALID_HV_SOC_PERCENT;
+        return true;
+    }
+
+    soc_percent = decoder->config.soc_initial_percent -
+                  decoder->meter_session_ah /
+                      decoder->config.battery_usable_capacity_ah * 100.0;
+    if (!isfinite(soc_percent)) {
+        state->hv_soc_valid = false;
+        state->valid_mask &= ~VEHICLE_STATE_VALID_HV_SOC_PERCENT;
+        return true;
+    }
+    state->hv_soc_percent = can_decoder_clamp_soc(soc_percent);
+    state->hv_soc_valid = true;
+    state->valid_mask |= VEHICLE_STATE_VALID_HV_SOC_PERCENT;
+    return true;
 }
 
 bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
                          VehicleState *state)
 {
     bool updated = false;
+    bool meter_updated = false;
+    double meter_delta_mas = 0.0;
 
     if (decoder == NULL || message == NULL || state == NULL ||
         message->dlc > sizeof(message->data) ||
@@ -258,6 +492,8 @@ bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
     }
 
     can_decoder_expire_stale(decoder, message->timestamp_us, state);
+    meter_updated = can_decoder_update_meter_state(
+        decoder, message, &meter_delta_mas, state);
 
     if (message->bus == vcu_status_definition.bus &&
         message->id == vcu_status_definition.id &&
@@ -428,11 +664,26 @@ bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
     } else if (message->bus == dc_current_definition.bus &&
                message->id == dc_current_definition.id &&
                message->id != CAN_DECODER_ID_UNASSIGNED) {
-        bool current_updated = can_decoder_apply_signal(
-            message, &dc_current_definition.signal,
-            VEHICLE_STATE_VALID_HV_CURRENT_A, &state->hv_current_a, state);
+        double current_value = 0.0;
+        bool current_updated = can_decoder_read_signal(
+            message, &dc_current_definition.signal, &current_value);
+        bool software_updated = false;
         bool power_updated = false;
 
+        if (current_updated) {
+            current_value *= decoder->config.current_discharge_sign;
+            current_updated = isfinite(current_value);
+        }
+        if (current_updated) {
+            state->hv_current_a = current_value;
+            state->valid_mask |= VEHICLE_STATE_VALID_HV_CURRENT_A;
+            software_updated = can_decoder_update_software_session(
+                decoder, message->timestamp_us, current_value);
+            state->hv_software_discharge_ah = decoder->software_session_ah;
+            state->valid_mask |= VEHICLE_STATE_VALID_HV_SOFTWARE_DISCHARGE_AH;
+        } else {
+            state->valid_mask &= ~VEHICLE_STATE_VALID_HV_CURRENT_A;
+        }
         if ((state->valid_mask & VEHICLE_STATE_VALID_HV_VOLTAGE_V) != 0U) {
             state->hv_power_w = state->hv_voltage_v * state->hv_current_a;
             state->valid_mask |= VEHICLE_STATE_VALID_HV_POWER_W;
@@ -447,11 +698,26 @@ bool can_decoder_process(CanDecoder *decoder, const CanMessage *message,
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_current=%.3fA",
                       message->id, state->hv_current_a);
         }
+        if (software_updated) {
+            LOG_DEBUG("DECODER: CAN ID=0x%08x -> software_session=%.9fAh",
+                      message->id, decoder->software_session_ah);
+        }
         if (power_updated) {
             LOG_DEBUG("DECODER: CAN ID=0x%08x -> hv_power=%.3fW",
                       message->id, state->hv_power_w);
         }
     }
+
+    if (meter_updated) {
+        can_decoder_mark_source(decoder,
+                                CAN_DECODER_SOURCE_METER_CHARGE_DELTA,
+                                message->timestamp_us);
+        LOG_DEBUG("DECODER: CAN ID=0x%08x -> meter_delta=%.3fmA.s "
+                  "meter_session=%.9fAh soc=%.3f%% valid=%u",
+                  message->id, meter_delta_mas, decoder->meter_session_ah,
+                  state->hv_soc_percent, state->hv_soc_valid ? 1U : 0U);
+    }
+    updated = updated || meter_updated;
 
     if (updated) {
         can_decoder_expire_stale(decoder, message->timestamp_us, state);

@@ -44,6 +44,8 @@ typedef struct {
     bool replay;
     char replay_directory[PATH_MAX];
     double replay_speed;
+    double soc_initial_percent;
+    double battery_usable_capacity_ah;
 #ifndef RACE_CORE_DAEMON
     bool video;
     bool video_only;
@@ -356,6 +358,8 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
     }
     memset(options, 0, sizeof(*options));
     options->replay_speed = 1.0;
+    options->soc_initial_percent = CAN_DECODER_DEFAULT_SOC_INITIAL_PERCENT;
+    options->battery_usable_capacity_ah = 0.0;
 #ifndef RACE_CORE_DAEMON
     options->video_compositor_mode = VIDEO_COMPOSITOR_MODE_AUTO;
     options->hud_style = HUD_STYLE_UI;
@@ -396,6 +400,26 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
             if (!main_parse_speed(argv[argument_index] + 15U,
                                   &options->replay_speed)) {
                 LOG_ERROR("Invalid --replay-speed; use 0 or a positive number");
+                return -1;
+            }
+            continue;
+        }
+        if (strcmp(argv[argument_index], "--soc-initial-percent") == 0) {
+            if (argument_index + 1 >= argc ||
+                !main_parse_speed(argv[++argument_index],
+                                  &options->soc_initial_percent) ||
+                options->soc_initial_percent > 100.0) {
+                LOG_ERROR("Invalid --soc-initial-percent; use 0..100");
+                return -1;
+            }
+            continue;
+        }
+        if (strcmp(argv[argument_index], "--battery-capacity-ah") == 0) {
+            if (argument_index + 1 >= argc ||
+                !main_parse_speed(argv[++argument_index],
+                                  &options->battery_usable_capacity_ah) ||
+                options->battery_usable_capacity_ah <= 0.0) {
+                LOG_ERROR("Invalid --battery-capacity-ah; use a positive value");
                 return -1;
             }
             continue;
@@ -522,10 +546,15 @@ static int main_parse_arguments(int argc, char *argv[], MainOptions *options)
 
 #ifdef RACE_CORE_DAEMON
         LOG_ERROR("Usage: %s [-v|--verbose] [--replay <directory>] "
-                  "[--replay-speed <number>]", argv[0]);
+                  "[--replay-speed <number>] "
+                  "[--soc-initial-percent <0..100>] "
+                  "[--battery-capacity-ah <positive>]", argv[0]);
 #else
         LOG_ERROR("Usage: %s [-v|--verbose] [--replay <directory>] "
-                  "[--replay-speed <number>] [--video] [--camera <path>] "
+                  "[--replay-speed <number>] "
+                  "[--soc-initial-percent <0..100>] "
+                  "[--battery-capacity-ah <positive>] [--video] "
+                  "[--camera <path>] "
                   "[--video-only] "
                   "[--video-record [path]] [--video-frame <path>] "
                   "[--video-seconds <number>] "
@@ -559,6 +588,7 @@ int main(int argc, char *argv[])
 #endif
     static MainCanContext can_context;
     MainOptions options;
+    CanDecoderConfig decoder_config;
     bool lappro_ready = false;
     bool logger_ready = false;
     bool hmi_ready = false;
@@ -574,10 +604,17 @@ int main(int argc, char *argv[])
 #ifndef RACE_CORE_DAEMON
     memset(&video_pipeline, 0, sizeof(video_pipeline));
 #endif
-    can_decoder_init(&can_context.decoder);
     console_log_init();
     if (main_parse_arguments(argc, argv, &options) < 0) {
         return EXIT_FAILURE;
+    }
+    can_decoder_config_default(&decoder_config);
+    decoder_config.soc_initial_percent = options.soc_initial_percent;
+    decoder_config.battery_usable_capacity_ah =
+        options.battery_usable_capacity_ah;
+    can_decoder_init_with_config(&can_context.decoder, &decoder_config);
+    if (options.battery_usable_capacity_ah <= 0.0) {
+        LOG_WARN("HV SOC disabled until --battery-capacity-ah is configured");
     }
 #ifndef RACE_CORE_DAEMON
     if (main_install_signals() < 0) {

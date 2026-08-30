@@ -47,6 +47,16 @@ ssh root@$T113_HOST
 
 `-v/--verbose` 会显示 CAN 逐帧、LapPro GPS、CAN Decoder 和赛事检测调试信息；不加参数时默认只显示 INFO 及以上日志。
 
+SOC 使用电表 CAN1 的每帧电荷积分，启动时必须提供电池可用容量；初始 SOC
+默认是 100%。例如 20 Ah 电池：
+
+```bash
+/mnt/UDISK/t113_terminal --battery-capacity-ah 20
+```
+
+也可用 `--soc-initial-percent <0..100>` 覆盖初始值。未提供容量时仍累计并记录
+电表 Ah，但 `hv_soc_valid` 为 0，避免输出看似有效的 SOC。
+
 后台启动：
 
 ```bash
@@ -97,6 +107,10 @@ Replay 不启动 CAN 和 LapPro 硬件输入，从指定目录读取 CSV。目�
 ```
 
 `--replay-speed` 含义：`0` 为最快回放，`1` 为原始时间速度，`2` 为 2 倍速。
+
+回放 SOC 时同样需要传入 `--battery-capacity-ah`；Vehicle State 日志按现有
+降采样周期记录 `hv_soc_percent`、`hv_discharge_ah`、
+`hv_software_discharge_ah` 和 `hv_soc_valid`，原始积分帧仍只进入 CAN raw log。
 
 同时查看 DEBUG：
 
