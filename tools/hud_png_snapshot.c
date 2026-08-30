@@ -32,7 +32,7 @@ static VehicleState snapshot_state(unsigned int index)
     state.brake_percent = 18.0;
     state.acc_x = -2.06;
     state.acc_y = 8.43;
-    state.drive_state = VEHICLE_DRIVE_STATE_DRIVE;
+    state.drive_state = VEHICLE_DRIVE_STATE_READY;
     state.lap_valid = true;
     state.lap_number = 2U;
     state.lap_time_s = 83.486;

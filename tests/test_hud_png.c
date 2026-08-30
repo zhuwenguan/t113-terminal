@@ -144,7 +144,7 @@ static VehicleState make_state(double rpm, double throttle, double brake,
     state.brake_percent = brake;
     state.acc_x = longitudinal_g * 9.80665;
     state.acc_y = lateral_g * 9.80665;
-    state.drive_state = VEHICLE_DRIVE_STATE_DRIVE;
+    state.drive_state = VEHICLE_DRIVE_STATE_READY;
     state.lap_valid = true;
     state.lap_number = 2U;
     state.lap_time_s = 83.486;

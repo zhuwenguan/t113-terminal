@@ -387,7 +387,7 @@ static void pipeline_set_mock_state(VehicleState *state, unsigned int frame)
     state->acc_y = ((int)(frame % 50U) - 25) * 0.05;
     state->throttle_percent = 34.0 + (double)(frame % 40U) * 0.5;
     state->brake_percent = frame % 75U < 8U ? 18.0 : 0.0;
-    state->drive_state = VEHICLE_DRIVE_STATE_DRIVE;
+    state->drive_state = VEHICLE_DRIVE_STATE_READY;
 }
 
 static bool pipeline_buffer_alloc(const IonApi *ion, PipelineBuffer *buffer,

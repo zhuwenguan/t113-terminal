@@ -51,7 +51,7 @@ static VehicleState make_state(void)
     state.brake_percent = 8.0;
     state.acc_x = -0.6 * 9.80665;
     state.acc_y = 0.8 * 9.80665;
-    state.drive_state = VEHICLE_DRIVE_STATE_DRIVE;
+    state.drive_state = VEHICLE_DRIVE_STATE_READY;
     state.lap_valid = true;
     state.lap_number = 2U;
     state.lap_time_s = 83.486;

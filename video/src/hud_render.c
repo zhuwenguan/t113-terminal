@@ -418,15 +418,7 @@ static void hud_png_draw_icon(const HudRenderer *renderer, HudLayer *layer,
 
 static const char *hud_png_drive_state(VehicleDriveState state)
 {
-    switch (state) {
-    case VEHICLE_DRIVE_STATE_OFF: return "OFF";
-    case VEHICLE_DRIVE_STATE_NEUTRAL: return "N";
-    case VEHICLE_DRIVE_STATE_DRIVE: return "D";
-    case VEHICLE_DRIVE_STATE_REVERSE: return "R";
-    case VEHICLE_DRIVE_STATE_READY: return "RTD";
-    case VEHICLE_DRIVE_STATE_UNKNOWN:
-    default: return "--";
-    }
+    return vehicle_drive_state_name(state);
 }
 
 static void hud_png_draw_rpm(const HudRenderer *renderer, HudLayer *layer,
