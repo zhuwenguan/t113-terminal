@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "state_reader.h"
+#include "bms_state_reader.h"
 #include "video_cache.h"
 #include "webd_config.h"
 #include "webd_json.h"
@@ -25,6 +26,7 @@
 
 #define WEBD_MAX_WS_CLIENTS 8U
 #define WEBD_JSON_BUFFER_SIZE 8192U
+#define WEBD_BMS_JSON_BUFFER_SIZE 65536U
 #define WEBD_SERVER_THREADS 8U
 #define WEBD_CLIENT_SEND_TIMEOUT_MS 1000U
 #define WEBD_MAX_VIDEO_CLIENTS 4U
@@ -49,12 +51,15 @@ typedef struct {
 struct WebdRuntime {
     WebdConfig config;
     StateReader reader;
+    BmsStateReader bms_reader;
     WebdVideoCache video_cache;
     pthread_mutex_t state_mutex;
     StateSnapshot latest;
     char latest_json[WEBD_JSON_BUFFER_SIZE];
     size_t latest_json_length;
     bool have_latest;
+    BmsStateSnapshot latest_bms;
+    bool have_latest_bms;
     pthread_t state_thread;
     bool state_thread_started;
 
@@ -157,6 +162,28 @@ static bool cache_get(WebdRuntime *runtime, uint64_t now_mono_us,
     return available;
 }
 
+static bool bms_cache_get(WebdRuntime *runtime, uint64_t now_mono_us,
+                          BmsStateSnapshot *snapshot)
+{
+    bool available;
+
+    pthread_mutex_lock(&runtime->state_mutex);
+    available = runtime->have_latest_bms;
+    if (available && snapshot != NULL) {
+        *snapshot = runtime->latest_bms;
+    }
+    pthread_mutex_unlock(&runtime->state_mutex);
+    if (available && snapshot != NULL) {
+        snapshot->fresh = !race_shared_bms_state_is_stale(
+            now_mono_us, snapshot->published_mono_us, BMS_STALE_TIMEOUT_US);
+        if (snapshot->published_mono_us != 0U &&
+            now_mono_us >= snapshot->published_mono_us) {
+            snapshot->age_us = now_mono_us - snapshot->published_mono_us;
+        }
+    }
+    return available;
+}
+
 static void cache_publish(WebdRuntime *runtime, const StateSnapshot *snapshot,
                           const char *json, size_t json_length)
 {
@@ -192,6 +219,15 @@ static void cache_mark_unavailable(WebdRuntime *runtime, uint64_t now_mono_us)
         snapshot.age_us = now_mono_us - snapshot.published_mono_us;
     }
     cache_publish(runtime, &snapshot, NULL, 0U);
+}
+
+static void bms_cache_mark_unavailable(WebdRuntime *runtime)
+{
+    pthread_mutex_lock(&runtime->state_mutex);
+    if (runtime->have_latest_bms) {
+        runtime->latest_bms.fresh = false;
+    }
+    pthread_mutex_unlock(&runtime->state_mutex);
 }
 
 static void enforce_client_send_deadlines(WebdRuntime *runtime,
@@ -262,6 +298,19 @@ static void *state_cache_thread_main(void *context)
                           json_length >= 0 ? (size_t)json_length : 0U);
         } else {
             cache_mark_unavailable(runtime, now_mono_us);
+        }
+        {
+            BmsStateSnapshot bms_snapshot;
+
+            if (bms_state_reader_read(&runtime->bms_reader, now_mono_us,
+                                      &bms_snapshot) == 0) {
+                pthread_mutex_lock(&runtime->state_mutex);
+                runtime->latest_bms = bms_snapshot;
+                runtime->have_latest_bms = true;
+                pthread_mutex_unlock(&runtime->state_mutex);
+            } else {
+                bms_cache_mark_unavailable(runtime);
+            }
         }
         enforce_client_send_deadlines(runtime, now_mono_us);
 
@@ -494,6 +543,34 @@ static int handle_api_state(WebdRuntime *runtime,
                               body, (size_t)body_length, head_request);
 }
 
+static int handle_api_bms(WebdRuntime *runtime,
+                          struct mg_connection *connection,
+                          bool head_request)
+{
+    BmsStateSnapshot snapshot;
+    char body[WEBD_BMS_JSON_BUFFER_SIZE];
+    int body_length;
+
+    if (!bms_cache_get(runtime, monotonic_us(), &snapshot)) {
+        body_length = webd_json_bms_error(body, sizeof(body),
+                                          "bms_state_unavailable");
+        return send_http_response(connection, 503,
+                                  "application/json; charset=utf-8", body,
+                                  (size_t)body_length, head_request);
+    }
+    body_length = webd_json_bms(body, sizeof(body), &snapshot);
+    if (body_length < 0) {
+        body_length = webd_json_bms_error(body, sizeof(body),
+                                          "json_encode_failed");
+        return send_http_response(connection, 500,
+                                  "application/json; charset=utf-8", body,
+                                  (size_t)body_length, head_request);
+    }
+    return send_http_response(connection, 200,
+                              "application/json; charset=utf-8", body,
+                              (size_t)body_length, head_request);
+}
+
 static int handle_api_system(WebdRuntime *runtime,
                              struct mg_connection *connection,
                              bool head_request)
@@ -553,6 +630,9 @@ static int webd_begin_request(struct mg_connection *connection)
     }
     if (strcmp(request_info->local_uri, "/api/state") == 0) {
         return handle_api_state(runtime, connection, head_request);
+    }
+    if (strcmp(request_info->local_uri, "/api/bms") == 0) {
+        return handle_api_bms(runtime, connection, head_request);
     }
     if (strcmp(request_info->local_uri, "/video/live.mjpg") == 0) {
         return handle_video_live(runtime, connection, head_request);
@@ -979,6 +1059,7 @@ int main(int argc, char **argv)
     }
     runtime.start_mono_us = monotonic_us();
     state_reader_init(&runtime.reader, runtime.config.state_shm_name);
+    bms_state_reader_init(&runtime.bms_reader, runtime.config.bms_shm_name);
     webd_video_cache_init(&runtime.video_cache,
                           runtime.config.video_shm_name);
     video_cache_initialized = true;
@@ -996,6 +1077,7 @@ int main(int argc, char **argv)
             webd_video_cache_stop(&runtime.video_cache);
         }
         state_reader_close(&runtime.reader);
+        bms_state_reader_close(&runtime.bms_reader);
         return EXIT_FAILURE;
     }
     clients_mutex_initialized = true;
@@ -1013,6 +1095,7 @@ int main(int argc, char **argv)
             webd_video_cache_stop(&runtime.video_cache);
         }
         state_reader_close(&runtime.reader);
+        bms_state_reader_close(&runtime.bms_reader);
         return EXIT_FAILURE;
     }
     if (start_server(&runtime) < 0) {
@@ -1030,6 +1113,7 @@ int main(int argc, char **argv)
             webd_video_cache_stop(&runtime.video_cache);
         }
         state_reader_close(&runtime.reader);
+        bms_state_reader_close(&runtime.bms_reader);
         return EXIT_FAILURE;
     }
     if (webd_video_cache_start(&runtime.video_cache) < 0) {
@@ -1062,6 +1146,7 @@ int main(int argc, char **argv)
         webd_video_cache_stop(&runtime.video_cache);
     }
     state_reader_close(&runtime.reader);
+    bms_state_reader_close(&runtime.bms_reader);
     (void)mg_exit_library();
     pthread_mutex_destroy(&runtime.clients_mutex);
     pthread_mutex_destroy(&runtime.state_mutex);

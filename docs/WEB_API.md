@@ -6,6 +6,10 @@ The server reads one latest `VehicleState` cache populated from the
 frame cache populated from `/race_latest_jpeg`. It does not send commands to
 the vehicle.
 
+BMS data is a separate passive-monitor snapshot populated by `race_core` from
+`awlink1` and read from `/race_bms_state`. It is not part of `VehicleState` or
+the vehicle telemetry WebSocket.
+
 ## Endpoints
 
 `GET /api/state` returns `200` with the latest fresh state. If the core has not
@@ -98,9 +102,24 @@ after one second without a fresh core publication.
 `GET /api/capabilities` currently returns:
 
 ```json
-{"mode":"local","telemetry":true,"video":true,"logs":false,
- "config":false,"remote_video":false}
+{"mode":"local","telemetry":true,"video":true,"bms":true,
+ "logs":false,"config":false,"remote_video":false}
 ```
+
+`GET /api/bms` returns the latest BMS snapshot. It contains `meter`, four
+`boards`, and a newest-first fixed-capacity `fault_events` array. `board.id`
+is zero-based and `board.board_number` is one-based for display. `cells_v`
+always has 24 positions and `temps_c` always has exactly the eight live
+temperature positions T01--T08; their companion validity arrays identify
+which positions are current. Stale measurement values are JSON `null`, never
+fabricated zeroes. Fault arrays retain T01--T24 and balance channels even when
+the corresponding live measurement tile is not displayed. Fault events are
+created only on a 0->1 or 1->0 transition and contain `FAULT` or `RECOVERED`.
+
+The BMS response uses `status` values `LIVE`, `WAITING`, or `STALE`. If the
+shared BMS object has never been published, the endpoint returns HTTP 503 with
+`status: "OFFLINE"`. The API is polled by `/bms.html` once per second so the
+existing vehicle-state WebSocket remains unchanged.
 
 `GET /video/live.mjpg` is a native browser-compatible
 `multipart/x-mixed-replace` MJPEG stream. The dashboard attaches one `<img>`

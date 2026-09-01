@@ -4,6 +4,7 @@
 #include <stddef.h>
 
 #include "state_reader.h"
+#include "bms_state_reader.h"
 #include "video_cache.h"
 
 int webd_json_state(char *buffer, size_t buffer_size,
@@ -11,6 +12,12 @@ int webd_json_state(char *buffer, size_t buffer_size,
 
 int webd_json_state_error(char *buffer, size_t buffer_size,
                           const char *error_message);
+
+int webd_json_bms(char *buffer, size_t buffer_size,
+                  const BmsStateSnapshot *snapshot);
+
+int webd_json_bms_error(char *buffer, size_t buffer_size,
+                        const char *error_message);
 
 int webd_json_system(char *buffer, size_t buffer_size,
                      uint64_t uptime_s, const StateSnapshot *snapshot,

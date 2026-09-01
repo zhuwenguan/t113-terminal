@@ -9,6 +9,7 @@
 
 #include "can_decoder.h"
 #include "can_receiver.h"
+#include "bms_parser.h"
 #include "console_log.h"
 #include "hmi.h"
 #include "lappro.h"
@@ -25,18 +26,21 @@
 #endif
 #ifdef RACE_CORE_DAEMON
 #include <race/shared_state.h>
+#include <race/bms_shared_state.h>
 #endif
 
 typedef struct {
     pthread_mutex_t mutex;
     Logger *logger;
     CanDecoder decoder;
+    BmsParser bms_parser;
     RaceEvent race_event;
     VehicleState vehicle_state;
     VehicleStateClock clock;
     Hmi *hmi;
 #ifdef RACE_CORE_DAEMON
     RaceSharedStateHandle shared_state;
+    RaceSharedBmsStateHandle bms_shared_state;
 #endif
 } MainCanContext;
 
@@ -115,6 +119,15 @@ static void main_vehicle_state_snapshot_locked(MainCanContext *can_context,
     state->timestamp_us = timestamp_us;
 }
 
+#ifdef RACE_CORE_DAEMON
+static void main_bms_state_snapshot_locked(MainCanContext *can_context,
+                                           uint64_t timestamp_us,
+                                           BmsState *state)
+{
+    bms_parser_snapshot(&can_context->bms_parser, timestamp_us, state);
+}
+#endif
+
 static bool main_vehicle_state_snapshot_provider(uint64_t timestamp_us,
                                                  VehicleState *state,
                                                  void *context)
@@ -154,6 +167,18 @@ static void main_vehicle_state_snapshot_sink(uint64_t timestamp_us,
         (void)hmi_update(can_context->hmi, timestamp_us, state);
     }
 #ifdef RACE_CORE_DAEMON
+    {
+        BmsState bms_state;
+
+        pthread_mutex_lock(&can_context->mutex);
+        main_bms_state_snapshot_locked(can_context, timestamp_us, &bms_state);
+        pthread_mutex_unlock(&can_context->mutex);
+        if (can_context->bms_shared_state.mapping != NULL &&
+            race_shared_bms_state_publish(&can_context->bms_shared_state,
+                                           &bms_state, main_monotonic_us()) < 0) {
+            LOG_WARN("BMS shared-state publish failed: %s", strerror(errno));
+        }
+    }
     if (can_context->shared_state.mapping != NULL &&
         race_shared_state_publish(&can_context->shared_state, state,
                                   main_monotonic_us()) < 0) {
@@ -288,6 +313,7 @@ static void main_can_message_sink(const CanMessage *message, void *context)
                                    message->timestamp_us);
     (void)can_decoder_process(&can_context->decoder, message,
                               &can_context->vehicle_state);
+    (void)bms_parser_process(&can_context->bms_parser, message);
     pthread_mutex_unlock(&can_context->mutex);
 }
 
@@ -613,6 +639,7 @@ int main(int argc, char *argv[])
     decoder_config.battery_usable_capacity_ah =
         options.battery_usable_capacity_ah;
     can_decoder_init_with_config(&can_context.decoder, &decoder_config);
+    bms_parser_init(&can_context.bms_parser);
     if (options.battery_usable_capacity_ah <= 0.0) {
         LOG_WARN("HV SOC disabled until --battery-capacity-ah is configured");
     }
@@ -629,9 +656,19 @@ int main(int argc, char *argv[])
                   strerror(errno));
         return EXIT_FAILURE;
     }
+    if (race_shared_bms_state_writer_open(&can_context.bms_shared_state,
+                                          NULL) < 0) {
+        LOG_ERROR("Cannot create %s: %s", RACE_BMS_SHARED_STATE_NAME,
+                  strerror(errno));
+        race_shared_state_close(&can_context.shared_state);
+        return EXIT_FAILURE;
+    }
     LOG_INFO("Shared VehicleState ready: name=%s version=%u size=%zu",
              RACE_SHARED_STATE_NAME, RACE_SHM_VERSION,
              sizeof(RaceSharedState));
+    LOG_INFO("Shared BmsState ready: name=%s version=%u size=%zu",
+             RACE_BMS_SHARED_STATE_NAME, RACE_BMS_SHM_VERSION,
+             sizeof(RaceSharedBmsState));
 #endif
     vehicle_state_clock_init(&can_context.clock, options.replay);
     context_mutex_result = pthread_mutex_init(&can_context.mutex, NULL);
@@ -639,6 +676,7 @@ int main(int argc, char *argv[])
         LOG_ERROR("Cannot initialize VehicleState mutex: %s",
                   strerror(context_mutex_result));
 #ifdef RACE_CORE_DAEMON
+        race_shared_bms_state_close(&can_context.bms_shared_state);
         race_shared_state_close(&can_context.shared_state);
 #endif
         return EXIT_FAILURE;
@@ -762,6 +800,7 @@ int main(int argc, char *argv[])
         sync();
         pthread_mutex_destroy(&can_context.mutex);
 #ifdef RACE_CORE_DAEMON
+        race_shared_bms_state_close(&can_context.bms_shared_state);
         race_shared_state_close(&can_context.shared_state);
 #endif
         if (result < 0) {
@@ -803,6 +842,7 @@ int main(int argc, char *argv[])
         }
         pthread_mutex_destroy(&can_context.mutex);
 #ifdef RACE_CORE_DAEMON
+        race_shared_bms_state_close(&can_context.bms_shared_state);
         race_shared_state_close(&can_context.shared_state);
 #endif
         return EXIT_FAILURE;
@@ -845,6 +885,7 @@ int main(int argc, char *argv[])
     sync();
     pthread_mutex_destroy(&can_context.mutex);
 #ifdef RACE_CORE_DAEMON
+    race_shared_bms_state_close(&can_context.bms_shared_state);
     race_shared_state_close(&can_context.shared_state);
 #endif
 

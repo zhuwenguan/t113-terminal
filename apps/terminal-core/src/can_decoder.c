@@ -86,7 +86,7 @@ static const SingleSignalDefinition dc_current_definition = {
 
 static const SingleSignalDefinition meter_charge_delta_definition = {
     CAN_DECODER_BUS_CAN1,
-    CAN_DECODER_ID_METER_CHARGE_DELTA,
+    CAN_DECODER_ID_UNASSIGNED,
     { 0U, 16U, 1.0, CAN_DECODER_METER_DELTA_MAS_OFFSET, false }
     /* meter delta: Byte0..1, mA.s/bit, offset -6000 mA.s */
 };

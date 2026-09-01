@@ -9,6 +9,7 @@ project(t113_terminal
 set(RACE_COMMON_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/common/include)
 set(RACE_COMMON_LEGACY_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/common/include/race)
 set(RACE_IPC_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/ipc/include)
+set(RACE_BMS_STATE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/bms-state/include)
 set(RACE_VEHICLE_STATE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/vehicle-state/include)
 set(RACE_CORE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/include)
 set(RACE_VIDEO_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/video/include)
@@ -34,6 +35,7 @@ set(T113_HUD_SOURCES
 include_directories(
     ${RACE_COMMON_INCLUDE_DIR}
     ${RACE_IPC_INCLUDE_DIR}
+    ${RACE_BMS_STATE_INCLUDE_DIR}
     ${RACE_VEHICLE_STATE_INCLUDE_DIR}
 )
 include_directories(${CMAKE_SOURCE_DIR}/third_party)
@@ -350,6 +352,7 @@ target_link_libraries(race_state_dump PRIVATE race_common race_ipc)
 add_executable(webd
     ${RACE_WEBD_DIR}/src/main.c
     ${RACE_WEBD_DIR}/src/state_reader.c
+    ${RACE_WEBD_DIR}/src/bms_state_reader.c
     ${RACE_WEBD_DIR}/src/video_cache.c
     ${RACE_WEBD_DIR}/src/webd_config.c
     ${RACE_WEBD_DIR}/src/webd_json.c
@@ -384,6 +387,7 @@ add_executable(t113_terminal
     ${RACE_TERMINAL_CORE_DIR}/main.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_receiver.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_decoder.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/bms_parser.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c
@@ -450,7 +454,8 @@ target_link_libraries(t113_terminal PRIVATE t113_freetype)
 # process fault boundary, not merely a runtime command-line distinction.
 set(RACE_CORE_SOURCES
     ${RACE_TERMINAL_CORE_DIR}/main.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_receiver.c
-    ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_decoder.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_decoder.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/bms_parser.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/race_event.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/logger.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/replay.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/vehicle_state_clock.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/vehicle_state_snapshot.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/hmi.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/lappro.c
@@ -502,6 +507,7 @@ install(DIRECTORY libs/ipc/include/race DESTINATION include)
 install(DIRECTORY libs/video-ipc/include/race DESTINATION include)
 install(DIRECTORY libs/protocol/include/race DESTINATION include)
 install(DIRECTORY libs/vehicle-state/include/race DESTINATION include)
+install(DIRECTORY libs/bms-state/include/race DESTINATION include)
 install(DIRECTORY configs/t113/ DESTINATION config)
 install(DIRECTORY web/dashboard/dist/ DESTINATION web)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
@@ -711,6 +717,32 @@ if (BUILD_TESTING)
     )
     target_link_libraries(test_can_decoder PRIVATE race_common Threads::Threads)
     add_test(NAME can_decoder_freshness COMMAND test_can_decoder)
+
+    add_executable(test_bms_parser
+        tests/test_bms_parser.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/bms_parser.c
+    )
+    target_include_directories(test_bms_parser PRIVATE
+        ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR}
+    )
+    target_compile_options(test_bms_parser PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_bms_parser PRIVATE race_common Threads::Threads)
+    add_test(NAME bms_parser_protocol_faults_and_edges COMMAND test_bms_parser)
+
+    add_executable(test_bms_shared_state tests/test_bms_shared_state.c)
+    target_compile_options(test_bms_shared_state PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_bms_shared_state PRIVATE race_common race_ipc)
+    add_test(NAME bms_shared_state_abi_and_consistent_reads
+             COMMAND test_bms_shared_state)
+
+    add_executable(test_bms_json
+        tests/test_bms_json.c
+        ${RACE_WEBD_DIR}/src/webd_json.c
+    )
+    target_include_directories(test_bms_json PRIVATE ${RACE_WEBD_DIR}/include)
+    target_compile_options(test_bms_json PRIVATE -Wall -Wextra -Wpedantic)
+    target_link_libraries(test_bms_json PRIVATE race_common race_video_ipc)
+    add_test(NAME bms_json_structure_and_stale_nulls COMMAND test_bms_json)
 
     add_executable(test_lap_timer_trace
         tests/test_lap_timer_trace.c

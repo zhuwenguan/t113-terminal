@@ -18,15 +18,15 @@
 #define CAN_DECODER_ID_BATTERY_TEMPERATURE 0x201U
 #define CAN_DECODER_ID_TOTAL_VOLTAGE 0x01eU
 #define CAN_DECODER_ID_DC_CURRENT 0x00eU
-#define CAN_DECODER_ID_METER_CHARGE_DELTA CAN_DECODER_ID_DC_CURRENT
+#define CAN_DECODER_ID_METER_CHARGE_DELTA CAN_DECODER_ID_UNASSIGNED
 #define CAN_DECODER_FRESHNESS_TIMEOUT_US 1000000ULL
 #define CAN_DECODER_METER_DELTA_MAS_OFFSET (-6000.0)
 #define CAN_DECODER_MAS_PER_AH 3600000.0
 #define CAN_DECODER_DEFAULT_SOC_INITIAL_PERCENT 100.0
 
-/* The currently available matrix does not provide a separate ID for the
- * meter integral. It is therefore Byte0..1 of the existing 0x00e CAN1
- * current frame. Change this alias when the meter protocol is confirmed. */
+/* The current authoritative KPE601 matrix uses every field of 0x00e for
+ * HV2/HV1/HV3/current, so there is no confirmed charge-delta signal. Keep
+ * the legacy accumulator disabled rather than interpreting HV2 as charge. */
 
 typedef enum {
     CAN_DECODER_SOC_INITIALIZATION_CONFIG = 0,

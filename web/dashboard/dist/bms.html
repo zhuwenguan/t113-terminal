@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BMS Info · T113 Terminal</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">BMS INNER-NET MONITOR</p>
+        <h1>BMS Info</h1>
+      </div>
+      <div id="bms_connection" class="pill offline">OFFLINE</div>
+    </header>
+    <nav class="site-nav" aria-label="Pages">
+      <a href="/">Dashboard</a>
+      <a class="active" href="/bms.html">BMS Info</a>
+    </nav>
+
+    <section class="card">
+      <div class="video-heading">
+        <div>
+          <p class="eyebrow">PACK / METER</p>
+          <h2>High Voltage Measurements</h2>
+        </div>
+        <div id="bms_status" class="pill offline">WAITING</div>
+      </div>
+      <div class="pack-grid">
+        <div class="pack-value primary"><span class="label">HV4 · Pack Voltage</span><strong id="bms_hv4">--</strong><span class="unit">V</span></div>
+        <div class="pack-value"><span class="label">Current</span><strong id="bms_current">--</strong><span class="unit">A</span></div>
+        <div class="pack-value"><span class="label">HV1</span><strong id="bms_hv1">--</strong><span class="unit">V</span></div>
+        <div class="pack-value"><span class="label">HV2</span><strong id="bms_hv2">--</strong><span class="unit">V</span></div>
+        <div class="pack-value"><span class="label">HV3</span><strong id="bms_hv3">--</strong><span class="unit">V</span></div>
+        <div class="pack-value"><span class="label">HV5</span><strong id="bms_hv5">--</strong><span class="unit">V</span></div>
+      </div>
+      <p id="meter_detail" class="board-health">Meter UI: -- · Meter AP: --</p>
+    </section>
+
+    <section id="board_grid" class="board-grid"></section>
+
+    <section class="card status-card">
+      <div class="video-heading">
+        <div><p class="eyebrow">EDGE-DETECTED HISTORY</p><h2>BMS Fault Log</h2></div>
+        <span id="event_count" class="board-health">0 events</span>
+      </div>
+      <div id="fault_log" class="fault-log"><div class="empty-log">No fault events</div></div>
+    </section>
+
+    <footer>T113 local BMS monitor · passive CAN listener · values are monotonic-time snapshots</footer>
+  </main>
+  <script src="/bms.js"></script>
+</body>
+</html>
