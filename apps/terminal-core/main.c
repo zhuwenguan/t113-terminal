@@ -686,6 +686,8 @@ int main(int argc, char *argv[])
         video_config.width = VIDEO_CAPTURE_WIDTH;
         video_config.height = VIDEO_CAPTURE_HEIGHT;
         video_config.fps = VIDEO_CAPTURE_FPS;
+        video_config.video_ipc_name = RACE_VIDEO_IPC_NAME;
+        video_config.video_publish_fps = VIDEO_PIPELINE_DEFAULT_WEB_PUBLISH_FPS;
         video_config.run_seconds = options.video_seconds;
         video_config.mock_camera = options.hud_demo;
         video_config.compositor_mode = options.hud_demo ?

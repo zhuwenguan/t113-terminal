@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include <race/shared_state.h>
+#include <race/video_ipc.h>
 
 static char *trim_space(char *text)
 {
@@ -104,6 +105,14 @@ static int apply_pair(WebdConfig *config, const char *key, const char *value)
         return copy_string(config->state_shm_name,
                            sizeof(config->state_shm_name), value);
     }
+    if (strcmp(key, "video_shm_name") == 0) {
+        if (value[0] != '/') {
+            errno = EINVAL;
+            return -1;
+        }
+        return copy_string(config->video_shm_name,
+                           sizeof(config->video_shm_name), value);
+    }
     errno = ENOENT;
     return -1;
 }
@@ -122,6 +131,8 @@ void webd_config_defaults(WebdConfig *config)
     config->telemetry_rate_hz = WEBD_DEFAULT_TELEMETRY_RATE_HZ;
     (void)snprintf(config->state_shm_name, sizeof(config->state_shm_name),
                    "%s", RACE_SHARED_STATE_NAME);
+    (void)snprintf(config->video_shm_name, sizeof(config->video_shm_name),
+                   "%s", RACE_VIDEO_IPC_NAME);
 }
 
 int webd_config_load_file(WebdConfig *config, const char *path)
@@ -276,6 +287,15 @@ int webd_config_parse_arguments(WebdConfig *config, int argc, char **argv,
             }
             continue;
         }
+        if (strcmp(argv[index], "--video-shm-name") == 0) {
+            if (argument_value(argc, argv, &index, &value) < 0 ||
+                value[0] != '/' ||
+                copy_string(config->video_shm_name,
+                            sizeof(config->video_shm_name), value) < 0) {
+                return -1;
+            }
+            continue;
+        }
         fprintf(stderr, "webd: unknown argument: %s\n", argv[index]);
         errno = EINVAL;
         return -1;
@@ -293,9 +313,10 @@ void webd_config_print_usage(const char *program_name)
             "      --web-root PATH           default: web/dashboard/dist\n"
             "      --telemetry-rate-hz HZ    default: %u (max %u)\n"
             "      --state-shm-name NAME     default: %s\n"
+            "      --video-shm-name NAME     default: %s\n"
             "  -v, --verbose                 enable debug logging\n",
             program_name != NULL ? program_name : "webd",
             WEBD_DEFAULT_LISTEN_ADDRESS, WEBD_DEFAULT_LISTEN_PORT,
             WEBD_DEFAULT_TELEMETRY_RATE_HZ, WEBD_MAX_RATE_HZ,
-            RACE_SHARED_STATE_NAME);
+            RACE_SHARED_STATE_NAME, RACE_VIDEO_IPC_NAME);
 }

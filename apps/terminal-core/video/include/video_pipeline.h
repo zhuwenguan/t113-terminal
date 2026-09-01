@@ -6,6 +6,8 @@
 
 #include <pthread.h>
 
+#include <race/video_ipc.h>
+
 #include "hud_renderer.h"
 #include "video_capture.h"
 #include "video_compositor.h"
@@ -15,6 +17,7 @@ typedef bool (*VideoStateSnapshotGetter)(VehicleState *state, void *context);
 
 #define VIDEO_LATENCY_BUCKET_US 100U
 #define VIDEO_LATENCY_BUCKET_COUNT 2001U
+#define VIDEO_PIPELINE_DEFAULT_WEB_PUBLISH_FPS 15U
 
 typedef struct {
     uint64_t samples;
@@ -30,7 +33,9 @@ typedef struct {
     uint32_t width;
     uint32_t height;
     uint32_t fps;
+    uint32_t video_publish_fps;
     uint32_t run_seconds;
+    const char *video_ipc_name;
     bool mock_camera;
     VideoCompositorMode compositor_mode;
     HudStyle hud_style;
@@ -66,6 +71,13 @@ typedef struct {
     bool g2d_healthy_at_end;
     uint64_t camera_received_frames;
     uint64_t camera_sequence_lost;
+    uint64_t web_published_frames;
+    uint64_t web_rate_limited_frames;
+    uint64_t web_oversized_frames;
+    uint64_t web_publish_time_us;
+    uint64_t web_jpeg_bytes;
+    uint64_t web_jpeg_max_bytes;
+    bool web_ipc_ready;
     uint64_t decoded_frames;
     uint64_t processed_frames;
     uint64_t encoded_frames;
@@ -119,6 +131,7 @@ typedef struct {
     pthread_mutex_t mutex;
     pthread_t thread;
     VideoCapture capture;
+    RaceVideoIpcHandle video_ipc;
     JpegDecoder decoder;
     VideoFrame camera_frame;
     JpegDecodedFrame native_camera_frame;
@@ -136,7 +149,11 @@ typedef struct {
     bool g2d_fatal_failure;
     bool video_faulted;
     bool recording_failed;
+    bool video_ipc_ready;
     uint32_t last_camera_sequence;
+    uint64_t video_source_frames_seen;
+    uint64_t video_rate_budget;
+    uint64_t video_last_source_pts_us;
 } VideoPipeline;
 
 int video_pipeline_init(VideoPipeline *pipeline,

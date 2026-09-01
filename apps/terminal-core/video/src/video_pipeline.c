@@ -188,6 +188,76 @@ static void video_pipeline_mock_camera(VideoFrame *frame, uint64_t tick)
     }
 }
 
+static void video_pipeline_publish_web_frame(VideoPipeline *pipeline,
+                                             const VideoCaptureBuffer *buffer)
+{
+    RaceVideoFrameInfo info;
+    uint64_t now_us;
+    uint64_t delta_us;
+    uint64_t budget_add;
+    uint64_t publish_start_us;
+    uint32_t publish_fps;
+    bool publish;
+
+    if (pipeline == NULL || buffer == NULL) {
+        return;
+    }
+    ++pipeline->video_source_frames_seen;
+    publish_fps = pipeline->config.video_publish_fps;
+    now_us = buffer->timestamp_us;
+    if (!pipeline->video_ipc_ready || publish_fps == 0U || now_us == 0U) {
+        pipeline->video_last_source_pts_us = now_us;
+        return;
+    }
+
+    publish = pipeline->video_last_source_pts_us == 0U;
+    if (!publish && now_us >= pipeline->video_last_source_pts_us) {
+        delta_us = now_us - pipeline->video_last_source_pts_us;
+        budget_add = delta_us > UINT64_MAX / publish_fps ? UINT64_MAX :
+                     delta_us * publish_fps;
+        if (pipeline->video_rate_budget < 2000000ULL) {
+            if (budget_add > 2000000ULL - pipeline->video_rate_budget) {
+                pipeline->video_rate_budget = 2000000ULL;
+            } else {
+                pipeline->video_rate_budget += budget_add;
+            }
+        }
+        publish = pipeline->video_rate_budget >= 1000000ULL;
+    }
+    pipeline->video_last_source_pts_us = now_us;
+    if (!publish) {
+        ++pipeline->stats.web_rate_limited_frames;
+        return;
+    }
+    if (pipeline->video_rate_budget >= 1000000ULL) {
+        pipeline->video_rate_budget -= 1000000ULL;
+    }
+
+    memset(&info, 0, sizeof(info));
+    info.pts_us = buffer->timestamp_us;
+    info.source_frame_count = pipeline->video_source_frames_seen;
+    info.dropped_by_rate_limit = pipeline->stats.web_rate_limited_frames;
+    info.source_sequence = buffer->sequence;
+    info.width = pipeline->capture.width;
+    info.height = pipeline->capture.height;
+    publish_start_us = video_pipeline_now_us();
+    if (race_video_ipc_publish(&pipeline->video_ipc, buffer->data,
+                               buffer->size, &info) < 0) {
+        if (errno == EMSGSIZE) {
+            ++pipeline->stats.web_oversized_frames;
+        }
+        LOG_DEBUG("Video web frame publish failed: %s", strerror(errno));
+        return;
+    }
+    pipeline->stats.web_publish_time_us +=
+        video_pipeline_now_us() - publish_start_us;
+    ++pipeline->stats.web_published_frames;
+    pipeline->stats.web_jpeg_bytes += buffer->size;
+    if (buffer->size > pipeline->stats.web_jpeg_max_bytes) {
+        pipeline->stats.web_jpeg_max_bytes = buffer->size;
+    }
+}
+
 static bool video_pipeline_get_state(VideoPipeline *pipeline,
                                      VehicleState *state)
 {
@@ -891,6 +961,11 @@ static void *video_pipeline_thread(void *context)
             }
             pipeline->have_camera_sequence = true;
             pipeline->last_camera_sequence = buffer.sequence;
+            /* The V4L2 buffer is still owned by this thread. Copy the raw
+             * MJPEG into the independent latest-frame IPC before QBUF. This
+             * is the only camera-to-web copy and never touches the decoder,
+             * compositor, HUD, or recorder path. */
+            video_pipeline_publish_web_frame(pipeline, &buffer);
             {
                 uint64_t decode_start = video_pipeline_now_us();
                 JpegDecoderTiming decoder_timing;
@@ -994,8 +1069,13 @@ int video_pipeline_init(VideoPipeline *pipeline,
     }
     memset(pipeline, 0, sizeof(*pipeline));
     pipeline->capture.fd = -1;
+    pipeline->video_ipc.fd = -1;
     pipeline->compositor.g2d_fd = -1;
     pipeline->config = *config;
+    if (pipeline->config.video_publish_fps == 0U) {
+        pipeline->config.video_publish_fps =
+            VIDEO_PIPELINE_DEFAULT_WEB_PUBLISH_FPS;
+    }
     compositor_mode = config->compositor_mode;
     result = pthread_mutex_init(&pipeline->mutex, NULL);
     if (result != 0) {
@@ -1003,6 +1083,24 @@ int video_pipeline_init(VideoPipeline *pipeline,
         return -1;
     }
     pipeline->initialized = true;
+    if (!config->mock_camera) {
+        const char *video_ipc_name = pipeline->config.video_ipc_name;
+
+        if (video_ipc_name == NULL || video_ipc_name[0] == '\0') {
+            video_ipc_name = RACE_VIDEO_IPC_NAME;
+        }
+        if (race_video_ipc_writer_open(&pipeline->video_ipc,
+                                       video_ipc_name) < 0) {
+            LOG_WARN("Video web output disabled: cannot open %s: %s",
+                     video_ipc_name, strerror(errno));
+        } else {
+            pipeline->video_ipc_ready = true;
+            pipeline->stats.web_ipc_ready = true;
+            LOG_INFO("Video web output: IPC=%s target=%u FPS capacity=%u bytes",
+                     video_ipc_name, pipeline->config.video_publish_fps,
+                     RACE_VIDEO_IPC_MAX_JPEG_SIZE);
+        }
+    }
     if (video_frame_init(&pipeline->camera_frame, config->width,
                          config->height) < 0) {
         video_pipeline_stop(pipeline);
@@ -1137,6 +1235,8 @@ void video_pipeline_stop(VideoPipeline *pipeline)
         video_pipeline_refresh_recorder_stats(pipeline);
     }
     video_capture_close(&pipeline->capture);
+    race_video_ipc_close(&pipeline->video_ipc);
+    pipeline->video_ipc_ready = false;
     video_frame_close(&pipeline->camera_frame);
     hud_renderer_close(&pipeline->hud);
     pipeline->stats.g2d_healthy_at_end =
@@ -1216,6 +1316,23 @@ void video_pipeline_print_stats(const VideoPipeline *pipeline)
              write_fps,
              (unsigned long long)stats.decode_errors,
              (unsigned long long)stats.reconnects);
+    LOG_INFO("Video web latest-frame: ipc=%s source_frames=%llu published=%llu "
+             "rate_limited=%llu oversized=%llu publish_fps=%.2f "
+             "jpeg_avg=%.1fKB jpeg_max=%.1fKB copy_avg=%.3fus",
+             stats.web_ipc_ready ? "ready" : "disabled",
+             (unsigned long long)stats.camera_received_frames,
+             (unsigned long long)stats.web_published_frames,
+             (unsigned long long)stats.web_rate_limited_frames,
+             (unsigned long long)stats.web_oversized_frames,
+             elapsed_s > 0.0 ?
+             (double)stats.web_published_frames / elapsed_s : 0.0,
+             stats.web_published_frames > 0U ?
+             (double)stats.web_jpeg_bytes /
+                 (double)stats.web_published_frames / 1024.0 : 0.0,
+             (double)stats.web_jpeg_max_bytes / 1024.0,
+             stats.web_published_frames > 0U ?
+             (double)stats.web_publish_time_us /
+                 (double)stats.web_published_frames : 0.0);
     LOG_INFO("Video profile: decoder_init_total=%.2fms capture=%.2fms "
              "input_copy=%.2fms buffer_request=%.2fms "
              "decoder_submit=%.2fms decoder_decode=%.2fms "

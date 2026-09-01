@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "state_reader.h"
+#include "video_cache.h"
 #include "webd_config.h"
 #include "webd_json.h"
 
@@ -26,6 +27,9 @@
 #define WEBD_JSON_BUFFER_SIZE 8192U
 #define WEBD_SERVER_THREADS 8U
 #define WEBD_CLIENT_SEND_TIMEOUT_MS 1000U
+#define WEBD_MAX_VIDEO_CLIENTS 4U
+#define WEBD_VIDEO_STARTUP_WAIT_US 3000000ULL
+#define WEBD_VIDEO_RETRY_SLEEP_US 20000U
 
 typedef struct WebdRuntime WebdRuntime;
 
@@ -45,6 +49,7 @@ typedef struct {
 struct WebdRuntime {
     WebdConfig config;
     StateReader reader;
+    WebdVideoCache video_cache;
     pthread_mutex_t state_mutex;
     StateSnapshot latest;
     char latest_json[WEBD_JSON_BUFFER_SIZE];
@@ -56,6 +61,7 @@ struct WebdRuntime {
     pthread_mutex_t clients_mutex;
     WebdClient clients[WEBD_MAX_WS_CLIENTS];
     unsigned int client_count;
+    unsigned int video_client_count;
     bool stopping;
 
     struct mg_context *server;
@@ -69,6 +75,9 @@ static int webd_log_message(const struct mg_connection *connection,
                             const char *message);
 static int webd_log_access(const struct mg_connection *connection,
                            const char *message);
+static int handle_video_live(WebdRuntime *runtime,
+                             struct mg_connection *connection,
+                             bool head_request);
 
 static uint64_t monotonic_us(void)
 {
@@ -305,6 +314,162 @@ static int send_http_response(struct mg_connection *connection, int status,
     return status;
 }
 
+static int write_all(struct mg_connection *connection, const void *data,
+                     size_t length)
+{
+    const uint8_t *cursor = data;
+
+    while (length > 0U) {
+        int written = mg_write(connection, cursor, length);
+
+        if (written <= 0 || (size_t)written > length) {
+            return -1;
+        }
+        cursor += written;
+        length -= (size_t)written;
+    }
+    return 0;
+}
+
+static bool video_client_acquire(WebdRuntime *runtime)
+{
+    bool acquired = false;
+
+    pthread_mutex_lock(&runtime->clients_mutex);
+    if (!runtime->stopping &&
+        runtime->video_client_count < WEBD_MAX_VIDEO_CLIENTS) {
+        ++runtime->video_client_count;
+        acquired = true;
+    }
+    pthread_mutex_unlock(&runtime->clients_mutex);
+    return acquired;
+}
+
+static void video_client_release(WebdRuntime *runtime)
+{
+    pthread_mutex_lock(&runtime->clients_mutex);
+    if (runtime->video_client_count > 0U) {
+        --runtime->video_client_count;
+    }
+    pthread_mutex_unlock(&runtime->clients_mutex);
+}
+
+static bool video_wait_for_first_frame(WebdRuntime *runtime)
+{
+    uint64_t deadline_us = monotonic_us() + WEBD_VIDEO_STARTUP_WAIT_US;
+
+    while (!webd_stop_requested && !runtime_is_stopping(runtime)) {
+        WebdVideoSnapshot snapshot;
+        uint64_t now_us = monotonic_us();
+
+        webd_video_cache_snapshot(&runtime->video_cache, now_us, &snapshot);
+        if (snapshot.available) {
+            return true;
+        }
+        if (now_us >= deadline_us) {
+            break;
+        }
+        {
+            struct timespec delay = {0, WEBD_VIDEO_RETRY_SLEEP_US * 1000L};
+            (void)nanosleep(&delay, NULL);
+        }
+    }
+    return false;
+}
+
+static int handle_video_live(WebdRuntime *runtime,
+                             struct mg_connection *connection,
+                             bool head_request)
+{
+    uint8_t *frame = NULL;
+    size_t frame_capacity = 0U;
+    uint64_t last_sequence = 0U;
+    int result = 200;
+
+    if (!video_client_acquire(runtime)) {
+        static const char body[] = "{\"valid\":false,"
+                                   "\"error\":\"video_client_limit\"}";
+        return send_http_response(connection, 503,
+                                  "application/json; charset=utf-8", body,
+                                  sizeof(body) - 1U, head_request);
+    }
+    if (!head_request && !video_wait_for_first_frame(runtime)) {
+        static const char body[] = "{\"valid\":false,"
+                                   "\"error\":\"video_unavailable\"}";
+        result = send_http_response(connection, 503,
+                                    "application/json; charset=utf-8", body,
+                                    sizeof(body) - 1U, false);
+        video_client_release(runtime);
+        return result;
+    }
+    if (mg_printf(connection,
+                  "HTTP/1.1 200 OK\r\n"
+                  "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
+                  "Cache-Control: no-store, no-cache, must-revalidate\r\n"
+                  "Pragma: no-cache\r\n"
+                  "Connection: close\r\n"
+                  "Access-Control-Allow-Origin: *\r\n\r\n") < 0) {
+        video_client_release(runtime);
+        return -1;
+    }
+    if (!head_request) {
+        while (!webd_stop_requested && !runtime_is_stopping(runtime)) {
+            WebdVideoSnapshot snapshot;
+            RaceVideoFrameInfo info;
+            uint64_t now_us = monotonic_us();
+            int copy_result;
+
+            webd_video_cache_snapshot(&runtime->video_cache, now_us,
+                                      &snapshot);
+            if (!snapshot.available) {
+                break;
+            }
+            if ((size_t)snapshot.jpeg_size > frame_capacity) {
+                uint8_t *new_frame = realloc(frame, snapshot.jpeg_size);
+                if (new_frame == NULL) {
+                    result = -1;
+                    break;
+                }
+                frame = new_frame;
+                frame_capacity = snapshot.jpeg_size;
+            }
+            copy_result = webd_video_cache_copy_latest(
+                &runtime->video_cache, last_sequence, frame, frame_capacity,
+                &info);
+            if (copy_result < 0) {
+                if (errno == ENODATA || errno == EAGAIN) {
+                    break;
+                }
+                if (errno == EMSGSIZE) {
+                    continue;
+                }
+                result = -1;
+                break;
+            }
+            if (copy_result > 0) {
+                struct timespec delay = {0, WEBD_VIDEO_RETRY_SLEEP_US * 1000L};
+                (void)nanosleep(&delay, NULL);
+                continue;
+            }
+            if (mg_printf(connection,
+                          "--frame\r\nContent-Type: image/jpeg\r\n"
+                          "Content-Length: %u\r\n"
+                          "X-Frame-Sequence: %llu\r\n\r\n",
+                          info.jpeg_size,
+                          (unsigned long long)info.sequence) < 0 ||
+                write_all(connection, frame, info.jpeg_size) < 0 ||
+                write_all(connection, "\r\n", 2U) < 0) {
+                result = -1;
+                break;
+            }
+            last_sequence = info.sequence;
+        }
+    }
+    free(frame);
+    video_client_release(runtime);
+    return result;
+}
+
 static int handle_api_state(WebdRuntime *runtime,
                             struct mg_connection *connection,
                             bool head_request)
@@ -334,21 +499,26 @@ static int handle_api_system(WebdRuntime *runtime,
                              bool head_request)
 {
     StateSnapshot snapshot;
+    WebdVideoSnapshot video;
     bool have_snapshot;
     uint64_t now_mono_us = monotonic_us();
     uint64_t uptime_s = now_mono_us >= runtime->start_mono_us ?
         (now_mono_us - runtime->start_mono_us) / 1000000ULL : 0U;
     unsigned int client_count;
-    char body[1024];
+    unsigned int video_client_count;
+    char body[WEBD_JSON_BUFFER_SIZE];
     int body_length;
 
     have_snapshot = cache_get(runtime, now_mono_us, &snapshot);
     pthread_mutex_lock(&runtime->clients_mutex);
     client_count = runtime->client_count;
+    video_client_count = runtime->video_client_count;
     pthread_mutex_unlock(&runtime->clients_mutex);
+    webd_video_cache_snapshot(&runtime->video_cache, now_mono_us, &video);
     body_length = webd_json_system(body, sizeof(body), uptime_s,
                                    have_snapshot ? &snapshot : NULL,
-                                   client_count, now_mono_us);
+                                   &video, client_count, video_client_count,
+                                   now_mono_us);
     if (body_length < 0) {
         body_length = webd_json_state_error(body, sizeof(body), "json_encode_failed");
         return send_http_response(connection, 500, "application/json; charset=utf-8",
@@ -372,7 +542,8 @@ static int webd_begin_request(struct mg_connection *connection)
     }
     head_request = strcmp(request_info->request_method, "HEAD") == 0;
     if (strcmp(request_info->request_method, "GET") != 0 && !head_request) {
-        if (strncmp(request_info->local_uri, "/api/", 5U) == 0) {
+        if (strncmp(request_info->local_uri, "/api/", 5U) == 0 ||
+            strcmp(request_info->local_uri, "/video/live.mjpg") == 0) {
             static const char body[] = "{\"error\":\"method_not_allowed\"}";
             (void)send_http_response(connection, 405, "application/json; charset=utf-8",
                                      body, sizeof(body) - 1U, false);
@@ -382,6 +553,9 @@ static int webd_begin_request(struct mg_connection *connection)
     }
     if (strcmp(request_info->local_uri, "/api/state") == 0) {
         return handle_api_state(runtime, connection, head_request);
+    }
+    if (strcmp(request_info->local_uri, "/video/live.mjpg") == 0) {
+        return handle_video_live(runtime, connection, head_request);
     }
     if (strcmp(request_info->local_uri, "/api/system") == 0) {
         return handle_api_system(runtime, connection, head_request);
@@ -752,6 +926,7 @@ int main(int argc, char **argv)
     unsigned int initialized_features;
     bool state_mutex_initialized = false;
     bool clients_mutex_initialized = false;
+    bool video_cache_initialized = false;
 
     memset(&runtime, 0, sizeof(runtime));
     webd_config_defaults(&runtime.config);
@@ -804,6 +979,9 @@ int main(int argc, char **argv)
     }
     runtime.start_mono_us = monotonic_us();
     state_reader_init(&runtime.reader, runtime.config.state_shm_name);
+    webd_video_cache_init(&runtime.video_cache,
+                          runtime.config.video_shm_name);
+    video_cache_initialized = true;
     result = pthread_mutex_init(&runtime.state_mutex, NULL);
     if (result == 0) {
         state_mutex_initialized = true;
@@ -813,6 +991,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "webd: cannot initialize mutexes\n");
         if (state_mutex_initialized) {
             pthread_mutex_destroy(&runtime.state_mutex);
+        }
+        if (video_cache_initialized) {
+            webd_video_cache_stop(&runtime.video_cache);
         }
         state_reader_close(&runtime.reader);
         return EXIT_FAILURE;
@@ -828,6 +1009,9 @@ int main(int argc, char **argv)
         if (state_mutex_initialized) {
             pthread_mutex_destroy(&runtime.state_mutex);
         }
+        if (video_cache_initialized) {
+            webd_video_cache_stop(&runtime.video_cache);
+        }
         state_reader_close(&runtime.reader);
         return EXIT_FAILURE;
     }
@@ -842,8 +1026,14 @@ int main(int argc, char **argv)
         if (state_mutex_initialized) {
             pthread_mutex_destroy(&runtime.state_mutex);
         }
+        if (video_cache_initialized) {
+            webd_video_cache_stop(&runtime.video_cache);
+        }
         state_reader_close(&runtime.reader);
         return EXIT_FAILURE;
+    }
+    if (webd_video_cache_start(&runtime.video_cache) < 0) {
+        LOG_WARN("webd: video cache thread unavailable; video is offline");
     }
     result = pthread_create(&runtime.state_thread, NULL,
                             state_cache_thread_main, &runtime);
@@ -868,6 +1058,9 @@ int main(int argc, char **argv)
         (void)pthread_join(runtime.state_thread, NULL);
     }
     join_clients(&runtime);
+    if (video_cache_initialized) {
+        webd_video_cache_stop(&runtime.video_cache);
+    }
     state_reader_close(&runtime.reader);
     (void)mg_exit_library();
     pthread_mutex_destroy(&runtime.clients_mutex);

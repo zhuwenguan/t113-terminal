@@ -2,8 +2,9 @@
 
 Phase 1 is a local, read-only API served by the independent `webd` process.
 The server reads one latest `VehicleState` cache populated from the
-`/race_vehicle_state` POSIX shared-memory object. It does not send commands to
-the vehicle and does not expose video yet.
+`/race_vehicle_state` POSIX shared-memory object and one latest original MJPEG
+frame cache populated from `/race_latest_jpeg`. It does not send commands to
+the vehicle.
 
 ## Endpoints
 
@@ -74,7 +75,19 @@ vehicle signal is introduced.
   "vehicle_state_alive": true,
   "vehicle_state_age_ms": 18,
   "vehicle_state_sequence": 42,
-  "websocket_clients": 1
+  "websocket_clients": 1,
+  "video_clients": 1,
+  "video": {
+    "available": true,
+    "status": "live",
+    "width": 800,
+    "height": 600,
+    "source_fps": 30.0,
+    "web_publish_fps": 15.0,
+    "frame_age_ms": 35,
+    "jpeg_size_bytes": 120000,
+    "dropped_by_rate_limit": 42
+  }
 }
 ```
 
@@ -85,9 +98,19 @@ after one second without a fresh core publication.
 `GET /api/capabilities` currently returns:
 
 ```json
-{"mode":"local","telemetry":true,"video":false,"logs":false,
+{"mode":"local","telemetry":true,"video":true,"logs":false,
  "config":false,"remote_video":false}
 ```
+
+`GET /video/live.mjpg` is a native browser-compatible
+`multipart/x-mixed-replace` MJPEG stream. The dashboard attaches one `<img>`
+to this route after `/api/system.video.status` becomes `live`; it does not
+fetch or decode individual frames in JavaScript. The stream uses the
+latest-frame cache, has no per-client unbounded queue, allows at most four
+simultaneous video clients, and closes when the source is stale for one second
+or a write exceeds the server's three-second request timeout. A fifth client
+receives HTTP 503 with `video_client_limit`; no source or recorder frame is
+dropped because of a web client.
 
 `WS /ws/telemetry` sends the same `/api/state` JSON schema as text frames. The
 default sampling limit is 20 Hz, configurable with `telemetry_rate_hz`; a
@@ -95,5 +118,9 @@ state is sent only when the shared-state sequence changes, so a slower core
 does not receive fabricated updates. The cache is read once per tick, and a
 WebSocket sender only consumes the cached JSON.
 
-There is no `/video/live.mjpg` implementation in Phase 1. The route remains
-reserved by the `video=false` capability response.
+The producer is the existing `race_video` V4L2 loop: after each DQBUF it copies
+the camera's original MJPEG once into a two-slot, seqlock-protected POSIX
+shared-memory object, before the existing decode/HUD/record path and without a
+second camera capture. Publication is PTS-based and limited to 15 FPS by
+default. `webd` copies only the newest complete frame into a bounded cache;
+slow browsers cannot back-pressure the camera or recorder.

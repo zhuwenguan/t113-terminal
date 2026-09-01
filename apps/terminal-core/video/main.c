@@ -50,8 +50,10 @@ int main(int argc, char **argv) {
     const char *camera = VIDEO_CAPTURE_DEFAULT_DEVICE;
     const char *record = NULL;
     const char *hud_font = HUD_DEFAULT_FONT_PATH;
+    const char *video_ipc_name = RACE_VIDEO_IPC_NAME;
     HudStyle hud_style = HUD_STYLE_UI;
     uint32_t seconds = 0U;
+    uint32_t video_publish_fps = VIDEO_PIPELINE_DEFAULT_WEB_PUBLISH_FPS;
     int i;
     memset(&pipeline, 0, sizeof(pipeline)); memset(&config, 0, sizeof(config));
     memset(&source, 0, sizeof(source)); source.shared.fd = -1;
@@ -64,8 +66,17 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--hud-style") && i + 1 < argc &&
                  hud_style_parse(argv[++i], &hud_style)) { }
         else if (!strcmp(argv[i], "--hud-font") && i + 1 < argc) hud_font = argv[++i];
+        else if (!strcmp(argv[i], "--video-ipc-name") && i + 1 < argc) video_ipc_name = argv[++i];
+        else if (!strcmp(argv[i], "--video-publish-fps") && i + 1 < argc) {
+            unsigned long parsed = strtoul(argv[++i], NULL, 10);
+            if (parsed == 0U || parsed > 100U) {
+                LOG_ERROR("Invalid --video-publish-fps; use 1..100");
+                return EXIT_FAILURE;
+            }
+            video_publish_fps = (uint32_t)parsed;
+        }
         else if (!strcmp(argv[i], "--no-hud")) hud_style = HUD_STYLE_NONE;
-        else { LOG_ERROR("Usage: %s [-v] [--camera PATH] [--record PATH] [--seconds N] [--hud-style ui|none] [--hud-font PATH] [--no-hud]", argv[0]); return EXIT_FAILURE; }
+        else { LOG_ERROR("Usage: %s [-v] [--camera PATH] [--record PATH] [--seconds N] [--video-ipc-name NAME] [--video-publish-fps N] [--hud-style ui|none] [--hud-font PATH] [--no-hud]", argv[0]); return EXIT_FAILURE; }
     }
     if (install_signals() < 0) { LOG_ERROR("sigaction: %s", strerror(errno)); return EXIT_FAILURE; }
     if (race_shared_state_reader_open(&source.shared, NULL) < 0) {
@@ -73,6 +84,8 @@ int main(int argc, char **argv) {
     }
     config.device_path = camera; config.record_path = record;
     config.width = VIDEO_CAPTURE_WIDTH; config.height = VIDEO_CAPTURE_HEIGHT;
+    config.video_ipc_name = video_ipc_name;
+    config.video_publish_fps = video_publish_fps;
     config.fps = VIDEO_CAPTURE_FPS; config.run_seconds = seconds;
     config.compositor_mode = VIDEO_COMPOSITOR_MODE_AUTO;
     config.hud_style = hud_style;

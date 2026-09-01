@@ -133,7 +133,8 @@ int webd_json_state_error(char *buffer, size_t buffer_size,
 
 int webd_json_system(char *buffer, size_t buffer_size,
                      uint64_t uptime_s, const StateSnapshot *snapshot,
-                     unsigned int websocket_clients,
+                     const WebdVideoSnapshot *video,
+                     unsigned int websocket_clients, unsigned int video_clients,
                      uint64_t now_mono_us)
 {
     bool alive = snapshot != NULL && snapshot->available && snapshot->fresh;
@@ -142,28 +143,64 @@ int webd_json_system(char *buffer, size_t buffer_size,
                    now_mono_us >= snapshot->published_mono_us;
     uint64_t age_ms = has_age ?
         (now_mono_us - snapshot->published_mono_us) / 1000ULL : 0U;
+    bool video_has_frame = video != NULL && video->sequence != 0U;
+    bool video_live = video != NULL && video->available && video->fresh;
+    const char *video_status = video_live ? "live" :
+                               (video_has_frame ? "stale" : "offline");
+    char video_age[32];
+    const char *video_age_text = "null";
     int written;
 
     if (buffer == NULL || buffer_size == 0U) {
         return -1;
+    }
+    if (video != NULL && video_has_frame) {
+        (void)snprintf(video_age, sizeof(video_age), "%llu",
+                       (unsigned long long)(video->frame_age_us / 1000ULL));
+        video_age_text = video_age;
     }
     if (has_age) {
         written = snprintf(
             buffer, buffer_size,
             "{\"uptime_s\":%llu,\"vehicle_state_alive\":%s,"
             "\"vehicle_state_age_ms\":%llu,\"vehicle_state_sequence\":%u,"
-            "\"websocket_clients\":%u}",
+            "\"websocket_clients\":%u,\"video_clients\":%u,"
+            "\"video\":{\"available\":%s,\"status\":\"%s\","
+            "\"width\":%u,\"height\":%u,\"source_fps\":%.3f,"
+            "\"web_publish_fps\":%.3f,\"frame_age_ms\":%s,"
+            "\"jpeg_size_bytes\":%u,\"dropped_by_rate_limit\":%llu}}",
             (unsigned long long)uptime_s, alive ? "true" : "false",
             (unsigned long long)age_ms,
-            snapshot->sequence, websocket_clients);
+            snapshot->sequence, websocket_clients, video_clients,
+            video_live ? "true" : "false", video_status,
+            video != NULL ? video->width : 0U,
+            video != NULL ? video->height : 0U,
+            video != NULL ? json_number(video->source_fps) : 0.0,
+            video != NULL ? json_number(video->web_publish_fps) : 0.0,
+            video_age_text,
+            video != NULL ? video->jpeg_size : 0U,
+            (unsigned long long)(video != NULL ?
+                                 video->dropped_by_rate_limit : 0U));
     } else {
         written = snprintf(
             buffer, buffer_size,
             "{\"uptime_s\":%llu,\"vehicle_state_alive\":%s,"
             "\"vehicle_state_age_ms\":null,\"vehicle_state_sequence\":0,"
-            "\"websocket_clients\":%u}",
+            "\"websocket_clients\":%u,\"video_clients\":%u,"
+            "\"video\":{\"available\":%s,\"status\":\"%s\","
+            "\"width\":%u,\"height\":%u,\"source_fps\":%.3f,"
+            "\"web_publish_fps\":%.3f,\"frame_age_ms\":%s,"
+            "\"jpeg_size_bytes\":%u,\"dropped_by_rate_limit\":%llu}}",
             (unsigned long long)uptime_s, alive ? "true" : "false",
-            websocket_clients);
+            websocket_clients, video_clients,
+            video_live ? "true" : "false", video_status,
+            video != NULL ? video->width : 0U,
+            video != NULL ? video->height : 0U,
+            video != NULL ? json_number(video->source_fps) : 0.0,
+            video != NULL ? json_number(video->web_publish_fps) : 0.0,
+            video_age_text, video != NULL ? video->jpeg_size : 0U,
+            (unsigned long long)(video != NULL ?
+                                 video->dropped_by_rate_limit : 0U));
     }
     return written < 0 || (size_t)written >= buffer_size ? -1 : written;
 }
@@ -171,7 +208,7 @@ int webd_json_system(char *buffer, size_t buffer_size,
 int webd_json_capabilities(char *buffer, size_t buffer_size)
 {
     static const char capabilities[] =
-        "{\"mode\":\"local\",\"telemetry\":true,\"video\":false,"
+        "{\"mode\":\"local\",\"telemetry\":true,\"video\":true,"
         "\"logs\":false,\"config\":false,\"remote_video\":false}";
     size_t length = sizeof(capabilities) - 1U;
 

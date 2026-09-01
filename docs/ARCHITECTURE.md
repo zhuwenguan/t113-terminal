@@ -10,8 +10,10 @@ container or 800x600 pipeline behavior was redesigned.
 ```text
 CAN -----\
           +--> race_core --> /race_vehicle_state --> race_video
-LapPro --/          |                    |----------> webd --> HTTP/WS --> browser
-                    +--> logger (phase 1)
+LapPro --/          |                    |               |
+                    |                    |               +--> /race_latest_jpeg
+                    +--> logger          |                              |
+                                         +----------------------------> webd --> HTTP/WS/MJPEG --> browser
 ```
 
 Processes are fault domains; threads remain the concurrency mechanism inside a
@@ -23,13 +25,16 @@ process.
   VehicleState, lap/delta/accel, timestamps, race events, HMI and the currently
   validated logger. It is built without camera, G2D, HUD, JPEG, encoder, MP4 or
   video-pipeline objects, so video is an actual binary/process fault boundary.
-- `race_video`: V4L2 capture, JPEG/MJPEG decode, G2D, HUD, compositor, JPEG
-  encode, MP4 writer, frame queues and existing DMA/ION teardown.
+- `race_video`: V4L2 capture, original-MJPEG latest-frame publication,
+  JPEG/MJPEG decode, G2D, HUD, compositor, JPEG encode, MP4 writer, frame
+  queues and existing DMA/ION teardown. Web publication happens before the
+  existing decode/HUD/recorder path and does not replace it.
 - `loggerd`: reserved storage fault domain under `apps/loggerd/`. Raw
   CAN/LapPro/state batching and session paths remain tightly coupled to core.
-- `webd`: independent local HTTP/WebSocket daemon. It has one shared-memory
-  reader/cache thread and bounded WebSocket client senders; it never writes to
-  the core mapping or sends vehicle commands.
+- `webd`: independent local HTTP/WebSocket/MJPEG daemon. It has one
+  shared-memory reader/cache thread for state and one latest-frame reader/cache
+  for video; it never writes to either producer mapping or sends vehicle
+  commands. Video is capped at four clients and has no per-client frame queue.
 - `telemetryd`: reserved for the later 4G uplink and is not implemented in
   Phase 1.
 
@@ -44,6 +49,7 @@ apps/terminal-core/hud/          page-level HUD rendering and widgets
 apps/terminal-core/ui/           CPU UI primitives, fonts and images
 libs/common/                     process-neutral logging and time support
 libs/ipc/                        POSIX shared-memory/seqlock implementation
+libs/video-ipc/                  two-slot latest original-MJPEG transport
 libs/vehicle-state/              authoritative VehicleState ABI
 libs/protocol/                   event protocol definitions
 web/dashboard/                   local dashboard source and installable dist
@@ -54,7 +60,9 @@ tests/                            current tests plus reserved component areas
 
 The legacy `t113_terminal` target assembles the terminal-core and video sources
 only for rollback/A-B comparison. Production daemon targets use their own
-directories.
+directories. `race_video_ipc` is a fixed-size two-slot transport: the producer
+writes the inactive 4 MiB slot, releases its even seqlock, then swaps the active
+index. A reader retries on torn/odd slots and copies only a complete JPEG.
 
 ## Shared VehicleState ABI
 
@@ -124,8 +132,10 @@ kill -TERM "$(cat /run/race/race_video.pid)"
 ```
 
 Use `race_state_dump` to inspect sequence, monotonic age, freshness and key HUD
-fields. `webd` exposes `/api/state`, `/api/system`, `/api/capabilities` and
-`/ws/telemetry`; 4G telemetry, video HTTP output, logs, configuration and
+fields. `webd` exposes `/api/state`, `/api/system`, `/api/capabilities`,
+`/ws/telemetry`, and `/video/live.mjpg`. The web video is local original MJPEG
+only; it does not add 4G telemetry, cloud/video uplink, browser decoding,
+HUD composition, or web-side re-encoding. Logs, configuration and
 event/storage payload transport remain outside Phase 1.
 
 ## Required T113 acceptance
@@ -144,8 +154,10 @@ Before replacing the legacy binary, run on a real T113:
    CPU, RSS growth, sequence progress, drops and latency percentiles.
 
 For the web Phase 1 acceptance on a board, additionally verify the local page,
-the three API endpoints, three WebSocket clients, producer stop/restart
-recovery, and that killing `webd` leaves `race_core` and `race_video` running.
+the three API endpoints, `/video/live.mjpg`, three WebSocket clients, at least
+three simultaneous MJPEG clients, fifth-client rejection, slow-client
+isolation, producer stop/restart recovery, and that killing `webd` leaves
+`race_core` and `race_video` running.
 
 Do not delete `t113_terminal` until these checks pass. Phase 2 should define a
 bounded event/log IPC and only then move storage writes into `loggerd`;

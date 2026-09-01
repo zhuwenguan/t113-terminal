@@ -301,6 +301,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_subdirectory(libs/ipc)
 add_subdirectory(libs/common)
+add_subdirectory(libs/video-ipc)
 
 # CivetWeb is embedded as a fixed, source-vendored dependency so the web
 # daemon remains self-contained on the T113 image.  Only HTTP, static files
@@ -349,6 +350,7 @@ target_link_libraries(race_state_dump PRIVATE race_common race_ipc)
 add_executable(webd
     ${RACE_WEBD_DIR}/src/main.c
     ${RACE_WEBD_DIR}/src/state_reader.c
+    ${RACE_WEBD_DIR}/src/video_cache.c
     ${RACE_WEBD_DIR}/src/webd_config.c
     ${RACE_WEBD_DIR}/src/webd_json.c
 )
@@ -358,10 +360,25 @@ target_include_directories(webd PRIVATE
 target_compile_definitions(webd PRIVATE USE_WEBSOCKET)
 target_compile_options(webd PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(webd PRIVATE race_common race_ipc civetweb Threads::Threads)
+target_link_libraries(webd PRIVATE race_video_ipc)
 
 add_executable(fake_state_producer tools/fake_state_producer.c)
 target_compile_options(fake_state_producer PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(fake_state_producer PRIVATE race_common race_ipc Threads::Threads m)
+
+add_executable(fake_video_producer
+    tools/fake_video_producer.c
+    ${RACE_VIDEO_SOURCE_DIR}/jpeg_codec.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_frame.c
+)
+target_include_directories(fake_video_producer PRIVATE
+    ${RACE_COMMON_LEGACY_INCLUDE_DIR}
+    ${RACE_VIDEO_INCLUDE_DIR}
+    ${T113_JPEG_INCLUDE_DIR}
+)
+target_compile_options(fake_video_producer PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(fake_video_producer PRIVATE
+    race_common race_video_ipc Threads::Threads ${CMAKE_DL_LIBS} m)
 
 add_executable(t113_terminal
     ${RACE_TERMINAL_CORE_DIR}/main.c
@@ -408,6 +425,7 @@ target_compile_options(t113_terminal PRIVATE
 target_link_libraries(t113_terminal PRIVATE
     race_common
     race_ipc
+    race_video_ipc
     Threads::Threads
     ${CMAKE_DL_LIBS}
 )
@@ -459,6 +477,7 @@ target_include_directories(race_video PRIVATE
     ${T113_JPEG_INCLUDE_DIR})
 target_compile_options(race_video PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(race_video PRIVATE race_common race_ipc Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(race_video PRIVATE race_video_ipc)
 target_link_libraries(race_video PRIVATE t113_freetype)
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)" OR
@@ -477,8 +496,10 @@ endif()
 install(TARGETS race_core race_video race_state_dump webd RUNTIME DESTINATION bin)
 install(TARGETS race_common ARCHIVE DESTINATION lib)
 install(TARGETS race_ipc ARCHIVE DESTINATION lib)
+install(TARGETS race_video_ipc ARCHIVE DESTINATION lib)
 install(DIRECTORY libs/common/include/race DESTINATION include)
 install(DIRECTORY libs/ipc/include/race DESTINATION include)
+install(DIRECTORY libs/video-ipc/include/race DESTINATION include)
 install(DIRECTORY libs/protocol/include/race DESTINATION include)
 install(DIRECTORY libs/vehicle-state/include/race DESTINATION include)
 install(DIRECTORY configs/t113/ DESTINATION config)
@@ -618,6 +639,12 @@ if (BUILD_TESTING)
     target_compile_options(test_shared_state_stress PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME shared_state_seqlock_high_frequency_no_torn_reads
              COMMAND test_shared_state_stress)
+
+    add_executable(test_video_ipc tests/test_video_ipc.c)
+    target_link_libraries(test_video_ipc PRIVATE race_video_ipc Threads::Threads)
+    target_compile_options(test_video_ipc PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME video_ipc_double_buffer_no_torn_jpeg
+             COMMAND test_video_ipc)
     add_library(video_lifecycle_fault_preload SHARED
         tests/video_lifecycle_fault_preload.c
     )

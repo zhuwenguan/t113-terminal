@@ -7,6 +7,8 @@
 
 #include <limits.h>
 
+#include <race/video_ipc.h>
+
 #ifndef NAME_MAX
 #define NAME_MAX 255
 #endif
@@ -22,6 +24,7 @@ typedef struct {
     char web_root[PATH_MAX];
     unsigned int telemetry_rate_hz;
     char state_shm_name[NAME_MAX];
+    char video_shm_name[NAME_MAX];
 } WebdConfig;
 
 void webd_config_defaults(WebdConfig *config);

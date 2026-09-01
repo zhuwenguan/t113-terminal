@@ -39,6 +39,27 @@
       </article>
     </section>
 
+    <section id="video_card" class="card video-card" hidden>
+      <div class="video-heading">
+        <div>
+          <p class="eyebrow">LIVE CAMERA</p>
+          <h2>Onboard Video</h2>
+        </div>
+        <div id="video_status" class="pill offline">CAMERA OFFLINE</div>
+      </div>
+      <div class="video-frame">
+        <img id="live_video" alt="Live onboard camera">
+        <div id="video_placeholder" class="video-placeholder">
+          CAMERA OFFLINE
+        </div>
+      </div>
+      <div class="video-meta">
+        <span id="video_fps">-- FPS</span>
+        <span id="video_resolution">-- × --</span>
+        <span id="video_jpeg_size">-- KB JPEG</span>
+      </div>
+    </section>
+
     <section class="two-column">
       <article class="card">
         <h2>Battery</h2>
@@ -66,8 +87,8 @@
         <div><dt>CAN</dt><dd id="can_status">--</dd></div>
         <div><dt>GPS</dt><dd id="gps_status">--</dd></div>
         <div><dt>Drive state</dt><dd id="drive_state">--</dd></div>
-        <div><dt>Camera</dt><dd>Not exposed in Phase 1</dd></div>
-        <div><dt>Recording</dt><dd>Not exposed in Phase 1</dd></div>
+        <div><dt>Camera</dt><dd id="camera_status">--</dd></div>
+        <div><dt>Recording</dt><dd>Not exposed in Web Phase 1</dd></div>
         <div><dt>State age</dt><dd><span id="state_age_ms">--</span> ms</dd></div>
       </dl>
     </section>
