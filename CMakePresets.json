@@ -50,7 +50,8 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/toolchain-t113.cmake",
-                "BUILD_TESTING": "OFF"
+                "BUILD_TESTING": "ON",
+                "CMAKE_SKIP_RPATH": "ON"
             }
         },
         {
@@ -62,7 +63,8 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/toolchain-t113.cmake",
-                "BUILD_TESTING": "OFF"
+                "BUILD_TESTING": "ON",
+                "CMAKE_SKIP_RPATH": "ON"
             }
         }
     ],

@@ -28,6 +28,20 @@ cmake --preset arm-release
 cmake --build --preset arm-release --parallel
 ```
 
+ARM preset 会优先使用 `T113_FREETYPE_ROOT`，否则自动检查
+`$XDG_CACHE_HOME/t113-terminal/freetype-armhf` 或
+`$HOME/.cache/t113-terminal/freetype-armhf`。也可以显式指定：
+
+```bash
+cmake --preset arm-release \
+  -DT113_FREETYPE_ROOT=/path/to/freetype-armhf
+cmake --build --preset arm-release --parallel
+```
+
+ARM 测试目标会参与交叉编译，但不能在主机上用 `ctest` 执行；板端运行时
+FreeType、PNG、Zlib 从 `/usr/lib` 加载，字体使用
+`/mnt/UDISK/assets/fonts/hud.ttf`。
+
 也可以使用脚本：
 
 ```bash

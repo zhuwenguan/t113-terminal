@@ -85,6 +85,11 @@ cmake --preset arm-release
 cmake --build --preset arm-release --parallel
 ```
 
+ARM 构建会从 `T113_FREETYPE_ROOT` 或用户缓存目录自动发现板端 FreeType
+头文件和库；也可通过 `-DT113_FREETYPE_ROOT=/path/to/freetype-armhf`
+显式指定。ARM preset 会编译测试目标，但测试程序应在板端运行，不能在主机上
+直接执行。
+
 主机测试和 Sanitizer 构建：
 
 ```bash

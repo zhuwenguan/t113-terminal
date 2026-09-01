@@ -63,6 +63,102 @@ set(T113_FREETYPE_LIBRARY "" CACHE FILEPATH
     "FreeType library for the selected target architecture")
 set(T113_FREETYPE_DEPENDENCIES "" CACHE STRING
     "Additional libraries required by the selected FreeType build")
+set(_t113_arm_target FALSE)
+if (T113_ARM_TARGET OR CMAKE_SYSTEM_PROCESSOR MATCHES "^[Aa][Rr][Mm]")
+    set(_t113_arm_target TRUE)
+endif()
+
+# The board's FreeType runtime is staged outside the repository for cross
+# builds.  Allow that cache to be selected by an environment variable, and
+# use the conventional per-user cache location when it exists.  This keeps
+# developer-specific paths out of tracked presets while making the standard
+# ARM presets usable on the development host.
+set(T113_FREETYPE_ROOT "" CACHE PATH
+    "Optional staged FreeType root containing include/ and lib/")
+if (_t113_arm_target AND NOT T113_FREETYPE_ROOT)
+    if (DEFINED ENV{T113_FREETYPE_ROOT} AND NOT "$ENV{T113_FREETYPE_ROOT}" STREQUAL "")
+        set(T113_FREETYPE_ROOT "$ENV{T113_FREETYPE_ROOT}" CACHE PATH
+            "Optional staged FreeType root containing include/ and lib/" FORCE)
+    elseif (DEFINED ENV{XDG_CACHE_HOME} AND
+            EXISTS "$ENV{XDG_CACHE_HOME}/t113-terminal/freetype-armhf")
+        set(T113_FREETYPE_ROOT
+            "$ENV{XDG_CACHE_HOME}/t113-terminal/freetype-armhf" CACHE PATH
+            "Optional staged FreeType root containing include/ and lib/" FORCE)
+    elseif (DEFINED ENV{HOME} AND
+            EXISTS "$ENV{HOME}/.cache/t113-terminal/freetype-armhf")
+        set(T113_FREETYPE_ROOT
+            "$ENV{HOME}/.cache/t113-terminal/freetype-armhf" CACHE PATH
+            "Optional staged FreeType root containing include/ and lib/" FORCE)
+    endif()
+endif()
+if (_t113_arm_target AND T113_FREETYPE_ROOT)
+    if (NOT T113_FREETYPE_INCLUDE_DIR)
+        foreach(_t113_freetype_include_candidate
+                "${T113_FREETYPE_ROOT}/include/usr/include/freetype2"
+                "${T113_FREETYPE_ROOT}/include/freetype2"
+                "${T113_FREETYPE_ROOT}/usr/include/freetype2")
+            if (EXISTS "${_t113_freetype_include_candidate}/ft2build.h")
+                set(T113_FREETYPE_INCLUDE_DIR
+                    "${_t113_freetype_include_candidate}" CACHE PATH
+                    "FreeType include directory containing ft2build.h" FORCE)
+                break()
+            endif()
+        endforeach()
+    endif()
+    if (NOT T113_FREETYPE_LIBRARY)
+        foreach(_t113_freetype_library_candidate
+                "${T113_FREETYPE_ROOT}/lib/libfreetype.so.6.16.1"
+                "${T113_FREETYPE_ROOT}/lib/libfreetype.so.6"
+                "${T113_FREETYPE_ROOT}/lib/libfreetype.so"
+                "${T113_FREETYPE_ROOT}/usr/lib/libfreetype.so.6.16.1"
+                "${T113_FREETYPE_ROOT}/usr/lib/libfreetype.so.6"
+                "${T113_FREETYPE_ROOT}/usr/lib/libfreetype.so")
+            if (EXISTS "${_t113_freetype_library_candidate}")
+                set(T113_FREETYPE_LIBRARY
+                    "${_t113_freetype_library_candidate}" CACHE FILEPATH
+                    "FreeType library for the selected target architecture"
+                    FORCE)
+                break()
+            endif()
+        endforeach()
+    endif()
+    if (NOT T113_FREETYPE_DEPENDENCIES)
+        set(_t113_freetype_dependencies)
+        foreach(_t113_freetype_dependency_candidate
+                "${T113_FREETYPE_ROOT}/lib/libpng16.so.16.36.0"
+                "${T113_FREETYPE_ROOT}/lib/libpng16.so.16"
+                "${T113_FREETYPE_ROOT}/lib/libpng16.so"
+                "${T113_FREETYPE_ROOT}/usr/lib/libpng16.so.16.36.0"
+                "${T113_FREETYPE_ROOT}/usr/lib/libpng16.so.16"
+                "${T113_FREETYPE_ROOT}/usr/lib/libpng16.so")
+            if (EXISTS "${_t113_freetype_dependency_candidate}")
+                list(APPEND _t113_freetype_dependencies
+                    "${_t113_freetype_dependency_candidate}")
+                break()
+            endif()
+        endforeach()
+        foreach(_t113_freetype_dependency_candidate
+                "${T113_FREETYPE_ROOT}/lib/libz.so.1.2.11"
+                "${T113_FREETYPE_ROOT}/lib/libz.so.1"
+                "${T113_FREETYPE_ROOT}/lib/libz.so"
+                "${T113_FREETYPE_ROOT}/usr/lib/libz.so.1.2.11"
+                "${T113_FREETYPE_ROOT}/usr/lib/libz.so.1"
+                "${T113_FREETYPE_ROOT}/usr/lib/libz.so")
+            if (EXISTS "${_t113_freetype_dependency_candidate}")
+                list(APPEND _t113_freetype_dependencies
+                    "${_t113_freetype_dependency_candidate}")
+                break()
+            endif()
+        endforeach()
+        if (_t113_freetype_dependencies)
+            set(T113_FREETYPE_DEPENDENCIES
+                "${_t113_freetype_dependencies}" CACHE STRING
+                "Additional libraries required by the selected FreeType build"
+                FORCE)
+        endif()
+        unset(_t113_freetype_dependencies)
+    endif()
+endif()
 if (NOT T113_FREETYPE_INCLUDE_DIR)
     find_path(T113_FREETYPE_INCLUDE_DIR ft2build.h
         PATH_SUFFIXES freetype2)

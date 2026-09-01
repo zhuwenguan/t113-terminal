@@ -1,0 +1,13 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "arm-release-local",
+            "inherits": "arm-release",
+            "description": "Example local T113 SDK/cache override",
+            "environment": {
+                "T113_FREETYPE_ROOT": "/path/to/freetype-armhf"
+            }
+        }
+    ]
+}

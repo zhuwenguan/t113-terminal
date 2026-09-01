@@ -104,7 +104,8 @@ scripts/stop_race.sh
 
 Host-only tests use `host-debug`, `host-release`, or `host-sanitize`; each
 preset owns its corresponding `out/<preset>/` directory. The ARM presets reuse
-`toolchain-t113.cmake` and disable host test executables.
+`toolchain-t113.cmake`, compile the test targets, and do not attempt to run
+ARM test executables on the host.
 
 `RACE_BIN_DIR`, `RACE_RUN_DIR` and `RACE_LOG_DIR` preserve existing deployment
 flexibility. Start launches core, waits for `/dev/shm/race_vehicle_state`, then
