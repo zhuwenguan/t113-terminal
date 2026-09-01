@@ -18,6 +18,8 @@ set(RACE_VIDEO_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/video)
 set(RACE_VIDEO_SOURCE_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/video/src)
 set(RACE_HUD_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/hud)
 set(RACE_UI_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/ui)
+set(RACE_WEBD_DIR ${CMAKE_SOURCE_DIR}/apps/webd)
+set(RACE_CIVETWEB_DIR ${CMAKE_SOURCE_DIR}/third_party/civetweb)
 set(T113_HUD_SOURCES
     ${RACE_VIDEO_SOURCE_DIR}/hud_renderer.c
     ${RACE_VIDEO_SOURCE_DIR}/hud_blend.c
@@ -300,6 +302,29 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 add_subdirectory(libs/ipc)
 add_subdirectory(libs/common)
 
+# CivetWeb is embedded as a fixed, source-vendored dependency so the web
+# daemon remains self-contained on the T113 image.  Only HTTP, static files
+# and WebSocket support are enabled; TLS/CGI/Lua/compression are intentionally
+# outside this local Phase 1 boundary.
+add_library(civetweb STATIC
+    ${RACE_CIVETWEB_DIR}/src/civetweb.c
+)
+target_include_directories(civetweb PUBLIC
+    ${RACE_CIVETWEB_DIR}/include
+)
+target_compile_definitions(civetweb PUBLIC
+    USE_WEBSOCKET
+    NO_SSL
+    NO_CGI
+    NO_LUA
+    NO_DUKTAPE
+    NO_ZLIB
+    NO_HTTP2
+)
+target_compile_features(civetweb PUBLIC c_std_11)
+target_compile_options(civetweb PRIVATE -w)
+target_link_libraries(civetweb PUBLIC Threads::Threads)
+
 add_executable(mjpeg_mp4_recover
     tools/mjpeg_mp4_recover.c
     ${RACE_VIDEO_SOURCE_DIR}/encoded_frame_queue.c
@@ -320,6 +345,23 @@ target_link_libraries(mjpeg_mp4_recover PRIVATE
 
 add_executable(race_state_dump tools/race_state_dump.c)
 target_link_libraries(race_state_dump PRIVATE race_common race_ipc)
+
+add_executable(webd
+    ${RACE_WEBD_DIR}/src/main.c
+    ${RACE_WEBD_DIR}/src/state_reader.c
+    ${RACE_WEBD_DIR}/src/webd_config.c
+    ${RACE_WEBD_DIR}/src/webd_json.c
+)
+target_include_directories(webd PRIVATE
+    ${RACE_WEBD_DIR}/include
+)
+target_compile_definitions(webd PRIVATE USE_WEBSOCKET)
+target_compile_options(webd PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(webd PRIVATE race_common race_ipc civetweb Threads::Threads)
+
+add_executable(fake_state_producer tools/fake_state_producer.c)
+target_compile_options(fake_state_producer PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(fake_state_producer PRIVATE race_common race_ipc Threads::Threads m)
 
 add_executable(t113_terminal
     ${RACE_TERMINAL_CORE_DIR}/main.c
@@ -432,7 +474,7 @@ else()
     target_link_libraries(race_video PRIVATE m)
 endif()
 
-install(TARGETS race_core race_video race_state_dump RUNTIME DESTINATION bin)
+install(TARGETS race_core race_video race_state_dump webd RUNTIME DESTINATION bin)
 install(TARGETS race_common ARCHIVE DESTINATION lib)
 install(TARGETS race_ipc ARCHIVE DESTINATION lib)
 install(DIRECTORY libs/common/include/race DESTINATION include)
@@ -440,6 +482,7 @@ install(DIRECTORY libs/ipc/include/race DESTINATION include)
 install(DIRECTORY libs/protocol/include/race DESTINATION include)
 install(DIRECTORY libs/vehicle-state/include/race DESTINATION include)
 install(DIRECTORY configs/t113/ DESTINATION config)
+install(DIRECTORY web/dashboard/dist/ DESTINATION web)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
 install(FILES
     assets/icons/car-battery.png
@@ -569,6 +612,12 @@ if (BUILD_TESTING)
     target_compile_options(test_shared_state PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME shared_state_abi_consistency_and_freshness
              COMMAND test_shared_state)
+
+    add_executable(test_shared_state_stress tests/test_shared_state_stress.c)
+    target_link_libraries(test_shared_state_stress PRIVATE race_common race_ipc)
+    target_compile_options(test_shared_state_stress PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME shared_state_seqlock_high_frequency_no_torn_reads
+             COMMAND test_shared_state_stress)
     add_library(video_lifecycle_fault_preload SHARED
         tests/video_lifecycle_fault_preload.c
     )

@@ -4,6 +4,8 @@ set -eu
 RACE_BIN_DIR=${RACE_BIN_DIR:-"$(CDPATH= cd -- "$(dirname -- "$0")/../out/arm-release" && pwd)"}
 RACE_RUN_DIR=${RACE_RUN_DIR:-/run/race}
 RACE_LOG_DIR=${RACE_LOG_DIR:-/tmp/race}
+RACE_WEBD_CONFIG=${RACE_WEBD_CONFIG:-"$RACE_BIN_DIR/../config/webd.conf"}
+RACE_WEB_ROOT=${RACE_WEB_ROOT:-"$RACE_BIN_DIR/../web"}
 
 mkdir -p "$RACE_RUN_DIR" "$RACE_LOG_DIR"
 
@@ -35,5 +37,10 @@ while [ "$i" -lt 50 ]; do
     i=$((i + 1))
 done
 if [ "$ready" -ne 1 ]; then echo "shared state did not become ready" >&2; exit 1; fi
+if [ -f "$RACE_WEBD_CONFIG" ]; then
+    start_daemon webd --config "$RACE_WEBD_CONFIG" --web-root "$RACE_WEB_ROOT"
+else
+    start_daemon webd --web-root "$RACE_WEB_ROOT" --port 80
+fi
 start_daemon race_video
-echo "race_core and race_video started"
+echo "race_core, webd and race_video started"

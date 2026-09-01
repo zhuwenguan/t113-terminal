@@ -19,8 +19,8 @@ stop_daemon() {
     rm -f "$pid_file"
 }
 
-stop_daemon race_telemetry
-stop_daemon race_web
+stop_daemon telemetryd
+stop_daemon webd
 stop_daemon race_video
 stop_daemon race_logger
 stop_daemon race_core

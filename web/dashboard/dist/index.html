@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T113 Terminal</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="page">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">FSE DATA TERMINAL</p>
+        <h1>T113 Terminal</h1>
+      </div>
+      <div id="connection" class="pill offline">OFFLINE</div>
+    </header>
+
+    <section class="grid">
+      <article class="card hero-card">
+        <span class="label">Speed</span>
+        <strong id="speed_kph" class="hero-value">--</strong>
+        <span class="unit">km/h</span>
+      </article>
+      <article class="card">
+        <span class="label">Motor RPM</span>
+        <strong id="motor_rpm" class="value">--</strong>
+        <span class="unit">rpm</span>
+      </article>
+      <article class="card">
+        <span class="label">Torque</span>
+        <strong id="torque_nm" class="value">--</strong>
+        <span class="unit">N·m</span>
+      </article>
+      <article class="card">
+        <span class="label">HV Power</span>
+        <strong id="hv_power_kw" class="value">--</strong>
+        <span class="unit">kW</span>
+      </article>
+    </section>
+
+    <section class="two-column">
+      <article class="card">
+        <h2>Battery</h2>
+        <dl>
+          <div><dt>HV Voltage</dt><dd><span id="hv_voltage_v">--</span> V</dd></div>
+          <div><dt>HV Current</dt><dd><span id="hv_current_a">--</span> A</dd></div>
+          <div><dt>SOC</dt><dd><span id="hv_soc_percent">--</span> %</dd></div>
+          <div><dt>Battery Temp</dt><dd><span id="battery_temperature_c">--</span> °C</dd></div>
+        </dl>
+      </article>
+      <article class="card">
+        <h2>Lap</h2>
+        <dl>
+          <div><dt>Lap</dt><dd id="lap_number">--</dd></div>
+          <div><dt>Lap Time</dt><dd><span id="lap_time_s">--</span> s</dd></div>
+          <div><dt>Best Lap</dt><dd><span id="best_lap_time_s">--</span> s</dd></div>
+          <div><dt>Delta</dt><dd><span id="delta_s">--</span> s</dd></div>
+        </dl>
+      </article>
+    </section>
+
+    <section class="card status-card">
+      <h2>Status</h2>
+      <dl>
+        <div><dt>CAN</dt><dd id="can_status">--</dd></div>
+        <div><dt>GPS</dt><dd id="gps_status">--</dd></div>
+        <div><dt>Drive state</dt><dd id="drive_state">--</dd></div>
+        <div><dt>Camera</dt><dd>Not exposed in Phase 1</dd></div>
+        <div><dt>Recording</dt><dd>Not exposed in Phase 1</dd></div>
+        <div><dt>State age</dt><dd><span id="state_age_ms">--</span> ms</dd></div>
+      </dl>
+    </section>
+
+    <footer>T113 local web interface · JSON + WebSocket telemetry</footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

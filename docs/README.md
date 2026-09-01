@@ -1,7 +1,7 @@
 # Documentation index
 
 - [Architecture](ARCHITECTURE.md): daemon ownership, IPC ABI and lifecycle.
-- [Web API](WEB_API.md): reserved local web API design.
+- [Web API](WEB_API.md): Phase 1 local web API and WebSocket schema.
 - [Telemetry protocol](TELEMETRY_PROTOCOL.md): reserved remote protocol design.
 - [Deployment](DEPLOYMENT.md): reserved T113/cloud deployment design.
 - [Usage](USAGE.md): build and runtime commands.

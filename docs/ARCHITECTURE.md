@@ -2,7 +2,7 @@
 
 ## Phase 1 outcome
 
-The runtime fault boundary is `race_core + POSIX shared memory + race_video`.
+The runtime fault boundary is `race_core + POSIX shared memory + race_video + webd`.
 The legacy `t113_terminal` target remains available for A/B comparison and
 rollback. No CAN mapping, Lap/Delta/Accel algorithm, HUD drawing, encoder,
 container or 800x600 pipeline behavior was redesigned.
@@ -10,7 +10,7 @@ container or 800x600 pipeline behavior was redesigned.
 ```text
 CAN -----\
           +--> race_core --> /race_vehicle_state --> race_video
-LapPro --/          |                    |----------> future loggerd/webd/telemetryd
+LapPro --/          |                    |----------> webd --> HTTP/WS --> browser
                     +--> logger (phase 1)
 ```
 
@@ -27,8 +27,11 @@ process.
   encode, MP4 writer, frame queues and existing DMA/ION teardown.
 - `loggerd`: reserved storage fault domain under `apps/loggerd/`. Raw
   CAN/LapPro/state batching and session paths remain tightly coupled to core.
-- `webd` and `telemetryd`: reserved daemon directories under `apps/`. They
-  contain no HTTP, WebSocket, MQTT, TCP or 4G implementation.
+- `webd`: independent local HTTP/WebSocket daemon. It has one shared-memory
+  reader/cache thread and bounded WebSocket client senders; it never writes to
+  the core mapping or sends vehicle commands.
+- `telemetryd`: reserved for the later 4G uplink and is not implemented in
+  Phase 1.
 
 The source tree is physically organized by ownership:
 
@@ -43,7 +46,7 @@ libs/common/                     process-neutral logging and time support
 libs/ipc/                        POSIX shared-memory/seqlock implementation
 libs/vehicle-state/              authoritative VehicleState ABI
 libs/protocol/                   event protocol definitions
-web/dashboard/                   future local dashboard source tree
+web/dashboard/                   local dashboard source and installable dist
 cloud/                            future cloud service boundaries
 configs/ and deploy/              board/cloud runtime and deployment assets
 tests/                            current tests plus reserved component areas
@@ -76,11 +79,13 @@ torn snapshots on weakly ordered ARM; it does not rely on `volatile`.
 All internal timestamps use `CLOCK_MONOTONIC` microseconds. Readers treat a
 publish age over one second (or a clock inversion/zero timestamp) as stale.
 `race_video` then supplies a zero/default state to HUD and logs transitions
-between `CORE STATE STALE` and `CORE STATE LIVE`.
+between `CORE STATE STALE` and `CORE STATE LIVE`. `webd` uses the same stale
+threshold for `/api/system.vehicle_state_alive` and returns HTTP 503 for a
+stale `/api/state`.
 
 ## Lifecycle and failure behavior
 
-Both daemons handle SIGINT/SIGTERM by setting a signal-safe stop flag. Core's
+All daemons handle SIGINT/SIGTERM by setting a signal-safe stop flag. Core's
 CAN epoll loop exits, then joins the snapshotter and LapPro, stops/flushed the
 logger, closes HMI/resources and unmaps SHM. Video stops its pipeline, whose
 existing teardown joins queues/writer and releases recorder, encoder, G2D,
@@ -90,7 +95,8 @@ Killing `race_video` cannot terminate core because there is no process ownership
 relationship or writable core mapping. Killing core leaves the already mapped
 SHM valid; video detects the frozen publish timestamp. Restarting video opens
 camera/G2D/encoder again. Restarting core reinitializes the ABI in the same SHM
-object.
+object. Killing or restarting `webd` closes only HTTP/WebSocket clients and
+does not affect `race_core`, CAN, LapPro, logger, camera, or recording.
 
 ## Build, install and operation
 
@@ -109,7 +115,7 @@ ARM test executables on the host.
 
 `RACE_BIN_DIR`, `RACE_RUN_DIR` and `RACE_LOG_DIR` preserve existing deployment
 flexibility. Start launches core, waits for `/dev/shm/race_vehicle_state`, then
-launches video. Stop sends SIGTERM in telemetryd/webd/video/loggerd/core order and
+launches webd and video. Stop sends SIGTERM in telemetryd/webd/video/loggerd/core order and
 waits up to ten seconds per process. Restart video alone with:
 
 ```sh
@@ -118,8 +124,9 @@ kill -TERM "$(cat /run/race/race_video.pid)"
 ```
 
 Use `race_state_dump` to inspect sequence, monotonic age, freshness and key HUD
-fields. Future web/telemetry/logger readers must use the same read-only API.
-Events/storage payload transport is intentionally only reserved in phase 1.
+fields. `webd` exposes `/api/state`, `/api/system`, `/api/capabilities` and
+`/ws/telemetry`; 4G telemetry, video HTTP output, logs, configuration and
+event/storage payload transport remain outside Phase 1.
 
 ## Required T113 acceptance
 
@@ -136,6 +143,10 @@ Before replacing the legacy binary, run on a real T113:
 6. Run an overnight comparison against the recorded legacy baseline and check
    CPU, RSS growth, sequence progress, drops and latency percentiles.
 
+For the web Phase 1 acceptance on a board, additionally verify the local page,
+the three API endpoints, three WebSocket clients, producer stop/restart
+recovery, and that killing `webd` leaves `race_core` and `race_video` running.
+
 Do not delete `t113_terminal` until these checks pass. Phase 2 should define a
 bounded event/log IPC and only then move storage writes into `loggerd`;
-phase 3 may add read-only web and downsampled telemetry consumers.
+phase 2 may add 4G telemetry and video/log consumers.

@@ -52,6 +52,10 @@ scripts/build-arm.sh arm-release
 ARM 目标文件为 `out/arm-release/t113_terminal`；所有 CMake 生成物都位于
 `out/` 下对应的配置目录中。
 
+Phase 1 Web/遥测架构还生成独立的 `race_core`（当前 terminal-core 守护进程）、
+`webd` 和 Host 测试用 `fake_state_producer`。`webd` 的 ARM 二进制不依赖
+Node/Python 或系统 HTTP 库。
+
 ## 部署到 T113
 
 把 `T113_HOST` 替换成开发板当前 IP：
@@ -64,6 +68,18 @@ ssh root@$T113_HOST 'chmod +x /mnt/UDISK/t113_terminal'
 ```
 
 ## 启动
+
+完整 daemon 方式（推荐）：
+
+```bash
+cmake --install out/arm-release --prefix /opt/t113
+/opt/t113/bin/race_core --battery-capacity-ah 20
+/opt/t113/bin/webd --config /opt/t113/config/webd.conf \
+  --web-root /opt/t113/web
+```
+
+实际部署也可以使用 `scripts/start_race.sh`，它会在确认 core 已经发布新鲜
+共享状态后启动 `webd` 和现有 `race_video`。`webd` 关闭或重启不会停止 core。
 
 前台启动，默认输出 INFO：
 
