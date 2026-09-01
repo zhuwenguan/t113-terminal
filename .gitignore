@@ -1,6 +1,8 @@
 # CMake build directories
 /build/
 /build*/
+/out/
+/CMakeUserPresets.json
 
 # CMake files generated in the project root
 /CMakeFiles/

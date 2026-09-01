@@ -6,7 +6,7 @@
 - 本地开发环境运行在 WSL 中。
 - 项目使用 `arm-linux-gnueabihf-gcc` 进行 ARM 交叉编译。
 - CMake 工具链文件为 `toolchain-t113.cmake`。
-- 核心程序入口为 `core/src/main.c`；旧的 A/B 回退目标名为 `t113_terminal`。
+- 核心程序入口为 `apps/terminal-core/main.c`；旧的 A/B 回退目标名为 `t113_terminal`。
 
 ## 当前开发阶段：双 CAN + LapPro 统一 APP
 
@@ -35,7 +35,7 @@
 - Replay 同时兼容当前 logger 生成的 `can_*.csv`、`lappro_*.csv` 及完整字段格式；多组 logger 文件按共同会话后缀确定性配对并选择字典序最新的一组，没有共同会话时拒绝混配；不读取 `vehicle_state.csv`，非法行跳过并告警。
 - LapPro 通过原生 Linux Bluetooth L2CAP ATT fixed CID 4 工作，不调用 `gatttool`、`hcitool` 或 `bluetoothctl`。
 - 当前默认目标地址为 `B0:A6:04:20:DF:3A`，位于 `LapProConfig` 中，可替换；默认地址类型为 LE public。
-- 当前已知 ATT 参数集中定义在 `core/src/lappro.c`：
+- 当前已知 ATT 参数集中定义在 `apps/terminal-core/src/lappro.c`：
   - FF01 Notify value `0x002A`
   - FF01 CCCD `0x002B`
   - FF02 Write value `0x002D`
@@ -47,17 +47,17 @@
 - 程序支持 `-v`/`--verbose` 开启 DEBUG，直接运行即可开始双 CAN 和 LapPro worker：
 
 ```bash
-./build/t113_terminal [-v|--verbose]
+./out/arm-release/t113_terminal [-v|--verbose]
 ```
 
 - 当前代码结构：
-  - `core/src/main.c`：APP 生命周期、CAN/LapPro/logger 汇合和退出清理。
-  - `core/src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理，只生成并分发 `CanMessage`。
-  - `core/src/can_decoder.c`：集中管理 CAN ID/signal 定义，解析并累计更新 `VehicleState`。
-  - `core/src/gps_track.c`、`lap_timer.c`、`accel_test.c`、`race_event.c`：赛道和加速算法。
-  - `core/src/logger.c`、`replay.c`、`lappro*.c`：存储、回放与 LapPro。
-  - `video/src/`：Camera、HUD、G2D、JPEG/MP4 和视频 pipeline。
-  - `common/`：跨进程 ABI、共享内存、时钟及公共日志支持。
+  - `apps/terminal-core/main.c`：APP 生命周期、CAN/LapPro/logger 汇合和退出清理。
+  - `apps/terminal-core/src/can_receiver.c`：双 CAN epoll 接收、统计和错误处理，只生成并分发 `CanMessage`。
+  - `apps/terminal-core/src/can_decoder.c`：集中管理 CAN ID/signal 定义，解析并累计更新 `VehicleState`。
+  - `apps/terminal-core/src/gps_track.c`、`lap_timer.c`、`accel_test.c`、`race_event.c`：赛道和加速算法。
+  - `apps/terminal-core/src/logger.c`、`replay.c`、`lappro*.c`：存储、回放与 LapPro。
+  - `apps/terminal-core/video/`：Camera、HUD、G2D、JPEG/MP4 和视频 pipeline。
+  - `libs/common/`、`libs/ipc/`、`libs/vehicle-state/`：公共支持、共享内存和 VehicleState ABI。
 
 ### LapPro 实机验证状态
 
@@ -78,19 +78,30 @@
 
 ## 构建
 
-首次构建或 `build/` 目录为空时，先配置交叉编译：
+构建统一通过根目录 `CMakePresets.json` 管理，生成物位于 `out/`：
 
 ```bash
-cmake -S . -B build \
-  -DCMAKE_TOOLCHAIN_FILE=toolchain-t113.cmake
+cmake --preset arm-release
+cmake --build --preset arm-release --parallel
 ```
 
-VS Code 的构建任务只执行增量构建，不会自动创建或重新配置 CMake 构建目录。
-
-也可以直接执行：
+主机测试和 Sanitizer 构建：
 
 ```bash
-cmake --build build -j
+cmake --preset host-debug
+cmake --build --preset host-debug --parallel
+ctest --preset host-debug
+
+cmake --preset host-sanitize
+cmake --build --preset host-sanitize --parallel
+ctest --preset host-sanitize
+```
+
+也可以直接执行封装脚本：
+
+```bash
+scripts/build-host.sh host-release
+scripts/build-arm.sh arm-release
 ```
 
 对应 VS Code 任务为 `T113: Build`，使用 GCC 问题匹配器显示编译错误。
@@ -98,10 +109,10 @@ cmake --build build -j
 生成的可执行文件为：
 
 ```text
-build/t113_terminal
+out/arm-release/t113_terminal
 ```
 
-除非任务明确要求，不要删除或覆盖用户已有的构建产物和本地修改。
+如需清理可再生构建产物，使用 `scripts/clean.sh`；该脚本只删除 `out/`。
 
 ## VS Code 远程调试
 
@@ -116,7 +127,7 @@ T113: Build
 
 当前配置的具体信息：
 
-- 本地调试程序：`${workspaceFolder}/build/t113_terminal`
+- 本地调试程序：`${workspaceFolder}/out/arm-release/t113_terminal`
 - 本地工作目录：`${workspaceFolder}`
 - 调试器：`/usr/bin/gdb-multiarch`
 - 调试方式：GDB/MI (`MIMode: gdb`)
@@ -153,7 +164,7 @@ ssh root@"$T113_HOST"
 当前 VS Code 部署任务执行：
 
 ```bash
-scp build/t113_terminal root@192.168.34.238:/mnt/UDISK/t113_terminal
+scp out/arm-release/t113_terminal root@192.168.34.238:/mnt/UDISK/t113_terminal
 scp -r assets root@192.168.34.238:/mnt/UDISK/
 ```
 
@@ -178,7 +189,7 @@ ssh root@"$T113_HOST" 'cat /tmp/gdbserver.log'
 ## 修改约定
 
 - 保持 CMake 配置与交叉编译工具链可用。
-- 新增功能按归属修改 `core/src/`、`video/src/` 或 `common/src/`，不要把生成文件提交到源码目录。
+- 新增功能按归属修改 `apps/terminal-core/src/`、`apps/terminal-core/video/src/` 或对应的 `libs/`，不要把生成文件提交到源码目录。
 - 修改后应至少检查 CMake 配置和本地可用的构建步骤；如果交叉编译器或目标板不可用，应明确说明未完成的验证项。
 - 不要提交 SSH 私钥、密码、令牌或包含敏感信息的本地配置。
 

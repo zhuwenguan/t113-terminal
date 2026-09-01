@@ -2,20 +2,41 @@
 
 ## 编译
 
-首次构建：
+主机调试构建：
 
 ```bash
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-t113.cmake
-cmake --build build -j
+cmake --preset host-debug
+cmake --build --preset host-debug --parallel
+ctest --preset host-debug
 ```
 
-后续增量编译：
+主机发布构建和 Sanitizer 构建分别使用：
 
 ```bash
-cmake --build build -j
+cmake --preset host-release
+cmake --build --preset host-release --parallel
+
+cmake --preset host-sanitize
+cmake --build --preset host-sanitize --parallel
+ctest --preset host-sanitize
 ```
 
-生成文件为 `build/t113_terminal`，目标架构是 ARM T113。
+T113 ARM 发布构建：
+
+```bash
+cmake --preset arm-release
+cmake --build --preset arm-release --parallel
+```
+
+也可以使用脚本：
+
+```bash
+scripts/build-host.sh host-debug
+scripts/build-arm.sh arm-release
+```
+
+ARM 目标文件为 `out/arm-release/t113_terminal`；所有 CMake 生成物都位于
+`out/` 下对应的配置目录中。
 
 ## 部署到 T113
 
@@ -23,7 +44,7 @@ cmake --build build -j
 
 ```bash
 export T113_HOST=192.168.34.238
-scp build/t113_terminal root@$T113_HOST:/mnt/UDISK/t113_terminal
+scp out/arm-release/t113_terminal root@$T113_HOST:/mnt/UDISK/t113_terminal
 scp -r assets root@$T113_HOST:/mnt/UDISK/
 ssh root@$T113_HOST 'chmod +x /mnt/UDISK/t113_terminal'
 ```
@@ -103,7 +124,7 @@ Replay 不启动 CAN 和 LapPro 硬件输入，从指定目录读取 CSV。目�
 运行回放：
 
 ```bash
-./build/t113_terminal --replay ./replay_data --replay-speed 0
+./out/arm-release/t113_terminal --replay ./replay_data --replay-speed 0
 ```
 
 `--replay-speed` 含义：`0` 为最快回放，`1` 为原始时间速度，`2` 为 2 倍速。
@@ -115,7 +136,7 @@ Replay 不启动 CAN 和 LapPro 硬件输入，从指定目录读取 CSV。目�
 同时查看 DEBUG：
 
 ```bash
-./build/t113_terminal -v --replay ./replay_data --replay-speed 1
+./out/arm-release/t113_terminal -v --replay ./replay_data --replay-speed 1
 ```
 
 ## 日志位置
@@ -178,9 +199,9 @@ ps | grep t113_terminal
 回退原 CPU YUV compositor。可用以下参数强制 A/B 模式：
 
 ```bash
-./build/t113_terminal --video-only --video-compositor g2d \
+./out/arm-release/t113_terminal --video-only --video-compositor g2d \
   --video-record /mnt/UDISK/onboard_g2d.mp4 --video-seconds 60
-./build/t113_terminal --video-only --video-compositor cpu \
+./out/arm-release/t113_terminal --video-only --video-compositor cpu \
   --video-record /mnt/UDISK/onboard_cpu.mp4 --video-seconds 60
 ```
 

@@ -745,7 +745,7 @@ Windows 已安装：
 后续如果引入更多依赖，建议检查：
 
 ```bash
-arm-linux-gnueabihf-readelf --version-info build/xxx | grep GLIBC
+arm-linux-gnueabihf-readelf --version-info out/arm-release/xxx | grep GLIBC
 ```
 
 确保最高 GLIBC requirement 不超过目标板 2.34。
@@ -799,7 +799,12 @@ t113-terminal/
 ├── src/
 │   └── main.c
 ├── include/
-├── build/
+├── out/
+│   ├── host-debug/
+│   ├── host-release/
+│   ├── host-sanitize/
+│   ├── arm-debug/
+│   └── arm-release/
 └── .vscode/
 ```
 
@@ -934,7 +939,7 @@ gdb-multiarch
 本地 `program` 应指向带调试符号的本地 ELF：
 
 ```text
-${workspaceFolder}/build/t113_terminal
+${workspaceFolder}/out/arm-release/t113_terminal
 ```
 
 而不是远端文件路径。
@@ -1183,7 +1188,8 @@ LapPro 到手后加入蓝牙模块。
 如果 Agent 可以操作当前 Windows / WSL 环境，应优先直接执行：
 
 ```bash
-cmake --build build
+cmake --preset arm-release
+cmake --build --preset arm-release --parallel
 scp ...
 ssh ...
 ```

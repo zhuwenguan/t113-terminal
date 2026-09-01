@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-RACE_BIN_DIR=${RACE_BIN_DIR:-"$(CDPATH= cd -- "$(dirname -- "$0")/../build" && pwd)"}
+RACE_BIN_DIR=${RACE_BIN_DIR:-"$(CDPATH= cd -- "$(dirname -- "$0")/../out/arm-release" && pwd)"}
 RACE_RUN_DIR=${RACE_RUN_DIR:-/run/race}
 RACE_LOG_DIR=${RACE_LOG_DIR:-/tmp/race}
 

@@ -6,37 +6,49 @@ project(t113_terminal
 )
 
 # The VehicleState ABI is authoritative here for every daemon target.
-set(RACE_COMMON_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/common/include)
-set(RACE_COMMON_LEGACY_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/common/include/race)
-set(RACE_CORE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/core/include)
-set(RACE_VIDEO_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/video/include)
+set(RACE_COMMON_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/common/include)
+set(RACE_COMMON_LEGACY_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/common/include/race)
+set(RACE_IPC_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/ipc/include)
+set(RACE_VEHICLE_STATE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/libs/vehicle-state/include)
+set(RACE_CORE_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/include)
+set(RACE_VIDEO_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/video/include)
+set(RACE_TERMINAL_CORE_SOURCE_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/src)
+set(RACE_TERMINAL_CORE_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core)
+set(RACE_VIDEO_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/video)
+set(RACE_VIDEO_SOURCE_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/video/src)
+set(RACE_HUD_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/hud)
+set(RACE_UI_DIR ${CMAKE_SOURCE_DIR}/apps/terminal-core/ui)
 set(T113_HUD_SOURCES
-    video/src/hud_renderer.c
-    video/src/hud_blend.c
-    video/src/hud_text.c
-    src/ui/ui_draw.c
-    src/ui/ui_font.c
-    src/ui/ui_image.c
+    ${RACE_VIDEO_SOURCE_DIR}/hud_renderer.c
+    ${RACE_VIDEO_SOURCE_DIR}/hud_blend.c
+    ${RACE_VIDEO_SOURCE_DIR}/hud_text.c
+    ${RACE_UI_DIR}/ui_draw.c
+    ${RACE_UI_DIR}/ui_font.c
+    ${RACE_UI_DIR}/ui_image.c
     third_party/tiny_png.c
-    src/hud/hud_widget.c
-    src/hud/hud_render.c)
+    ${RACE_HUD_DIR}/hud_widget.c
+    ${RACE_HUD_DIR}/hud_render.c)
 
-include_directories(${RACE_COMMON_INCLUDE_DIR})
+include_directories(
+    ${RACE_COMMON_INCLUDE_DIR}
+    ${RACE_IPC_INCLUDE_DIR}
+    ${RACE_VEHICLE_STATE_INCLUDE_DIR}
+)
 include_directories(${CMAKE_SOURCE_DIR}/third_party)
 
 add_library(ui_draw STATIC
-    src/ui/ui_draw.c
+    ${RACE_UI_DIR}/ui_draw.c
 )
-target_include_directories(ui_draw PUBLIC ${CMAKE_SOURCE_DIR}/src/ui)
+target_include_directories(ui_draw PUBLIC ${RACE_UI_DIR})
 target_compile_features(ui_draw PUBLIC c_std_11)
 target_compile_options(ui_draw PRIVATE -Wall -Wextra -Wpedantic)
 
 add_library(ui_image STATIC
-    src/ui/ui_image.c
+    ${RACE_UI_DIR}/ui_image.c
     third_party/tiny_png.c
 )
 target_include_directories(ui_image PUBLIC
-    ${CMAKE_SOURCE_DIR}/src/ui
+    ${RACE_UI_DIR}
     ${CMAKE_SOURCE_DIR}/third_party
 )
 target_compile_features(ui_image PUBLIC c_std_11)
@@ -72,13 +84,13 @@ target_link_libraries(t113_freetype INTERFACE
     ${T113_FREETYPE_LIBRARY} ${T113_FREETYPE_DEPENDENCIES} m)
 
 add_library(ui_font STATIC
-    src/ui/ui_font.c
-    video/src/hud_text.c
-    video/src/hud_blend.c
+    ${RACE_UI_DIR}/ui_font.c
+    ${RACE_VIDEO_SOURCE_DIR}/hud_text.c
+    ${RACE_VIDEO_SOURCE_DIR}/hud_blend.c
 )
 target_include_directories(ui_font PUBLIC
-    ${CMAKE_SOURCE_DIR}/src/ui
-    ${CMAKE_SOURCE_DIR}/src/hud
+    ${RACE_UI_DIR}
+    ${RACE_HUD_DIR}
     ${RACE_VIDEO_INCLUDE_DIR}
 )
 target_compile_features(ui_font PUBLIC c_std_11)
@@ -86,11 +98,11 @@ target_compile_options(ui_font PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(ui_font PUBLIC t113_freetype)
 
 add_library(hud_widget STATIC
-    src/hud/hud_widget.c
+    ${RACE_HUD_DIR}/hud_widget.c
 )
 target_include_directories(hud_widget PUBLIC
-    ${CMAKE_SOURCE_DIR}/src/hud
-    ${CMAKE_SOURCE_DIR}/src/ui
+    ${RACE_HUD_DIR}
+    ${RACE_UI_DIR}
 )
 target_compile_features(hud_widget PUBLIC c_std_11)
 target_compile_options(hud_widget PRIVATE -Wall -Wextra -Wpedantic)
@@ -189,22 +201,16 @@ endif()
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
-add_library(race_common STATIC
-    common/src/console_log.c
-    common/src/ipc_shm.c
-    common/src/time_utils.c
-)
-target_include_directories(race_common PUBLIC ${RACE_COMMON_INCLUDE_DIR})
-target_compile_options(race_common PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(race_common PUBLIC Threads::Threads)
+add_subdirectory(libs/ipc)
+add_subdirectory(libs/common)
 
 add_executable(mjpeg_mp4_recover
     tools/mjpeg_mp4_recover.c
-    video/src/encoded_frame_queue.c
-    video/src/video_recorder.c
-    video/src/video_encoder.c
-    video/src/jpeg_codec.c
-    video/src/video_frame.c
+    ${RACE_VIDEO_SOURCE_DIR}/encoded_frame_queue.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_recorder.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_encoder.c
+    ${RACE_VIDEO_SOURCE_DIR}/jpeg_codec.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_frame.c
 )
 target_include_directories(mjpeg_mp4_recover PRIVATE
     ${RACE_COMMON_LEGACY_INCLUDE_DIR}
@@ -217,41 +223,41 @@ target_link_libraries(mjpeg_mp4_recover PRIVATE
 )
 
 add_executable(race_state_dump tools/race_state_dump.c)
-target_link_libraries(race_state_dump PRIVATE race_common)
+target_link_libraries(race_state_dump PRIVATE race_common race_ipc)
 
 add_executable(t113_terminal
-    core/src/main.c
-    core/src/can_receiver.c
-    core/src/can_decoder.c
-    core/src/gps_track.c
-    core/src/lap_timer.c
-    core/src/accel_test.c
-    core/src/race_event.c
-    core/src/logger.c
-    core/src/replay.c
-    core/src/vehicle_state_clock.c
-    core/src/vehicle_state_snapshot.c
-    core/src/hmi.c
-    video/src/video_frame.c
-    video/src/encoded_frame_queue.c
-    video/src/jpeg_codec.c
-    video/src/video_encoder.c
-    video/src/video_capture.c
+    ${RACE_TERMINAL_CORE_DIR}/main.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_receiver.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_decoder.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/race_event.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/logger.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/replay.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/vehicle_state_clock.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/vehicle_state_snapshot.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/hmi.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_frame.c
+    ${RACE_VIDEO_SOURCE_DIR}/encoded_frame_queue.c
+    ${RACE_VIDEO_SOURCE_DIR}/jpeg_codec.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_encoder.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_capture.c
     ${T113_HUD_SOURCES}
-    video/src/video_compositor.c
-    video/src/video_recorder.c
-    video/src/video_pipeline.c
-    core/src/lappro.c
-    core/src/lappro_transport.c
-    core/src/lappro_crypto.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_compositor.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_recorder.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_pipeline.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/lappro.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/lappro_transport.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/lappro_crypto.c
 )
 
 target_include_directories(t113_terminal PRIVATE
     ${RACE_COMMON_LEGACY_INCLUDE_DIR}
     ${RACE_CORE_INCLUDE_DIR}
     ${RACE_VIDEO_INCLUDE_DIR}
-    ${CMAKE_SOURCE_DIR}/src/ui
-    ${CMAKE_SOURCE_DIR}/src/hud
+    ${RACE_UI_DIR}
+    ${RACE_HUD_DIR}
     ${T113_JPEG_INCLUDE_DIR}
 )
 
@@ -263,6 +269,7 @@ target_compile_options(t113_terminal PRIVATE
 
 target_link_libraries(t113_terminal PRIVATE
     race_common
+    race_ipc
     Threads::Threads
     ${CMAKE_DL_LIBS}
 )
@@ -286,34 +293,34 @@ target_link_libraries(t113_terminal PRIVATE t113_freetype)
 # sources, but it must not even link camera/G2D/encoder code: video is a real
 # process fault boundary, not merely a runtime command-line distinction.
 set(RACE_CORE_SOURCES
-    core/src/main.c core/src/can_receiver.c
-    core/src/can_decoder.c core/src/gps_track.c core/src/lap_timer.c
-    core/src/accel_test.c core/src/race_event.c core/src/logger.c
-    core/src/replay.c core/src/vehicle_state_clock.c
-    core/src/vehicle_state_snapshot.c core/src/hmi.c core/src/lappro.c
-    core/src/lappro_transport.c core/src/lappro_crypto.c)
+    ${RACE_TERMINAL_CORE_DIR}/main.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_receiver.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_decoder.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/race_event.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/logger.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/replay.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/vehicle_state_clock.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/vehicle_state_snapshot.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/hmi.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/lappro.c
+    ${RACE_TERMINAL_CORE_SOURCE_DIR}/lappro_transport.c ${RACE_TERMINAL_CORE_SOURCE_DIR}/lappro_crypto.c)
 add_executable(race_core ${RACE_CORE_SOURCES})
 target_compile_definitions(race_core PRIVATE RACE_CORE_DAEMON=1)
 target_include_directories(race_core PRIVATE
     ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR}
     ${T113_JPEG_INCLUDE_DIR})
 target_compile_options(race_core PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(race_core PRIVATE race_common Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(race_core PRIVATE race_common race_ipc Threads::Threads ${CMAKE_DL_LIBS})
 
 set(RACE_VIDEO_SOURCES
-    video/main.c
-    video/src/video_frame.c
-    video/src/encoded_frame_queue.c video/src/jpeg_codec.c
-    video/src/video_encoder.c video/src/video_capture.c
-    ${T113_HUD_SOURCES} video/src/video_compositor.c
-    video/src/video_recorder.c video/src/video_pipeline.c)
+    ${RACE_VIDEO_DIR}/main.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_frame.c
+    ${RACE_VIDEO_SOURCE_DIR}/encoded_frame_queue.c ${RACE_VIDEO_SOURCE_DIR}/jpeg_codec.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_encoder.c ${RACE_VIDEO_SOURCE_DIR}/video_capture.c
+    ${T113_HUD_SOURCES} ${RACE_VIDEO_SOURCE_DIR}/video_compositor.c
+    ${RACE_VIDEO_SOURCE_DIR}/video_recorder.c ${RACE_VIDEO_SOURCE_DIR}/video_pipeline.c)
 add_executable(race_video ${RACE_VIDEO_SOURCES})
 target_include_directories(race_video PRIVATE
     ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_VIDEO_INCLUDE_DIR}
-    ${CMAKE_SOURCE_DIR}/src/ui ${CMAKE_SOURCE_DIR}/src/hud
+    ${RACE_UI_DIR} ${RACE_HUD_DIR}
     ${T113_JPEG_INCLUDE_DIR})
 target_compile_options(race_video PRIVATE -Wall -Wextra -Wpedantic)
-target_link_libraries(race_video PRIVATE race_common Threads::Threads ${CMAKE_DL_LIBS})
+target_link_libraries(race_video PRIVATE race_common race_ipc Threads::Threads ${CMAKE_DL_LIBS})
 target_link_libraries(race_video PRIVATE t113_freetype)
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)" OR
@@ -329,20 +336,14 @@ else()
     target_link_libraries(race_video PRIVATE m)
 endif()
 
-option(RACE_BUILD_FUTURE_DAEMONS "Build logger/web/telemetry skeletons" OFF)
-if (RACE_BUILD_FUTURE_DAEMONS)
-    add_executable(race_logger logger/main.c)
-    add_executable(race_web web/main.c)
-    add_executable(race_telemetry telemetry/main.c)
-    target_link_libraries(race_logger PRIVATE race_common)
-    target_link_libraries(race_web PRIVATE race_common)
-    target_link_libraries(race_telemetry PRIVATE race_common)
-endif()
-
 install(TARGETS race_core race_video race_state_dump RUNTIME DESTINATION bin)
 install(TARGETS race_common ARCHIVE DESTINATION lib)
-install(DIRECTORY common/include/race DESTINATION include)
-install(DIRECTORY config/ DESTINATION config)
+install(TARGETS race_ipc ARCHIVE DESTINATION lib)
+install(DIRECTORY libs/common/include/race DESTINATION include)
+install(DIRECTORY libs/ipc/include/race DESTINATION include)
+install(DIRECTORY libs/protocol/include/race DESTINATION include)
+install(DIRECTORY libs/vehicle-state/include/race DESTINATION include)
+install(DIRECTORY configs/t113/ DESTINATION config)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
 install(FILES
     assets/icons/car-battery.png
@@ -357,9 +358,9 @@ install(FILES
 if (BUILD_TESTING)
     add_executable(test_ui_draw tests/test_ui_draw.c)
     target_include_directories(test_ui_draw PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_UI_DIR}
         ${RACE_VIDEO_INCLUDE_DIR}
-        ${CMAKE_SOURCE_DIR}/src/hud
+        ${RACE_HUD_DIR}
     )
     target_compile_options(test_ui_draw PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_ui_draw PRIVATE ui_draw)
@@ -367,7 +368,7 @@ if (BUILD_TESTING)
              COMMAND test_ui_draw)
 
     add_executable(test_ui_image tests/test_ui_image.c)
-    target_include_directories(test_ui_image PRIVATE ${CMAKE_SOURCE_DIR}/src/ui)
+    target_include_directories(test_ui_image PRIVATE ${RACE_UI_DIR})
     target_compile_options(test_ui_image PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_ui_image PRIVATE ui_image)
     add_test(NAME ui_image_load_binary_alpha_clipping_and_guards
@@ -381,7 +382,7 @@ if (BUILD_TESTING)
                      ${CMAKE_SOURCE_DIR}/assets/icons/flag-checkered.png)
 
     add_executable(test_ui_font tests/test_ui_font.c)
-    target_include_directories(test_ui_font PRIVATE ${CMAKE_SOURCE_DIR}/src/ui)
+    target_include_directories(test_ui_font PRIVATE ${RACE_UI_DIR})
     target_compile_options(test_ui_font PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_ui_font PRIVATE ui_font)
     add_test(NAME ui_font_measure_draw_clipping_and_lifecycle
@@ -389,7 +390,7 @@ if (BUILD_TESTING)
 
     add_executable(test_ui_phase2 tests/test_ui_phase2.c)
     target_include_directories(test_ui_phase2 PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_UI_DIR}
         ${RACE_VIDEO_INCLUDE_DIR}
     )
     target_compile_options(test_ui_phase2 PRIVATE -Wall -Wextra -Wpedantic)
@@ -400,11 +401,11 @@ if (BUILD_TESTING)
 
     add_executable(test_hud_widget
         tests/test_hud_widget.c
-        src/hud/hud_widget.c
+        ${RACE_HUD_DIR}/hud_widget.c
     )
     target_include_directories(test_hud_widget PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/hud
-        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_HUD_DIR}
+        ${RACE_UI_DIR}
     )
     target_compile_options(test_hud_widget PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_hud_widget PRIVATE ui_draw)
@@ -413,12 +414,12 @@ if (BUILD_TESTING)
 
     add_executable(test_hud_render
         tests/test_hud_render.c
-        src/hud/hud_render.c
-        src/hud/hud_widget.c
+        ${RACE_HUD_DIR}/hud_render.c
+        ${RACE_HUD_DIR}/hud_widget.c
     )
     target_include_directories(test_hud_render PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/hud
-        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_HUD_DIR}
+        ${RACE_UI_DIR}
         ${RACE_COMMON_INCLUDE_DIR}
         ${RACE_VIDEO_INCLUDE_DIR}
     )
@@ -431,12 +432,12 @@ if (BUILD_TESTING)
 
     add_executable(hud_perf_benchmark
         tests/hud_perf_benchmark.c
-        src/hud/hud_render.c
-        src/hud/hud_widget.c
+        ${RACE_HUD_DIR}/hud_render.c
+        ${RACE_HUD_DIR}/hud_widget.c
     )
     target_include_directories(hud_perf_benchmark PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/hud
-        ${CMAKE_SOURCE_DIR}/src/ui
+        ${RACE_HUD_DIR}
+        ${RACE_UI_DIR}
         ${RACE_COMMON_INCLUDE_DIR}
     )
     target_compile_options(hud_perf_benchmark PRIVATE
@@ -448,13 +449,13 @@ if (BUILD_TESTING)
 
     add_executable(test_video_compositor_argb
         tests/test_video_compositor_argb.c
-        video/src/video_compositor.c
-        video/src/video_frame.c
+        ${RACE_VIDEO_SOURCE_DIR}/video_compositor.c
+        ${RACE_VIDEO_SOURCE_DIR}/video_frame.c
     )
     target_include_directories(test_video_compositor_argb PRIVATE
         ${RACE_VIDEO_INCLUDE_DIR}
-        ${CMAKE_SOURCE_DIR}/src/ui
-        ${CMAKE_SOURCE_DIR}/src/hud
+        ${RACE_UI_DIR}
+        ${RACE_HUD_DIR}
     )
     target_compile_definitions(test_video_compositor_argb PRIVATE
         _DEFAULT_SOURCE
@@ -468,7 +469,7 @@ if (BUILD_TESTING)
              COMMAND test_video_compositor_argb)
 
     add_executable(test_shared_state tests/test_shared_state.c)
-    target_link_libraries(test_shared_state PRIVATE race_common)
+    target_link_libraries(test_shared_state PRIVATE race_common race_ipc)
     target_compile_options(test_shared_state PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME shared_state_abi_consistency_and_freshness
              COMMAND test_shared_state)
@@ -500,7 +501,7 @@ if (BUILD_TESTING)
 
     add_executable(test_vehicle_state_clock
         tests/test_vehicle_state_clock.c
-        core/src/vehicle_state_clock.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/vehicle_state_clock.c
     )
     target_include_directories(test_vehicle_state_clock PRIVATE ${RACE_CORE_INCLUDE_DIR})
     target_compile_options(test_vehicle_state_clock PRIVATE
@@ -513,7 +514,7 @@ if (BUILD_TESTING)
 
     add_executable(test_encoded_frame_queue
         tests/test_encoded_frame_queue.c
-        video/src/encoded_frame_queue.c
+        ${RACE_VIDEO_SOURCE_DIR}/encoded_frame_queue.c
     )
     target_include_directories(test_encoded_frame_queue PRIVATE ${RACE_VIDEO_INCLUDE_DIR})
     target_compile_options(test_encoded_frame_queue PRIVATE
@@ -527,7 +528,7 @@ if (BUILD_TESTING)
 
     add_executable(test_can_decoder
         tests/test_can_decoder.c
-        core/src/can_decoder.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_decoder.c
     )
     target_include_directories(test_can_decoder PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR})
@@ -541,8 +542,8 @@ if (BUILD_TESTING)
 
     add_executable(test_lap_timer_trace
         tests/test_lap_timer_trace.c
-        core/src/lap_timer.c
-        core/src/gps_track.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c
     )
     target_include_directories(test_lap_timer_trace PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR})
@@ -560,8 +561,8 @@ if (BUILD_TESTING)
 
     add_executable(test_lap_timer_best_reference
         tests/test_lap_timer_best_reference.c
-        core/src/lap_timer.c
-        core/src/gps_track.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c
     )
     target_include_directories(test_lap_timer_best_reference PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR})
@@ -580,10 +581,10 @@ if (BUILD_TESTING)
 
     add_executable(test_race_event_accel
         tests/test_race_event_accel.c
-        core/src/race_event.c
-        core/src/accel_test.c
-        core/src/lap_timer.c
-        core/src/gps_track.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/race_event.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c
     )
     target_include_directories(test_race_event_accel PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR})
@@ -601,10 +602,10 @@ if (BUILD_TESTING)
 
     add_executable(test_race_event_laptime
         tests/test_race_event_laptime.c
-        core/src/race_event.c
-        core/src/accel_test.c
-        core/src/lap_timer.c
-        core/src/gps_track.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/race_event.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c
     )
     target_include_directories(test_race_event_laptime PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR})
@@ -622,7 +623,7 @@ if (BUILD_TESTING)
 
     add_executable(test_accel_axis
         tests/test_accel_axis.c
-        core/src/accel_test.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c
     )
     target_include_directories(test_accel_axis PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR})
@@ -640,8 +641,8 @@ if (BUILD_TESTING)
 
     add_executable(test_replay_vehicle_state_snapshot
         tests/test_replay_vehicle_state_snapshot.c
-        core/src/replay.c
-        core/src/vehicle_state_snapshot.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/replay.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/vehicle_state_snapshot.c
     )
     target_include_directories(test_replay_vehicle_state_snapshot PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR}
@@ -661,7 +662,7 @@ if (BUILD_TESTING)
 
     add_executable(test_hmi
         tests/test_hmi.c
-        core/src/hmi.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/hmi.c
     )
     target_include_directories(test_hmi PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR})
@@ -679,13 +680,13 @@ if (BUILD_TESTING)
 
     add_executable(test_hud_text
         tests/test_hud_text.c
-        video/src/hud_text.c
-        video/src/hud_blend.c
+        ${RACE_VIDEO_SOURCE_DIR}/hud_text.c
+        ${RACE_VIDEO_SOURCE_DIR}/hud_blend.c
     )
     target_include_directories(test_hud_text PRIVATE
         ${RACE_VIDEO_INCLUDE_DIR}
-        ${CMAKE_SOURCE_DIR}/src/ui
-        ${CMAKE_SOURCE_DIR}/src/hud
+        ${RACE_UI_DIR}
+        ${RACE_HUD_DIR}
     )
     target_compile_options(test_hud_text PRIVATE -Wall -Wextra -Wpedantic)
     target_link_libraries(test_hud_text PRIVATE t113_freetype)
@@ -694,11 +695,11 @@ if (BUILD_TESTING)
 
     add_executable(test_video_recorder_timestamps
         tests/test_video_recorder_timestamps.c
-        video/src/encoded_frame_queue.c
-        video/src/video_recorder.c
-        video/src/video_encoder.c
-        video/src/jpeg_codec.c
-        video/src/video_frame.c
+        ${RACE_VIDEO_SOURCE_DIR}/encoded_frame_queue.c
+        ${RACE_VIDEO_SOURCE_DIR}/video_recorder.c
+        ${RACE_VIDEO_SOURCE_DIR}/video_encoder.c
+        ${RACE_VIDEO_SOURCE_DIR}/jpeg_codec.c
+        ${RACE_VIDEO_SOURCE_DIR}/video_frame.c
     )
     target_include_directories(test_video_recorder_timestamps PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR}
@@ -725,8 +726,8 @@ if (BUILD_TESTING)
 
     add_executable(test_jpeg_codec
         tests/test_jpeg_codec.c
-        video/src/jpeg_codec.c
-        video/src/video_frame.c
+        ${RACE_VIDEO_SOURCE_DIR}/jpeg_codec.c
+        ${RACE_VIDEO_SOURCE_DIR}/video_frame.c
     )
     target_include_directories(test_jpeg_codec PRIVATE
         ${RACE_COMMON_LEGACY_INCLUDE_DIR}

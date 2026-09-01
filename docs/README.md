@@ -1,6 +1,9 @@
 # Documentation index
 
 - [Architecture](ARCHITECTURE.md): daemon ownership, IPC ABI and lifecycle.
+- [Web API](WEB_API.md): reserved local web API design.
+- [Telemetry protocol](TELEMETRY_PROTOCOL.md): reserved remote protocol design.
+- [Deployment](DEPLOYMENT.md): reserved T113/cloud deployment design.
 - [Usage](USAGE.md): build and runtime commands.
 - [T113 project context](T113_project_context.md): board and development context.
 - [HUD architecture](design/HUD_ARCHITECTURE.md): HUD rendering boundaries.

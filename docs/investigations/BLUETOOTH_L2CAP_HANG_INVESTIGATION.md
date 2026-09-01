@@ -149,8 +149,8 @@ unexpected event
 
 ## 3. 当前 LapPro 实现与生命周期
 
-源代码位于 [`core/src/lappro.c`](core/src/lappro.c) 和
-[`core/include/lappro.h`](core/include/lappro.h)。静态审查结果：
+源代码位于 [`apps/terminal-core/src/lappro.c`](../../apps/terminal-core/src/lappro.c) 和
+[`apps/terminal-core/include/lappro.h`](../../apps/terminal-core/include/lappro.h)。静态审查结果：
 
 - `lappro_connect()` 创建 `socket(AF_BLUETOOTH, SOCK_SEQPACKET, BTPROTO_L2CAP)`，
   绑定 LE ATT fixed CID 4，并连接目标地址；没有发现 BlueZ D-Bus、gatttool 或
@@ -186,7 +186,7 @@ DISCONNECTED
   -> 释放 LapPro mutex/state
 ```
 
-`core/src/lappro.c` 中仍有多个 `close()`，但失败路径和成功路径都属于同一个
+`apps/terminal-core/src/lappro.c` 中仍有多个 `close()`，但失败路径和成功路径都属于同一个
 worker 的连接 owner；`lappro_stop()` 不再直接触碰连接 fd。这消除了当前应用层
 最明确的跨线程 shutdown/close 交叉点。
 
@@ -342,7 +342,7 @@ watchdog，也没有通过增大 timeout 掩盖问题。
 ### 已完成的主机侧检查
 
 ```text
-arm-linux-gnueabihf-gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only ... core/src/lappro.c
+arm-linux-gnueabihf-gcc -std=c11 -Wall -Wextra -Werror -fsyntax-only ... apps/terminal-core/src/lappro.c
 PASS
 ```
 
@@ -363,12 +363,12 @@ Set T113_FREETYPE_INCLUDE_DIR and T113_FREETYPE_LIBRARY
 代码的编译错误。配置 FreeType 后应重新执行：
 
 ```bash
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+cmake --build --preset arm-release --parallel
+ctest --preset host-debug
 ```
 
 本轮直接运行现有 `build` 目录的 CTest 得到 1/15 PASS、14/15 FAIL；失败测试的
-可执行文件被 shell 报为 `Syntax error`，符合 build 目录中已有目标与当前主机/目标
+可执行文件被 shell 报为 `Syntax error`，符合旧输出目录中已有目标与当前主机/目标
 架构不匹配或旧构建产物的特征，不是 LapPro 测试失败。应在 FreeType 配置完成后
 清理并按当前工具链重新 configure/build，再复测。
 

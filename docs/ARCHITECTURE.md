@@ -10,7 +10,7 @@ container or 800x600 pipeline behavior was redesigned.
 ```text
 CAN -----\
           +--> race_core --> /race_vehicle_state --> race_video
-LapPro --/          |                    |----------> future logger/web/telemetry
+LapPro --/          |                    |----------> future loggerd/webd/telemetryd
                     +--> logger (phase 1)
 ```
 
@@ -25,31 +25,40 @@ process.
   video-pipeline objects, so video is an actual binary/process fault boundary.
 - `race_video`: V4L2 capture, JPEG/MJPEG decode, G2D, HUD, compositor, JPEG
   encode, MP4 writer, frame queues and existing DMA/ION teardown.
-- `race_logger`: reserved storage fault domain. It is a disabled-by-default
-  skeleton because raw CAN/LapPro/state batching and session paths remain
-  tightly coupled to core.
-- `race_web` and `race_telemetry`: disabled-by-default skeletons. They contain no
-  HTTP, WebSocket, MQTT, TCP or 4G implementation.
+- `loggerd`: reserved storage fault domain under `apps/loggerd/`. Raw
+  CAN/LapPro/state batching and session paths remain tightly coupled to core.
+- `webd` and `telemetryd`: reserved daemon directories under `apps/`. They
+  contain no HTTP, WebSocket, MQTT, TCP or 4G implementation.
 
 The source tree is physically organized by ownership:
 
 ```text
-common/          cross-process ABI, IPC, time and shared logging support
-core/src/        CAN, LapPro, state, algorithms, logger and core entry point
-core/include/    core-private module interfaces
-video/src/       capture, HUD, G2D, codec, recorder and video pipeline
-video/include/   video-private module interfaces and vendor ABIs
-logger/ web/ telemetry/  future daemon boundaries and skeletons
+apps/terminal-core/              current single-board application
+apps/terminal-core/src/          CAN, LapPro, state, algorithms and logger
+apps/terminal-core/include/      terminal-core-private module interfaces
+apps/terminal-core/video/        capture, HUD, G2D, codec, recorder and pipeline
+apps/terminal-core/hud/          page-level HUD rendering and widgets
+apps/terminal-core/ui/           CPU UI primitives, fonts and images
+libs/common/                     process-neutral logging and time support
+libs/ipc/                        POSIX shared-memory/seqlock implementation
+libs/vehicle-state/              authoritative VehicleState ABI
+libs/protocol/                   event protocol definitions
+web/dashboard/                   future local dashboard source tree
+cloud/                            future cloud service boundaries
+configs/ and deploy/              board/cloud runtime and deployment assets
+tests/                            current tests plus reserved component areas
 ```
 
-The legacy `t113_terminal` target assembles `core` and `video` sources only for
-rollback/A-B comparison. Production daemon targets use their own directories.
+The legacy `t113_terminal` target assembles the terminal-core and video sources
+only for rollback/A-B comparison. Production daemon targets use their own
+directories.
 
 ## Shared VehicleState ABI
 
-`common/include/race/vehicle_state.h` is the only authoritative definition;
-all code includes it directly. `librace_common.a` provides logging, SHM and
-monotonic-clock utilities.
+`libs/vehicle-state/include/race/vehicle_state.h` is the only authoritative
+definition; all code includes it directly. `librace_common.a` provides logging
+and monotonic-clock utilities, while `librace_ipc.a` provides the shared-memory
+implementation.
 
 `RaceSharedState` contains magic `0x52414345`, ABI version, header size, total
 size, VehicleState size, an atomic sequence, flags, `publish_mono_us`, and the
@@ -86,16 +95,20 @@ object.
 ## Build, install and operation
 
 ```sh
-cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=toolchain-t113.cmake
-cmake --build build -j
-cmake --install build --prefix /opt/race
+cmake --preset arm-release
+cmake --build --preset arm-release --parallel
+cmake --install out/arm-release --prefix /opt/race
 scripts/start_race.sh
 scripts/stop_race.sh
 ```
 
+Host-only tests use `host-debug`, `host-release`, or `host-sanitize`; each
+preset owns its corresponding `out/<preset>/` directory. The ARM presets reuse
+`toolchain-t113.cmake` and disable host test executables.
+
 `RACE_BIN_DIR`, `RACE_RUN_DIR` and `RACE_LOG_DIR` preserve existing deployment
 flexibility. Start launches core, waits for `/dev/shm/race_vehicle_state`, then
-launches video. Stop sends SIGTERM in telemetry/web/video/logger/core order and
+launches video. Stop sends SIGTERM in telemetryd/webd/video/loggerd/core order and
 waits up to ten seconds per process. Restart video alone with:
 
 ```sh
@@ -123,5 +136,5 @@ Before replacing the legacy binary, run on a real T113:
    CPU, RSS growth, sequence progress, drops and latency percentiles.
 
 Do not delete `t113_terminal` until these checks pass. Phase 2 should define a
-bounded event/log IPC and only then move storage writes into `race_logger`;
+bounded event/log IPC and only then move storage writes into `loggerd`;
 phase 3 may add read-only web and downsampled telemetry consumers.
