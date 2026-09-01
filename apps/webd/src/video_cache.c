@@ -11,7 +11,8 @@
 enum {
     WEBD_VIDEO_RETRY_INTERVAL_US = 250000U,
     WEBD_VIDEO_POLL_INTERVAL_US = 20000U,
-    WEBD_VIDEO_REOPEN_AFTER_US = 2000000U
+    WEBD_VIDEO_REOPEN_AFTER_US = 2000000U,
+    WEBD_VIDEO_RATE_WINDOW_US = 1000000U
 };
 
 static uint64_t video_cache_now_us(void)
@@ -107,35 +108,43 @@ static void video_cache_update_rates(WebdVideoCache *cache,
      * Do not turn that reset into a bogus one-frame FPS spike. */
     if ((cache->last_seen_sequence != 0U &&
          info->sequence < cache->last_seen_sequence) ||
-        (cache->last_seen_source_frames != 0U &&
-         info->source_frame_count < cache->last_seen_source_frames)) {
-        cache->last_seen_pts_us = 0U;
-        cache->last_seen_source_frames = 0U;
+        (cache->rate_window_source_frames != 0U &&
+         info->source_frame_count < cache->rate_window_source_frames)) {
+        cache->rate_window_pts_us = 0U;
+        cache->rate_window_source_frames = 0U;
+        cache->rate_window_sequence = 0U;
         cache->last_seen_sequence = 0U;
         cache->source_fps = 0.0;
         cache->web_publish_fps = 0.0;
     }
-    if (cache->last_seen_pts_us != 0U && info->pts_us > cache->last_seen_pts_us) {
+    if (cache->rate_window_pts_us == 0U) {
+        cache->rate_window_pts_us = info->pts_us;
+        cache->rate_window_source_frames = info->source_frame_count;
+        cache->rate_window_sequence = info->sequence;
+    } else if (info->pts_us > cache->rate_window_pts_us &&
+               info->pts_us - cache->rate_window_pts_us >=
+                   WEBD_VIDEO_RATE_WINDOW_US) {
         uint64_t source_delta = info->source_frame_count >=
-                                cache->last_seen_source_frames ?
+                                cache->rate_window_source_frames ?
                                 info->source_frame_count -
-                                cache->last_seen_source_frames : 0U;
-        uint64_t publish_delta = info->sequence >= cache->last_seen_sequence ?
-                                 info->sequence - cache->last_seen_sequence : 0U;
-        double elapsed_s = (double)(info->pts_us - cache->last_seen_pts_us) /
-                           1000000.0;
+                                cache->rate_window_source_frames : 0U;
+        uint64_t publish_delta = info->sequence >=
+                                 cache->rate_window_sequence ?
+                                 info->sequence - cache->rate_window_sequence :
+                                 0U;
+        double elapsed_s = (double)(info->pts_us -
+                                    cache->rate_window_pts_us) / 1000000.0;
 
-        if (elapsed_s > 0.0) {
-            if (source_delta > 0U) {
-                cache->source_fps = (double)source_delta / elapsed_s;
-            }
-            if (publish_delta > 0U) {
-                cache->web_publish_fps = (double)publish_delta / elapsed_s;
-            }
+        if (source_delta > 0U) {
+            cache->source_fps = (double)source_delta / elapsed_s;
         }
+        if (publish_delta > 0U) {
+            cache->web_publish_fps = (double)publish_delta / elapsed_s;
+        }
+        cache->rate_window_pts_us = info->pts_us;
+        cache->rate_window_source_frames = info->source_frame_count;
+        cache->rate_window_sequence = info->sequence;
     }
-    cache->last_seen_pts_us = info->pts_us;
-    cache->last_seen_source_frames = info->source_frame_count;
     cache->last_seen_sequence = info->sequence;
 }
 

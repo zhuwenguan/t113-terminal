@@ -38,9 +38,10 @@ typedef struct {
     size_t jpeg_size;
     RaceVideoFrameInfo info;
     uint64_t last_open_attempt_us;
-    uint64_t last_seen_pts_us;
-    uint64_t last_seen_source_frames;
     uint64_t last_seen_sequence;
+    uint64_t rate_window_pts_us;
+    uint64_t rate_window_source_frames;
+    uint64_t rate_window_sequence;
     double source_fps;
     double web_publish_fps;
     bool opened;
