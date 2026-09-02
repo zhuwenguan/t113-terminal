@@ -1,0 +1,11 @@
+#!/bin/sh
+
+case "${1:-start}" in
+    start) /opt/t113/bin/start_race.sh ;;
+    stop) /opt/t113/bin/stop_race.sh ;;
+    restart)
+        /opt/t113/bin/stop_race.sh || true
+        /opt/t113/bin/start_race.sh
+        ;;
+    *) echo "Usage: $0 {start|stop|restart}" >&2; exit 1 ;;
+esac

@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -217,13 +218,98 @@ static int logger_flush_and_sync_file(FILE *file)
     if (descriptor < 0) {
         return -1;
     }
-    while (fsync(descriptor) < 0) {
+    while (fdatasync(descriptor) < 0) {
         if (errno == EINTR) {
             continue;
         }
         return -1;
     }
     return 0;
+}
+
+/* A power cut can leave the final CSV line unterminated. Preserve every
+ * complete record and remove only that tail before a new session is opened. */
+static void logger_recover_file_tail(const char *path)
+{
+    struct stat status;
+    int descriptor;
+    off_t position;
+
+    if (path == NULL || stat(path, &status) < 0 || !S_ISREG(status.st_mode) ||
+        status.st_size == 0) {
+        return;
+    }
+    descriptor = open(path, O_RDWR | O_CLOEXEC);
+    if (descriptor < 0) {
+        return;
+    }
+    position = status.st_size;
+    while (position > 0) {
+        char character;
+
+        position--;
+        if (pread(descriptor, &character, 1U, position) != 1) {
+            close(descriptor);
+            return;
+        }
+        if (character == '\n') {
+            if (position + 1 < status.st_size) {
+                if (ftruncate(descriptor, position + 1) == 0) {
+                    (void)fdatasync(descriptor);
+                    LOG_WARN("Logger recovered incomplete file tail: %s",
+                             path);
+                }
+            }
+            close(descriptor);
+            return;
+        }
+    }
+    if (ftruncate(descriptor, 0) == 0) {
+        (void)fdatasync(descriptor);
+        LOG_WARN("Logger recovered incomplete file tail: %s", path);
+    }
+    close(descriptor);
+}
+
+static void logger_recover_session_files(void)
+{
+    DIR *sessions = opendir(LOGGER_LOG_DIRECTORY);
+    struct dirent *session_entry;
+
+    if (sessions == NULL) {
+        return;
+    }
+    while ((session_entry = readdir(sessions)) != NULL) {
+        char session_path[256];
+        DIR *session;
+        struct dirent *file_entry;
+
+        if (strncmp(session_entry->d_name, "session_", 8U) != 0 ||
+            snprintf(session_path, sizeof(session_path), "%s/%s",
+                     LOGGER_LOG_DIRECTORY, session_entry->d_name) >=
+                (int)sizeof(session_path)) {
+            continue;
+        }
+        session = opendir(session_path);
+        if (session == NULL) {
+            continue;
+        }
+        while ((file_entry = readdir(session)) != NULL) {
+            char file_path[256];
+            size_t length = strlen(file_entry->d_name);
+
+            if (length < 4U || strcmp(file_entry->d_name + length - 4U,
+                                      ".csv") != 0 ||
+                snprintf(file_path, sizeof(file_path), "%s/%s",
+                         session_path, file_entry->d_name) >=
+                    (int)sizeof(file_path)) {
+                continue;
+            }
+            logger_recover_file_tail(file_path);
+        }
+        closedir(session);
+    }
+    closedir(sessions);
 }
 
 static int logger_write_header(Logger *logger, LogRecordType type)
@@ -239,21 +325,21 @@ static int logger_write_header(Logger *logger, LogRecordType type)
 
     if (type == LOG_RECORD_TYPE_CAN) {
         if (fprintf(logger->file[type],
-                    "# t113 CAN log v1\n"
-                    "# timestamp_us,bus,id,flags,dlc,data\n") < 0) {
+                    "# t113 CAN log v2\n"
+                    "# timestamp_us,bus,id,flags,dlc,data,sequence\n") < 0) {
             return -1;
         }
     } else if (type == LOG_RECORD_TYPE_LAPPRO) {
         if (fprintf(logger->file[type],
-                    "# t113 LapPro parsed log v1\n"
+                    "# t113 LapPro parsed log v2\n"
                     "# timestamp_us,gps_time,connected,authenticated,"
                     "streaming,fix_type,num_sv,speed_kmh,heading_deg,hacc_m,"
-                    "altitude,longitude,latitude,acc_x,acc_y,acc_z\n") < 0) {
+                    "altitude,longitude,latitude,acc_x,acc_y,acc_z,sequence\n") < 0) {
             return -1;
         }
     } else if (type == LOG_RECORD_TYPE_VEHICLE_STATE) {
         if (fprintf(logger->file[type],
-                    "# t113 Vehicle State log v7\n"
+                    "# t113 Vehicle State log v8\n"
                     "# timestamp_us,valid_mask,lap_number,lap_valid,"
                     "lap_time_s,last_lap_time_s,"
                     "best_lap_time_s,delta_time_s,"
@@ -267,7 +353,7 @@ static int logger_write_header(Logger *logger, LogRecordType type)
                     "hv_discharge_ah,hv_software_discharge_ah,hv_soc_valid,"
                     "lv_voltage_v,mode,throttle_percent,brake_percent,"
                     "drive_state,event_mode,accel_distance_m,"
-                    "accel_50m_time_s,accel_time_s,max_acceleration\n") < 0) {
+                    "accel_50m_time_s,accel_time_s,max_acceleration,sequence\n") < 0) {
             return -1;
         }
     } else {
@@ -275,11 +361,7 @@ static int logger_write_header(Logger *logger, LogRecordType type)
         return -1;
     }
 
-    if (fflush(logger->file[type]) < 0) {
-        return -1;
-    }
-
-    return 0;
+    return logger_flush_and_sync_file(logger->file[type]);
 }
 
 static void logger_close_files(Logger *logger)
@@ -308,7 +390,11 @@ int logger_init(Logger *logger)
     }
 
     memset(logger, 0, sizeof(*logger));
-    if (logger_prepare_storage() < 0 ||
+    if (logger_prepare_storage() < 0) {
+        return -1;
+    }
+    logger_recover_session_files();
+    if (
         logger_make_session_directory(logger) < 0 ||
         logger_make_paths(logger) < 0) {
         return -1;
@@ -372,6 +458,15 @@ int logger_init(Logger *logger)
         return -1;
     }
 
+    if (pthread_mutex_init(&logger->file_mutex, NULL) != 0) {
+        LOG_ERROR("Cannot initialize logger file mutex");
+        pthread_cond_destroy(&logger->condition);
+        pthread_mutex_destroy(&logger->mutex);
+        logger_close_files(logger);
+        return -1;
+    }
+    logger->file_mutex_initialized = true;
+
     logger->initialized = true;
     return 0;
 }
@@ -399,7 +494,7 @@ static int logger_write_can_record(FILE *file, const LogRecord *record)
                 (unsigned int)message->bus, message->id, message->flags,
                 (unsigned int)message->dlc) < 0 ||
         logger_write_hex(file, message->data, message->dlc) < 0 ||
-        fputc('\n', file) == EOF) {
+        fprintf(file, ",%llu\n", (unsigned long long)record->sequence) < 0) {
         return -1;
     }
 
@@ -427,7 +522,7 @@ static int logger_write_lappro_record(FILE *file, const LogRecord *record)
 
     return fprintf(file,
                    "%llu,%s,%u,%u,%u,%u,%u,%.6f,%.6f,%.6f,%.6f,"
-                   "%.8f,%.8f,%.6f,%.6f,%.6f\n",
+                   "%.8f,%.8f,%.6f,%.6f,%.6f,%llu\n",
                    (unsigned long long)record->timestamp_us,
                    gps_time,
                    state->connected ? 1U : 0U,
@@ -436,7 +531,8 @@ static int logger_write_lappro_record(FILE *file, const LogRecord *record)
                    (unsigned int)state->num_sv, state->speed_kmh,
                    state->heading_deg, state->hacc_m, state->altitude,
                    state->longitude, state->latitude, state->acc_x,
-                   state->acc_y, state->acc_z) < 0
+                   state->acc_y, state->acc_z,
+                   (unsigned long long)record->sequence) < 0
                ? -1
                : 0;
 }
@@ -450,7 +546,7 @@ static int logger_write_vehicle_state_record(FILE *file,
                    "%llu,0x%08x,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u,%u,%u,%u,"
                    "%.6f,%.6f,%.8f,%.8f,%.6f,%.6f,%.6f,"
                    "%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,"
-                   "%u,%.3f,%u,%.3f,%.3f,%s,%s,%.3f,%.3f,%.3f,%.3f\n",
+                   "%u,%.3f,%u,%.3f,%.3f,%s,%s,%.3f,%.3f,%.3f,%.3f,%llu\n",
                    (unsigned long long)record->timestamp_us,
                    state->valid_mask,
                    (unsigned int)state->lap_number,
@@ -477,7 +573,8 @@ static int logger_write_vehicle_state_record(FILE *file,
                    vehicle_drive_state_name(state->drive_state),
                    vehicle_state_event_mode_name(state->event_mode),
                    state->accel_distance_m, state->accel_50m_time_s,
-                   state->accel_time_s, state->max_acceleration) < 0
+                   state->accel_time_s, state->max_acceleration,
+                   (unsigned long long)record->sequence) < 0
                ? -1
                : 0;
 }
@@ -558,6 +655,12 @@ static void logger_write_batch(Logger *logger, const LogRecord *batch,
     memcpy(file_failed, logger->stats.file_failed, sizeof(file_failed));
     pthread_mutex_unlock(&logger->mutex);
 
+    if (!logger->file_mutex_initialized ||
+        pthread_mutex_lock(&logger->file_mutex) != 0) {
+        LOG_ERROR("Cannot lock logger file mutex");
+        return;
+    }
+
     for (index = 0; index < count; ++index) {
         const LogRecord *record = &batch[index];
 
@@ -588,7 +691,7 @@ static void logger_write_batch(Logger *logger, const LogRecord *batch,
         if (!touched[type] || file_failed[type]) {
             continue;
         }
-        if (fflush(logger->file[type]) < 0) {
+        if (logger_flush_and_sync_file(logger->file[type]) < 0) {
             batch_stats.write_errors++;
             batch_stats.by_type[type].write_errors++;
             file_failed[type] = true;
@@ -598,6 +701,7 @@ static void logger_write_batch(Logger *logger, const LogRecord *batch,
     }
 
     memcpy(batch_stats.file_failed, file_failed, sizeof(file_failed));
+    pthread_mutex_unlock(&logger->file_mutex);
     logger_commit_batch_stats(logger, &batch_stats);
 }
 
@@ -738,6 +842,7 @@ void logger_record_sink(const LogRecord *record, void *context)
     }
 
     logger->queue[logger->queue_tail] = *record;
+    logger->queue[logger->queue_tail].sequence = ++logger->next_sequence;
     logger->queue_tail =
         (logger->queue_tail + 1U) % LOGGER_QUEUE_CAPACITY;
     logger->queue_count++;
@@ -818,6 +923,11 @@ void logger_stop(Logger *logger)
 
     {
         unsigned int type;
+        bool file_mutex_locked = false;
+
+        if (logger->file_mutex_initialized) {
+            file_mutex_locked = pthread_mutex_lock(&logger->file_mutex) == 0;
+        }
 
         for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
             bool file_failed;
@@ -854,11 +964,75 @@ void logger_stop(Logger *logger)
             }
             logger->file[type] = NULL;
         }
+        if (file_mutex_locked) {
+            pthread_mutex_unlock(&logger->file_mutex);
+        }
     }
 
+    if (logger->file_mutex_initialized) {
+        pthread_mutex_destroy(&logger->file_mutex);
+        logger->file_mutex_initialized = false;
+    }
     pthread_cond_destroy(&logger->condition);
     pthread_mutex_destroy(&logger->mutex);
     logger->initialized = false;
+}
+
+int logger_force_flush(Logger *logger)
+{
+    unsigned int type;
+    int result = 0;
+
+    if (logger == NULL || !logger->initialized) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (logger->started) {
+        pthread_mutex_lock(&logger->mutex);
+        logger->stop_requested = true;
+        pthread_cond_signal(&logger->condition);
+        pthread_mutex_unlock(&logger->mutex);
+        pthread_join(logger->thread, NULL);
+        if (pthread_mutex_lock(&logger->mutex) == 0) {
+            logger->started = false;
+            pthread_mutex_unlock(&logger->mutex);
+        }
+    }
+    if (!logger->file_mutex_initialized ||
+        pthread_mutex_lock(&logger->file_mutex) != 0) {
+        errno = EBUSY;
+        return -1;
+    }
+    for (type = 0U; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        if (logger->file[type] != NULL &&
+            logger_flush_and_sync_file(logger->file[type]) < 0) {
+            result = -1;
+        }
+    }
+    pthread_mutex_unlock(&logger->file_mutex);
+    return result;
+}
+
+bool logger_is_healthy(const Logger *logger)
+{
+    unsigned int type;
+    bool healthy = true;
+
+    if (logger == NULL || !logger->initialized || !logger->started ||
+        !logger_mount_is_writable(LOGGER_MOUNT_POINT)) {
+        return false;
+    }
+    if (pthread_mutex_lock((pthread_mutex_t *)&logger->mutex) != 0) {
+        return false;
+    }
+    for (type = 0U; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        if (logger->file[type] == NULL || logger->stats.file_failed[type]) {
+            healthy = false;
+            break;
+        }
+    }
+    pthread_mutex_unlock((pthread_mutex_t *)&logger->mutex);
+    return healthy;
 }
 
 const char *logger_get_path(const Logger *logger)

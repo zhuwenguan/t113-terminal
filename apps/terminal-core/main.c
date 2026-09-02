@@ -25,6 +25,8 @@
 #include <signal.h>
 #endif
 #ifdef RACE_CORE_DAEMON
+#include <signal.h>
+#include <race/core_status.h>
 #include <race/shared_state.h>
 #include <race/bms_shared_state.h>
 #endif
@@ -39,6 +41,20 @@ typedef struct {
     VehicleStateClock clock;
     Hmi *hmi;
 #ifdef RACE_CORE_DAEMON
+    pthread_mutex_t logger_mutex;
+    pthread_mutex_t status_mutex;
+    pthread_t logger_thread;
+    Logger *logger_instance;
+    bool logger_ready;
+    bool logger_ever_ready;
+    bool logger_thread_stop_requested;
+    bool logger_thread_started;
+    char logger_session_directory[RACE_CORE_STATUS_PATH_MAX];
+    uint32_t can_ready_mask;
+    LapPro *lappro;
+    LapProConfig *lappro_config;
+    bool lappro_ready;
+    RaceCoreStatusHandle core_status;
     RaceSharedStateHandle shared_state;
     RaceSharedBmsStateHandle bms_shared_state;
 #endif
@@ -64,6 +80,40 @@ typedef struct {
     HudStyle hud_style;
 #endif
 } MainOptions;
+
+#ifdef RACE_CORE_DAEMON
+static volatile sig_atomic_t main_stop_requested;
+static CanReceiver *main_active_receiver;
+
+static void main_core_handle_signal(int signal_number)
+{
+    (void)signal_number;
+    main_stop_requested = 1;
+    if (main_active_receiver != NULL) {
+        can_receiver_stop(main_active_receiver);
+    }
+}
+
+static int main_core_install_signals(void)
+{
+    struct sigaction action;
+
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = main_core_handle_signal;
+    sigemptyset(&action.sa_mask);
+    if (sigaction(SIGINT, &action, NULL) < 0 ||
+        sigaction(SIGTERM, &action, NULL) < 0) {
+        return -1;
+    }
+    return 0;
+}
+#endif
+
+#ifdef RACE_CORE_DAEMON
+static void main_lappro_sample_sink(uint64_t timestamp_us,
+                                    const LapProState *sample,
+                                    void *context);
+#endif
 
 #ifndef RACE_CORE_DAEMON
 static volatile sig_atomic_t main_stop_requested;
@@ -99,6 +149,273 @@ static uint64_t main_monotonic_us(void)
     return (uint64_t)now.tv_sec * 1000000ULL +
            (uint64_t)now.tv_nsec / 1000ULL;
 }
+
+#ifdef RACE_CORE_DAEMON
+static bool main_logger_is_ready(MainCanContext *can_context)
+{
+    bool ready;
+
+    if (can_context == NULL ||
+        pthread_mutex_lock(&can_context->logger_mutex) != 0) {
+        return false;
+    }
+    ready = can_context->logger_ready;
+    pthread_mutex_unlock(&can_context->logger_mutex);
+    return ready;
+}
+
+static void main_logger_message_sink(const CanMessage *message,
+                                     MainCanContext *can_context)
+{
+    if (can_context == NULL || message == NULL ||
+        pthread_mutex_lock(&can_context->logger_mutex) != 0) {
+        return;
+    }
+    if (can_context->logger_ready && can_context->logger_instance != NULL) {
+        logger_message_sink(message, can_context->logger_instance);
+    }
+    pthread_mutex_unlock(&can_context->logger_mutex);
+}
+
+static void main_logger_lappro_sink(uint64_t timestamp_us,
+                                    const LapProState *sample,
+                                    MainCanContext *can_context)
+{
+    if (can_context == NULL || sample == NULL ||
+        pthread_mutex_lock(&can_context->logger_mutex) != 0) {
+        return;
+    }
+    if (can_context->logger_ready && can_context->logger_instance != NULL) {
+        logger_lappro_sink(timestamp_us, sample, can_context->logger_instance);
+    }
+    pthread_mutex_unlock(&can_context->logger_mutex);
+}
+
+static void main_logger_vehicle_state_sink(uint64_t timestamp_us,
+                                           const VehicleState *state,
+                                           MainCanContext *can_context)
+{
+    if (can_context == NULL || state == NULL ||
+        pthread_mutex_lock(&can_context->logger_mutex) != 0) {
+        return;
+    }
+    if (can_context->logger_ready && can_context->logger_instance != NULL) {
+        logger_vehicle_state_sink(timestamp_us, state,
+                                   can_context->logger_instance);
+    }
+    pthread_mutex_unlock(&can_context->logger_mutex);
+}
+
+static void main_update_core_status(MainCanContext *can_context,
+                                    uint32_t can_ready_mask,
+                                    bool update_can,
+                                    bool stopping)
+{
+    RaceCoreStatusData data;
+    bool logger_ready;
+    bool lappro_ready;
+
+    if (can_context == NULL ||
+        pthread_mutex_lock(&can_context->logger_mutex) != 0) {
+        return;
+    }
+    logger_ready = can_context->logger_ready;
+    pthread_mutex_unlock(&can_context->logger_mutex);
+
+    if (pthread_mutex_lock(&can_context->status_mutex) != 0) {
+        return;
+    }
+    if (update_can) {
+        can_context->can_ready_mask = can_ready_mask;
+    }
+    lappro_ready = can_context->lappro_ready;
+    if (logger_ready) {
+        can_context->logger_ever_ready = true;
+    }
+    memset(&data, 0, sizeof(data));
+    data.can_ready_mask = can_context->can_ready_mask;
+    data.flags = (logger_ready ? RACE_CORE_STATUS_LOGGER_READY : 0U) |
+                 (can_context->can_ready_mask & 1U ?
+                      RACE_CORE_STATUS_CAN0_READY : 0U) |
+                 (can_context->can_ready_mask & 2U ?
+                      RACE_CORE_STATUS_CAN1_READY : 0U) |
+                 (can_context->hmi != NULL ? RACE_CORE_STATUS_HMI_READY : 0U) |
+                 (lappro_ready ? RACE_CORE_STATUS_LAPPRO_READY : 0U);
+    if (stopping) {
+        data.state = RACE_CORE_LIFECYCLE_STOPPING;
+    } else if (!logger_ready && can_context->logger_ever_ready) {
+        data.state = RACE_CORE_LIFECYCLE_DEGRADED;
+    } else if (logger_ready && can_context->can_ready_mask == 3U) {
+        data.state = RACE_CORE_LIFECYCLE_RUNNING;
+    } else {
+        data.state = RACE_CORE_LIFECYCLE_PRECHECK;
+    }
+    data.heartbeat_mono_us = main_monotonic_us();
+    if (logger_ready) {
+        (void)snprintf(data.session_directory,
+                       sizeof(data.session_directory), "%s",
+                       can_context->logger_session_directory);
+    }
+    (void)race_core_status_publish(&can_context->core_status, &data);
+    pthread_mutex_unlock(&can_context->status_mutex);
+}
+
+static void main_lappro_set_ready(MainCanContext *can_context, bool ready)
+{
+    if (can_context == NULL || pthread_mutex_lock(&can_context->status_mutex) != 0) {
+        return;
+    }
+    can_context->lappro_ready = ready;
+    pthread_mutex_unlock(&can_context->status_mutex);
+}
+
+static bool main_lappro_get_ready(MainCanContext *can_context)
+{
+    bool ready;
+
+    if (can_context == NULL ||
+        pthread_mutex_lock(&can_context->status_mutex) != 0) {
+        return false;
+    }
+    ready = can_context->lappro_ready;
+    pthread_mutex_unlock(&can_context->status_mutex);
+    return ready;
+}
+
+static void main_logger_sleep(MainCanContext *can_context)
+{
+    struct timespec delay = { 0, 100000000L };
+    unsigned int iteration;
+
+    for (iteration = 0U; iteration < 10U; ++iteration) {
+        bool stop;
+
+        if (pthread_mutex_lock(&can_context->logger_mutex) != 0) {
+            return;
+        }
+        stop = can_context->logger_thread_stop_requested;
+        pthread_mutex_unlock(&can_context->logger_mutex);
+        if (stop || main_stop_requested) {
+            return;
+        }
+        (void)nanosleep(&delay, NULL);
+    }
+}
+
+static void *main_logger_thread_main(void *opaque)
+{
+    MainCanContext *can_context = opaque;
+
+    while (!main_stop_requested) {
+        bool logger_ready;
+        bool stop;
+
+        if (pthread_mutex_lock(&can_context->logger_mutex) != 0) {
+            break;
+        }
+        stop = can_context->logger_thread_stop_requested;
+        logger_ready = can_context->logger_ready;
+        if (!stop && !logger_ready) {
+            Logger *logger = can_context->logger_instance;
+
+            if (logger != NULL && logger_init(logger) == 0 &&
+                logger_start(logger) == 0) {
+                const char *session = logger_get_session_directory(logger);
+
+                can_context->logger_ready = true;
+                if (session != NULL) {
+                    (void)snprintf(can_context->logger_session_directory,
+                                   sizeof(can_context->logger_session_directory),
+                                   "%s", session);
+                }
+                LOG_INFO("Logger ready: session=%s",
+                         can_context->logger_session_directory);
+            } else if (logger != NULL) {
+                logger_stop(logger);
+            }
+        } else if (!stop && logger_ready &&
+                   !logger_is_healthy(can_context->logger_instance)) {
+            LOG_ERROR("Logger became unhealthy; entering degraded mode");
+            logger_stop(can_context->logger_instance);
+            can_context->logger_ready = false;
+            can_context->logger_session_directory[0] = '\0';
+        }
+        pthread_mutex_unlock(&can_context->logger_mutex);
+        if (stop) {
+            break;
+        }
+        main_update_core_status(can_context, 0U, false, false);
+        main_logger_sleep(can_context);
+    }
+    return NULL;
+}
+
+static void main_stop_logger_supervisor(MainCanContext *can_context)
+{
+    if (can_context == NULL) {
+        return;
+    }
+    if (pthread_mutex_lock(&can_context->logger_mutex) == 0) {
+        can_context->logger_thread_stop_requested = true;
+        pthread_mutex_unlock(&can_context->logger_mutex);
+    }
+    if (can_context->logger_thread_started) {
+        pthread_join(can_context->logger_thread, NULL);
+        can_context->logger_thread_started = false;
+    }
+    if (pthread_mutex_lock(&can_context->logger_mutex) == 0) {
+        if (can_context->logger_ready && can_context->logger_instance != NULL) {
+            logger_stop(can_context->logger_instance);
+            logger_print_stats(can_context->logger_instance);
+        }
+        can_context->logger_ready = false;
+        pthread_mutex_unlock(&can_context->logger_mutex);
+    }
+}
+
+static void main_can_tick(void *context)
+{
+    MainCanContext *can_context = context;
+    bool logger_ready;
+    bool lappro_ready;
+
+    if (can_context == NULL) {
+        return;
+    }
+    logger_ready = main_logger_is_ready(can_context);
+    lappro_ready = main_lappro_get_ready(can_context);
+    if (logger_ready && !lappro_ready && can_context->lappro != NULL &&
+        can_context->lappro_config != NULL) {
+        char session_directory[RACE_CORE_STATUS_PATH_MAX];
+
+        memset(session_directory, 0, sizeof(session_directory));
+        if (pthread_mutex_lock(&can_context->logger_mutex) == 0) {
+            (void)snprintf(session_directory, sizeof(session_directory), "%s",
+                           can_context->logger_session_directory);
+            pthread_mutex_unlock(&can_context->logger_mutex);
+        }
+        if (session_directory[0] != '\0') {
+            race_event_close(&can_context->race_event);
+            race_event_init(&can_context->race_event, session_directory);
+        }
+        if (lappro_init(can_context->lappro, can_context->lappro_config) == 0) {
+            lappro_set_sample_sink(can_context->lappro,
+                                   main_lappro_sample_sink, can_context);
+            if (lappro_start(can_context->lappro) == 0) {
+                main_lappro_set_ready(can_context, true);
+                LOG_INFO("LapPro started after logger became ready");
+            } else {
+                lappro_stop(can_context->lappro);
+            }
+        }
+    } else if (!logger_ready && lappro_ready) {
+        lappro_stop(can_context->lappro);
+        main_lappro_set_ready(can_context, false);
+        LOG_WARN("LapPro stopped because logger is unavailable");
+    }
+    main_update_core_status(can_context, 3U, true, false);
+}
+#endif
 
 static void main_vehicle_state_snapshot_locked(MainCanContext *can_context,
                                                uint64_t timestamp_us,
@@ -159,9 +476,14 @@ static void main_vehicle_state_snapshot_sink(uint64_t timestamp_us,
         return;
     }
 
-    if (can_context->logger != NULL &&
-        (state->valid_mask & required_mask) == required_mask) {
-        logger_vehicle_state_sink(timestamp_us, state, can_context->logger);
+    if ((state->valid_mask & required_mask) == required_mask) {
+#ifdef RACE_CORE_DAEMON
+        main_logger_vehicle_state_sink(timestamp_us, state, can_context);
+#else
+        if (can_context->logger != NULL) {
+            logger_vehicle_state_sink(timestamp_us, state, can_context->logger);
+        }
+#endif
     }
     if (can_context->hmi != NULL) {
         (void)hmi_update(can_context->hmi, timestamp_us, state);
@@ -304,9 +626,13 @@ static void main_can_message_sink(const CanMessage *message, void *context)
     }
 
     /* Keep the raw path independent from decoder mappings and failures. */
+#ifdef RACE_CORE_DAEMON
+    main_logger_message_sink(message, can_context);
+#else
     if (can_context->logger != NULL) {
         logger_message_sink(message, can_context->logger);
     }
+#endif
 
     pthread_mutex_lock(&can_context->mutex);
     vehicle_state_clock_note_event(&can_context->clock,
@@ -328,9 +654,13 @@ static void main_lappro_sample_sink(uint64_t timestamp_us,
         return;
     }
 
+#ifdef RACE_CORE_DAEMON
+    main_logger_lappro_sink(timestamp_us, sample, can_context);
+#else
     if (can_context->logger != NULL) {
         logger_lappro_sink(timestamp_us, sample, can_context->logger);
     }
+#endif
 
     pthread_mutex_lock(&can_context->mutex);
     vehicle_state_clock_note_lappro(&can_context->clock, timestamp_us,
@@ -615,8 +945,10 @@ int main(int argc, char *argv[])
     static MainCanContext can_context;
     MainOptions options;
     CanDecoderConfig decoder_config;
+#ifndef RACE_CORE_DAEMON
     bool lappro_ready = false;
     bool logger_ready = false;
+#endif
     bool hmi_ready = false;
     bool snapshotter_ready = false;
 #ifndef RACE_CORE_DAEMON
@@ -651,6 +983,11 @@ int main(int argc, char *argv[])
     }
 #endif
 #ifdef RACE_CORE_DAEMON
+    if (main_core_install_signals() < 0) {
+        LOG_ERROR("Cannot install core termination handlers: %s",
+                  strerror(errno));
+        return EXIT_FAILURE;
+    }
     if (race_shared_state_writer_open(&can_context.shared_state, NULL) < 0) {
         LOG_ERROR("Cannot create %s: %s", RACE_SHARED_STATE_NAME,
                   strerror(errno));
@@ -660,6 +997,13 @@ int main(int argc, char *argv[])
                                           NULL) < 0) {
         LOG_ERROR("Cannot create %s: %s", RACE_BMS_SHARED_STATE_NAME,
                   strerror(errno));
+        race_shared_state_close(&can_context.shared_state);
+        return EXIT_FAILURE;
+    }
+    if (race_core_status_writer_open(&can_context.core_status, NULL) < 0) {
+        LOG_ERROR("Cannot create %s: %s", RACE_CORE_STATUS_NAME,
+                  strerror(errno));
+        race_shared_bms_state_close(&can_context.bms_shared_state);
         race_shared_state_close(&can_context.shared_state);
         return EXIT_FAILURE;
     }
@@ -678,9 +1022,31 @@ int main(int argc, char *argv[])
 #ifdef RACE_CORE_DAEMON
         race_shared_bms_state_close(&can_context.bms_shared_state);
         race_shared_state_close(&can_context.shared_state);
+        race_core_status_close(&can_context.core_status);
 #endif
         return EXIT_FAILURE;
     }
+#ifdef RACE_CORE_DAEMON
+    int logger_mutex_result = pthread_mutex_init(&can_context.logger_mutex, NULL);
+    int status_mutex_result = pthread_mutex_init(&can_context.status_mutex, NULL);
+    if (logger_mutex_result != 0 || status_mutex_result != 0) {
+        LOG_ERROR("Cannot initialize core lifecycle mutexes");
+        if (logger_mutex_result == 0) {
+            pthread_mutex_destroy(&can_context.logger_mutex);
+        }
+        if (status_mutex_result == 0) {
+            pthread_mutex_destroy(&can_context.status_mutex);
+        }
+        pthread_mutex_destroy(&can_context.mutex);
+        race_shared_bms_state_close(&can_context.bms_shared_state);
+        race_shared_state_close(&can_context.shared_state);
+        race_core_status_close(&can_context.core_status);
+        return EXIT_FAILURE;
+    }
+#endif
+#ifdef RACE_CORE_DAEMON
+    can_context.logger_instance = &logger;
+#else
     if (logger_init(&logger) < 0) {
         LOG_WARN("Data logger unavailable; continuing without file logging");
     } else if (logger_start(&logger) < 0) {
@@ -689,7 +1055,12 @@ int main(int argc, char *argv[])
     } else {
         logger_ready = true;
     }
+#endif
+#ifndef RACE_CORE_DAEMON
     can_context.logger = logger_ready ? &logger : NULL;
+#else
+    can_context.logger = NULL;
+#endif
     if (hmi_init(&hmi, HMI_DEFAULT_DEVICE_PATH) < 0) {
         LOG_WARN("HMI unavailable; continuing without display output");
     } else {
@@ -697,8 +1068,30 @@ int main(int argc, char *argv[])
     }
     can_context.hmi = hmi_ready ? &hmi : NULL;
     race_event_init(&can_context.race_event,
+#ifdef RACE_CORE_DAEMON
+                    NULL);
+#else
                     logger_ready ? logger_get_session_directory(&logger)
                                  : NULL);
+#endif
+
+#ifdef RACE_CORE_DAEMON
+    can_context.lappro = &lappro;
+    can_context.lappro_config = &lappro_config;
+    main_update_core_status(&can_context, 0U, true, false);
+    if (pthread_create(&can_context.logger_thread, NULL,
+                       main_logger_thread_main, &can_context) != 0) {
+        LOG_ERROR("Cannot start logger supervisor thread");
+        race_core_status_close(&can_context.core_status);
+        pthread_mutex_destroy(&can_context.status_mutex);
+        pthread_mutex_destroy(&can_context.logger_mutex);
+        pthread_mutex_destroy(&can_context.mutex);
+        race_shared_bms_state_close(&can_context.bms_shared_state);
+        race_shared_state_close(&can_context.shared_state);
+        return EXIT_FAILURE;
+    }
+    can_context.logger_thread_started = true;
+#endif
 
 #ifndef RACE_CORE_DAEMON
     if (options.video_record && options.video_output[0] == '\0') {
@@ -790,10 +1183,15 @@ int main(int argc, char *argv[])
         }
         #endif
         race_event_close(&can_context.race_event);
+#ifndef RACE_CORE_DAEMON
         if (logger_ready) {
             logger_stop(&logger);
             logger_print_stats(&logger);
         }
+#else
+        main_update_core_status(&can_context, 0U, true, true);
+        main_stop_logger_supervisor(&can_context);
+#endif
         if (hmi_ready) {
             hmi_close(&hmi);
         }
@@ -802,6 +1200,9 @@ int main(int argc, char *argv[])
 #ifdef RACE_CORE_DAEMON
         race_shared_bms_state_close(&can_context.bms_shared_state);
         race_shared_state_close(&can_context.shared_state);
+        race_core_status_close(&can_context.core_status);
+        pthread_mutex_destroy(&can_context.status_mutex);
+        pthread_mutex_destroy(&can_context.logger_mutex);
 #endif
         if (result < 0) {
             LOG_ERROR("Replay stopped with an error");
@@ -812,6 +1213,10 @@ int main(int argc, char *argv[])
     }
 
     lappro_config_default(&lappro_config);
+#ifdef RACE_CORE_DAEMON
+    /* LapPro is deliberately held until logger storage is ready. The CAN
+     * receiver and snapshotter still run during PRECHECK so HMI remains live. */
+#else
     if (lappro_init(&lappro, &lappro_config) == 0) {
         lappro_ready = true;
         lappro_set_sample_sink(&lappro, main_lappro_sample_sink,
@@ -822,7 +1227,62 @@ int main(int argc, char *argv[])
     } else {
         LOG_WARN("LapPro initialization failed; continuing CAN");
     }
+#endif
 
+#ifdef RACE_CORE_DAEMON
+    if (vehicle_state_snapshotter_init(
+            &snapshotter, main_vehicle_state_snapshot_provider,
+            main_vehicle_state_snapshot_sink, &can_context) < 0 ||
+        vehicle_state_snapshotter_start(&snapshotter) < 0) {
+        vehicle_state_snapshotter_stop(&snapshotter);
+        LOG_ERROR("VehicleState snapshotter did not start");
+        result = -1;
+        goto core_cleanup;
+    }
+    snapshotter_ready = true;
+    result = 0;
+    for (;;) {
+        if (main_stop_requested) {
+            break;
+        }
+        if (can_receiver_init(&receiver, interfaces) < 0) {
+            /* Initialization installs the receiver's legacy signal handler
+             * before it knows whether both interfaces exist. Restore the
+             * daemon handler even on this retry path. */
+            (void)main_core_install_signals();
+            main_update_core_status(&can_context, 0U, true, false);
+            main_logger_sleep(&can_context);
+            continue;
+        }
+        main_active_receiver = &receiver;
+        can_receiver_set_message_sink(&receiver, main_can_message_sink,
+                                      &can_context);
+        can_receiver_set_tick_callback(&receiver, main_can_tick,
+                                       &can_context);
+        /* can_receiver_init installs its legacy signal handler. Restore the
+         * core handler so a SIGTERM also wakes the lifecycle supervisor. */
+        if (main_core_install_signals() < 0) {
+            LOG_ERROR("Cannot restore core signal handlers: %s",
+                      strerror(errno));
+            can_receiver_close(&receiver);
+            main_active_receiver = NULL;
+            result = -1;
+            break;
+        }
+        main_update_core_status(&can_context, 3U, true, false);
+        result = can_receiver_run(&receiver);
+        can_receiver_print_stats(&receiver);
+        can_receiver_close(&receiver);
+        main_active_receiver = NULL;
+        if (main_stop_requested) {
+            break;
+        }
+        LOG_WARN("CAN receiver stopped; retrying both interfaces");
+        main_update_core_status(&can_context, 0U, true, false);
+        main_logger_sleep(&can_context);
+    }
+    goto core_cleanup;
+#else
     if (can_receiver_init(&receiver, interfaces) < 0) {
 #ifndef RACE_CORE_DAEMON
         if (video_ready) {
@@ -868,17 +1328,34 @@ int main(int argc, char *argv[])
     if (lappro_ready) {
         lappro_stop(&lappro);
     }
+#endif
+#ifdef RACE_CORE_DAEMON
+core_cleanup:
+#endif
     #ifndef RACE_CORE_DAEMON
     if (video_ready) {
         video_pipeline_stop(&video_pipeline);
         video_pipeline_print_stats(&video_pipeline);
     }
     #endif
+#ifdef RACE_CORE_DAEMON
+    main_update_core_status(&can_context, 0U, true, true);
+    if (snapshotter_ready) {
+        vehicle_state_snapshotter_stop(&snapshotter);
+    }
+    if (main_lappro_get_ready(&can_context)) {
+        lappro_stop(&lappro);
+        main_lappro_set_ready(&can_context, false);
+    }
+    main_stop_logger_supervisor(&can_context);
+    race_event_close(&can_context.race_event);
+#else
     race_event_close(&can_context.race_event);
     if (logger_ready) {
         logger_stop(&logger);
         logger_print_stats(&logger);
     }
+#endif
     if (hmi_ready) {
         hmi_close(&hmi);
     }
@@ -887,6 +1364,9 @@ int main(int argc, char *argv[])
 #ifdef RACE_CORE_DAEMON
     race_shared_bms_state_close(&can_context.bms_shared_state);
     race_shared_state_close(&can_context.shared_state);
+    race_core_status_close(&can_context.core_status);
+    pthread_mutex_destroy(&can_context.status_mutex);
+    pthread_mutex_destroy(&can_context.logger_mutex);
 #endif
 
     if (result < 0) {

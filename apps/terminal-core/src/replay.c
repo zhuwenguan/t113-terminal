@@ -294,7 +294,8 @@ static bool replay_parse_can(char *fields[], size_t field_count,
     const char *data_text;
 
     if (fields == NULL || event == NULL ||
-        (field_count != 4U && field_count != 5U && field_count != 6U)) {
+        (field_count != 4U && field_count != 5U && field_count != 6U &&
+         field_count != 7U)) {
         return false;
     }
     if (!replay_parse_u64(fields[0], 10, &timestamp_us)) {
@@ -350,7 +351,7 @@ static bool replay_parse_lappro(char *fields[], size_t field_count,
     uint64_t timestamp_us;
 
     if (fields == NULL || event == NULL ||
-        (field_count != 13U && field_count != 16U) ||
+        (field_count != 13U && field_count != 16U && field_count != 17U) ||
         !replay_parse_u64(fields[0], 10, &timestamp_us)) {
         return false;
     }

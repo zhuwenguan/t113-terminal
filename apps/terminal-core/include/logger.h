@@ -28,6 +28,7 @@ typedef enum {
 } LogRecordType;
 
 typedef struct {
+    uint64_t sequence;
     uint64_t timestamp_us;
     LogRecordType type;
     union {
@@ -58,6 +59,7 @@ typedef struct {
 
 typedef struct {
     pthread_mutex_t mutex;
+    pthread_mutex_t file_mutex;
     pthread_cond_t condition;
     pthread_t thread;
     FILE *file[LOG_RECORD_TYPE_COUNT];
@@ -71,6 +73,8 @@ typedef struct {
     bool initialized;
     bool started;
     bool stop_requested;
+    uint64_t next_sequence;
+    bool file_mutex_initialized;
 } Logger;
 
 int logger_init(Logger *logger);
@@ -88,6 +92,12 @@ void logger_vehicle_state_sink(uint64_t timestamp_us,
                                const VehicleState *state, void *context);
 
 void logger_stop(Logger *logger);
+
+/* Hook for a future power-good/lv-off interrupt. It stops the writer after
+ * draining the queue and synchronizes all files. */
+int logger_force_flush(Logger *logger);
+
+bool logger_is_healthy(const Logger *logger);
 
 const char *logger_get_path(const Logger *logger);
 

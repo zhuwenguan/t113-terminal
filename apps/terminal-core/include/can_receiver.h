@@ -36,6 +36,7 @@ typedef struct {
 } CanReceiverStats;
 
 typedef void (*CanMessageSink)(const CanMessage *message, void *context);
+typedef void (*CanReceiverTick)(void *context);
 
 typedef struct {
     int epoll_fd;
@@ -47,6 +48,8 @@ typedef struct {
     uint64_t rate_last_rx_frames[CAN_RECEIVER_BUS_COUNT];
     CanMessageSink message_sink;
     void *message_sink_context;
+    CanReceiverTick tick;
+    void *tick_context;
 } CanReceiver;
 
 int can_receiver_init(CanReceiver *receiver,
@@ -58,6 +61,12 @@ void can_receiver_stop(CanReceiver *receiver);
 
 void can_receiver_set_message_sink(CanReceiver *receiver,
                                     CanMessageSink sink, void *context);
+
+/* Called once per epoll cycle, including timeout cycles.  This gives a
+ * daemon a bounded-rate place to advance its lifecycle without moving CAN
+ * reception to a second thread. */
+void can_receiver_set_tick_callback(CanReceiver *receiver,
+                                    CanReceiverTick tick, void *context);
 
 void can_receiver_print_stats(const CanReceiver *receiver);
 

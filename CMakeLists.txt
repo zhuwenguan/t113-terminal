@@ -349,6 +349,9 @@ target_link_libraries(mjpeg_mp4_recover PRIVATE
 add_executable(race_state_dump tools/race_state_dump.c)
 target_link_libraries(race_state_dump PRIVATE race_common race_ipc)
 
+add_executable(race_core_status_dump tools/race_core_status_dump.c)
+target_link_libraries(race_core_status_dump PRIVATE race_common race_ipc)
+
 add_executable(webd
     ${RACE_WEBD_DIR}/src/main.c
     ${RACE_WEBD_DIR}/src/state_reader.c
@@ -498,7 +501,8 @@ else()
     target_link_libraries(race_video PRIVATE m)
 endif()
 
-install(TARGETS race_core race_video race_state_dump webd RUNTIME DESTINATION bin)
+install(TARGETS race_core race_video race_state_dump race_core_status_dump webd
+        RUNTIME DESTINATION bin)
 install(TARGETS race_common ARCHIVE DESTINATION lib)
 install(TARGETS race_ipc ARCHIVE DESTINATION lib)
 install(TARGETS race_video_ipc ARCHIVE DESTINATION lib)
@@ -511,6 +515,12 @@ install(DIRECTORY libs/bms-state/include/race DESTINATION include)
 install(DIRECTORY configs/t113/ DESTINATION config)
 install(DIRECTORY web/dashboard/dist/ DESTINATION web)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
+install(PROGRAMS
+    scripts/start_race.sh
+    scripts/race_supervisor.sh
+    scripts/stop_race.sh
+    DESTINATION bin)
+install(PROGRAMS deploy/t113/init.d/S75race DESTINATION etc/init.d)
 install(FILES
     assets/icons/car-battery.png
     assets/icons/timer.png
@@ -639,6 +649,12 @@ if (BUILD_TESTING)
     target_compile_options(test_shared_state PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME shared_state_abi_consistency_and_freshness
              COMMAND test_shared_state)
+
+    add_executable(test_core_status tests/test_core_status.c)
+    target_link_libraries(test_core_status PRIVATE race_common race_ipc)
+    target_compile_options(test_core_status PRIVATE -Wall -Wextra -Wpedantic)
+    add_test(NAME core_status_lifecycle_abi_and_seqlock
+             COMMAND test_core_status)
 
     add_executable(test_shared_state_stress tests/test_shared_state_stress.c)
     target_link_libraries(test_shared_state_stress PRIVATE race_common race_ipc)

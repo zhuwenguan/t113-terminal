@@ -18,6 +18,8 @@ typedef bool (*VideoStateSnapshotGetter)(VehicleState *state, void *context);
 #define VIDEO_LATENCY_BUCKET_US 100U
 #define VIDEO_LATENCY_BUCKET_COUNT 2001U
 #define VIDEO_PIPELINE_DEFAULT_WEB_PUBLISH_FPS 15U
+#define VIDEO_PIPELINE_DEFAULT_RECORD_SEGMENT_SECONDS (30U * 60U)
+#define VIDEO_PIPELINE_DEFAULT_HV_RECORD_THRESHOLD_V 300.0
 
 typedef struct {
     uint64_t samples;
@@ -29,12 +31,15 @@ typedef struct {
 typedef struct {
     const char *device_path;
     const char *record_path;
+    const char *record_directory;
     const char *single_frame_path;
     uint32_t width;
     uint32_t height;
     uint32_t fps;
     uint32_t video_publish_fps;
     uint32_t run_seconds;
+    uint32_t record_segment_seconds;
+    double record_start_hv_voltage;
     const char *video_ipc_name;
     bool mock_camera;
     VideoCompositorMode compositor_mode;
@@ -149,6 +154,9 @@ typedef struct {
     bool g2d_fatal_failure;
     bool video_faulted;
     bool recording_failed;
+    bool recording_triggered;
+    uint32_t record_segment_index;
+    uint64_t recording_segment_start_us;
     bool video_ipc_ready;
     uint32_t last_camera_sequence;
     uint64_t video_source_frames_seen;

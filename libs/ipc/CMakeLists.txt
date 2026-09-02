@@ -1,6 +1,7 @@
 add_library(race_ipc STATIC
     src/ipc_shm.c
     src/bms_shm.c
+    src/core_status.c
 )
 
 target_include_directories(race_ipc PUBLIC

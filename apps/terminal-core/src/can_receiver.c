@@ -433,6 +433,9 @@ int can_receiver_run(CanReceiver *receiver)
                 can_receiver_log_rate(receiver, now_us);
             }
         }
+        if (receiver->tick != NULL) {
+            receiver->tick(receiver->tick_context);
+        }
     }
 
     return 0;
@@ -453,6 +456,17 @@ void can_receiver_set_message_sink(CanReceiver *receiver,
 
     receiver->message_sink = sink;
     receiver->message_sink_context = context;
+}
+
+void can_receiver_set_tick_callback(CanReceiver *receiver,
+                                    CanReceiverTick tick, void *context)
+{
+    if (receiver == NULL) {
+        return;
+    }
+
+    receiver->tick = tick;
+    receiver->tick_context = context;
 }
 
 void can_receiver_print_stats(const CanReceiver *receiver)

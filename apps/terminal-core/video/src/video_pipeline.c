@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/resource.h>
 #include <time.h>
+#include <unistd.h>
 
 static uint64_t video_pipeline_now_us(void)
 {
@@ -269,6 +270,129 @@ static bool video_pipeline_get_state(VideoPipeline *pipeline,
     return false;
 }
 
+static int video_pipeline_open_recorder(VideoPipeline *pipeline,
+                                        const char *path,
+                                        uint64_t timestamp_us)
+{
+    bool argb_recording;
+    int result;
+
+    if (pipeline == NULL || path == NULL || path[0] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+    argb_recording = video_compositor_active_mode(&pipeline->compositor) ==
+                     VIDEO_COMPOSITOR_MODE_G2D;
+    result = argb_recording ?
+        video_recorder_init_argb(&pipeline->recorder, path,
+                                 pipeline->config.width,
+                                 pipeline->config.height,
+                                 pipeline->config.fps) :
+        video_recorder_init(&pipeline->recorder, path,
+                            pipeline->config.width,
+                            pipeline->config.height,
+                            pipeline->config.fps);
+    if (result < 0) {
+        LOG_ERROR("Video: cannot initialize recording %s: %s", path,
+                  strerror(errno));
+        return -1;
+    }
+    pipeline->recorder_ready = true;
+    pipeline->recording_segment_start_us = timestamp_us;
+    return 0;
+}
+
+static int video_pipeline_start_hv_recording(VideoPipeline *pipeline,
+                                             uint64_t timestamp_us)
+{
+    char path[512];
+    char index_path[516];
+    unsigned int segment_index;
+    unsigned int attempts;
+    int written;
+
+    if (pipeline == NULL || pipeline->config.record_directory == NULL ||
+        pipeline->config.record_directory[0] == '\0') {
+        errno = EINVAL;
+        return -1;
+    }
+    segment_index = pipeline->record_segment_index;
+    for (attempts = 0U; attempts < 10000U; ++attempts, ++segment_index) {
+        written = snprintf(path, sizeof(path), "%s/video_%03u.mp4",
+                           pipeline->config.record_directory, segment_index);
+        if (written < 0 || (size_t)written >= sizeof(path)) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        if (snprintf(index_path, sizeof(index_path), "%s.idx", path) >=
+                (int)sizeof(index_path)) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+        if (access(path, F_OK) < 0 && errno == ENOENT &&
+            access(index_path, F_OK) < 0 && errno == ENOENT) {
+            pipeline->record_segment_index = segment_index + 1U;
+            return video_pipeline_open_recorder(pipeline, path, timestamp_us);
+        }
+    }
+    errno = EEXIST;
+    return -1;
+}
+
+static void video_pipeline_close_recorder(VideoPipeline *pipeline)
+{
+    if (pipeline == NULL || !pipeline->recorder_ready) {
+        return;
+    }
+    (void)video_recorder_finalize(&pipeline->recorder);
+    video_pipeline_refresh_recorder_stats(pipeline);
+    video_recorder_close(&pipeline->recorder);
+    pipeline->recorder_ready = false;
+}
+
+static void video_pipeline_maybe_start_or_rotate_recording(
+    VideoPipeline *pipeline, const VehicleState *state, bool state_available,
+    uint64_t timestamp_us)
+{
+    uint64_t segment_duration_us;
+
+    if (pipeline == NULL) {
+        return;
+    }
+    if (!pipeline->recording_triggered &&
+        pipeline->config.record_directory != NULL && state_available &&
+        (state->valid_mask & VEHICLE_STATE_VALID_HV_VOLTAGE_V) != 0U &&
+        state->hv_voltage_v > pipeline->config.record_start_hv_voltage) {
+        pipeline->recording_triggered = true;
+        LOG_INFO("Video: HV %.3fV exceeded %.3fV; recording latched",
+                 state->hv_voltage_v, pipeline->config.record_start_hv_voltage);
+        if (video_pipeline_start_hv_recording(pipeline, timestamp_us) < 0) {
+            pipeline->recording_failed = true;
+            LOG_ERROR("Video: HV recording could not be started");
+        }
+    }
+    if (!pipeline->recorder_ready || pipeline->recording_failed ||
+        pipeline->config.record_directory == NULL ||
+        pipeline->recording_segment_start_us == 0U ||
+        timestamp_us < pipeline->recording_segment_start_us) {
+        return;
+    }
+    segment_duration_us = (uint64_t)pipeline->config.record_segment_seconds *
+                          1000000ULL;
+    if (segment_duration_us == 0U ||
+        timestamp_us - pipeline->recording_segment_start_us <
+            segment_duration_us) {
+        return;
+    }
+    LOG_INFO("Video: rotating recording segment after %u seconds",
+             pipeline->config.record_segment_seconds);
+    video_pipeline_close_recorder(pipeline);
+    if (video_pipeline_start_hv_recording(pipeline, timestamp_us) < 0) {
+        pipeline->recording_failed = true;
+        LOG_ERROR("Video: recording segment rotation failed");
+    }
+}
+
 static void video_pipeline_note_application_drop(VideoPipeline *pipeline)
 {
     if (pipeline == NULL) {
@@ -312,7 +436,8 @@ static bool video_pipeline_render_frame(VideoPipeline *pipeline,
     bool g2d_path;
     bool state_available = video_pipeline_get_state(pipeline, &state);
 
-    (void)state_available;
+    video_pipeline_maybe_start_or_rotate_recording(
+        pipeline, &state, state_available, timestamp_us);
     memset(&recorder_timing, 0, sizeof(recorder_timing));
     memset(&compositor_timing, 0, sizeof(compositor_timing));
     memset(&hud_timing, 0, sizeof(hud_timing));
@@ -1076,6 +1201,14 @@ int video_pipeline_init(VideoPipeline *pipeline,
         pipeline->config.video_publish_fps =
             VIDEO_PIPELINE_DEFAULT_WEB_PUBLISH_FPS;
     }
+    if (pipeline->config.record_segment_seconds == 0U) {
+        pipeline->config.record_segment_seconds =
+            VIDEO_PIPELINE_DEFAULT_RECORD_SEGMENT_SECONDS;
+    }
+    if (pipeline->config.record_start_hv_voltage <= 0.0) {
+        pipeline->config.record_start_hv_voltage =
+            VIDEO_PIPELINE_DEFAULT_HV_RECORD_THRESHOLD_V;
+    }
     compositor_mode = config->compositor_mode;
     result = pthread_mutex_init(&pipeline->mutex, NULL);
     if (result != 0) {
@@ -1166,6 +1299,7 @@ int video_pipeline_init(VideoPipeline *pipeline,
             LOG_WARN("Video: recording disabled because output could not be initialized");
         } else {
             pipeline->recorder_ready = true;
+            pipeline->recording_triggered = true;
         }
     }
     LOG_INFO("Video compositor: requested=%s active=%s g2d_healthy=%s",
