@@ -8,6 +8,7 @@
 #include <net/if.h>
 
 #define CAN_RECEIVER_BUS_COUNT 2U
+#define CAN_RECEIVER_RECONNECT_INTERVAL_US 1000000ULL
 
 enum {
     CAN_MESSAGE_FLAG_STANDARD = 1U << 0,
@@ -41,6 +42,11 @@ typedef void (*CanReceiverTick)(void *context);
 typedef struct {
     int epoll_fd;
     int socket_fd[CAN_RECEIVER_BUS_COUNT];
+    /* A bit is set only after that bus socket has been configured and added
+     * to epoll.  Bit 0 is CAN0 and bit 1 is CAN1. */
+    uint32_t active_mask;
+    uint64_t reconnect_next_attempt_us[CAN_RECEIVER_BUS_COUNT];
+    uint32_t reconnect_attempts[CAN_RECEIVER_BUS_COUNT];
     char interface_name[CAN_RECEIVER_BUS_COUNT][IF_NAMESIZE];
     CanReceiverStats stats[CAN_RECEIVER_BUS_COUNT];
     uint64_t epoll_wait_errors;
@@ -67,6 +73,10 @@ void can_receiver_set_message_sink(CanReceiver *receiver,
  * reception to a second thread. */
 void can_receiver_set_tick_callback(CanReceiver *receiver,
                                     CanReceiverTick tick, void *context);
+
+/* Returns the buses whose configured socket is currently registered in
+ * receiver->epoll_fd and available for reception. */
+uint32_t can_receiver_active_mask(const CanReceiver *receiver);
 
 void can_receiver_print_stats(const CanReceiver *receiver);
 

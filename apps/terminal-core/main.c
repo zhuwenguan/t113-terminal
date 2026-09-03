@@ -376,6 +376,7 @@ static void main_stop_logger_supervisor(MainCanContext *can_context)
 static void main_can_tick(void *context)
 {
     MainCanContext *can_context = context;
+    uint32_t can_ready_mask = 0U;
     bool logger_ready;
     bool lappro_ready;
 
@@ -413,7 +414,10 @@ static void main_can_tick(void *context)
         main_lappro_set_ready(can_context, false);
         LOG_WARN("LapPro stopped because logger is unavailable");
     }
-    main_update_core_status(can_context, 3U, true, false);
+    if (main_active_receiver != NULL) {
+        can_ready_mask = can_receiver_active_mask(main_active_receiver);
+    }
+    main_update_core_status(can_context, can_ready_mask, true, false);
 }
 #endif
 
@@ -1269,7 +1273,9 @@ int main(int argc, char *argv[])
             result = -1;
             break;
         }
-        main_update_core_status(&can_context, 3U, true, false);
+        main_update_core_status(&can_context,
+                                can_receiver_active_mask(&receiver),
+                                true, false);
         result = can_receiver_run(&receiver);
         can_receiver_print_stats(&receiver);
         can_receiver_close(&receiver);

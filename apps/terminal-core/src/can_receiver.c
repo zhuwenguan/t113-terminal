@@ -54,7 +54,7 @@ static void can_receiver_reset(CanReceiver *receiver)
     }
 }
 
-static int can_receiver_open_socket(const char *ifname)
+static int can_receiver_open_socket(const char *ifname, bool log_errors)
 {
     struct ifreq interface_request;
     struct sockaddr_can address;
@@ -63,7 +63,9 @@ static int can_receiver_open_socket(const char *ifname)
 
     socket_fd = socket(PF_CAN, SOCK_RAW | SOCK_NONBLOCK, CAN_RAW);
     if (socket_fd < 0) {
-        LOG_ERROR("socket(%s): %s", ifname, strerror(errno));
+        if (log_errors) {
+            LOG_ERROR("socket(%s): %s", ifname, strerror(errno));
+        }
         return -1;
     }
 
@@ -71,21 +73,33 @@ static int can_receiver_open_socket(const char *ifname)
     snprintf(interface_request.ifr_name, sizeof(interface_request.ifr_name),
              "%s", ifname);
     if (ioctl(socket_fd, SIOCGIFINDEX, &interface_request) < 0) {
-        LOG_ERROR("Cannot find CAN interface %s: %s", ifname,
-                  strerror(errno));
+        int error_number = errno;
+
+        if (log_errors) {
+            LOG_ERROR("Cannot find CAN interface %s: %s", ifname,
+                      strerror(error_number));
+        }
         close(socket_fd);
+        errno = error_number;
         return -1;
     }
     ifindex = interface_request.ifr_ifindex;
 
     if (ioctl(socket_fd, SIOCGIFFLAGS, &interface_request) < 0) {
-        LOG_ERROR("Cannot read flags for CAN interface %s: %s", ifname,
-                  strerror(errno));
+        int error_number = errno;
+
+        if (log_errors) {
+            LOG_ERROR("Cannot read flags for CAN interface %s: %s", ifname,
+                      strerror(error_number));
+        }
         close(socket_fd);
+        errno = error_number;
         return -1;
     }
     if ((interface_request.ifr_flags & IFF_UP) == 0) {
-        LOG_ERROR("CAN interface %s is down", ifname);
+        if (log_errors) {
+            LOG_ERROR("CAN interface %s is down", ifname);
+        }
         close(socket_fd);
         errno = ENETDOWN;
         return -1;
@@ -96,9 +110,14 @@ static int can_receiver_open_socket(const char *ifname)
 
         if (setsockopt(socket_fd, SOL_CAN_RAW, CAN_RAW_ERR_FILTER,
                        &error_mask, sizeof(error_mask)) < 0) {
-            LOG_ERROR("Cannot enable CAN error frames on %s: %s", ifname,
-                      strerror(errno));
+            int error_number = errno;
+
+            if (log_errors) {
+                LOG_ERROR("Cannot enable CAN error frames on %s: %s", ifname,
+                          strerror(error_number));
+            }
             close(socket_fd);
+            errno = error_number;
             return -1;
         }
     }
@@ -107,13 +126,57 @@ static int can_receiver_open_socket(const char *ifname)
     address.can_family = AF_CAN;
     address.can_ifindex = ifindex;
     if (bind(socket_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        LOG_ERROR("Cannot bind CAN interface %s: %s", ifname,
-                  strerror(errno));
+        int error_number = errno;
+
+        if (log_errors) {
+            LOG_ERROR("Cannot bind CAN interface %s: %s", ifname,
+                      strerror(error_number));
+        }
         close(socket_fd);
+        errno = error_number;
         return -1;
     }
 
     return socket_fd;
+}
+
+/* This is the only path which creates a live bus socket.  Keeping socket
+ * creation, raw CAN configuration, bind, and epoll registration together
+ * makes the initial and reconnect paths identical. */
+static int can_receiver_open_bus(CanReceiver *receiver, unsigned int bus,
+                                 bool reconnect)
+{
+    struct epoll_event event;
+    int socket_fd;
+
+    socket_fd = can_receiver_open_socket(receiver->interface_name[bus],
+                                          !reconnect);
+    if (socket_fd < 0) {
+        return -1;
+    }
+
+    memset(&event, 0, sizeof(event));
+    event.events = EPOLLIN | EPOLLERR | EPOLLHUP;
+    event.data.u32 = bus;
+    if (epoll_ctl(receiver->epoll_fd, EPOLL_CTL_ADD, socket_fd, &event) < 0) {
+        int error_number = errno;
+
+        receiver->stats[bus].epoll_errors++;
+        if (!reconnect) {
+            LOG_ERROR("epoll_ctl(CAN%u): %s", bus,
+                      strerror(error_number));
+        }
+        close(socket_fd);
+        errno = error_number;
+        return -1;
+    }
+
+    receiver->socket_fd[bus] = socket_fd;
+    receiver->active_mask |= 1U << bus;
+    receiver->stats[bus].interface_failed = false;
+    receiver->reconnect_next_attempt_us[bus] = 0U;
+    receiver->reconnect_attempts[bus] = 0U;
+    return 0;
 }
 
 static uint64_t can_receiver_timestamp_us(void)
@@ -126,6 +189,22 @@ static uint64_t can_receiver_timestamp_us(void)
 
     return (uint64_t)timestamp.tv_sec * 1000000ULL +
            (uint64_t)timestamp.tv_nsec / 1000ULL;
+}
+
+static void can_receiver_schedule_reconnect(CanReceiver *receiver,
+                                            unsigned int bus,
+                                            uint64_t now_us)
+{
+    if (now_us == 0U) {
+        /* clock_gettime(CLOCK_MONOTONIC) should not fail on the target.  Keep
+         * the bus immediately eligible so the next successful clock sample
+         * can resume reconnecting it. */
+        receiver->reconnect_next_attempt_us[bus] = 0U;
+        return;
+    }
+
+    receiver->reconnect_next_attempt_us[bus] =
+        now_us + CAN_RECEIVER_RECONNECT_INTERVAL_US;
 }
 
 static void can_receiver_log_message(const CanMessage *message)
@@ -178,6 +257,11 @@ static void can_receiver_disable_bus(CanReceiver *receiver, unsigned int bus)
     receiver->stats[bus].interface_failed = true;
     socket_fd = receiver->socket_fd[bus];
     if (socket_fd < 0) {
+        receiver->active_mask &= ~(1U << bus);
+        if (receiver->reconnect_next_attempt_us[bus] == 0U) {
+            can_receiver_schedule_reconnect(receiver, bus,
+                                             can_receiver_timestamp_us());
+        }
         return;
     }
 
@@ -190,6 +274,9 @@ static void can_receiver_disable_bus(CanReceiver *receiver, unsigned int bus)
     }
     close(socket_fd);
     receiver->socket_fd[bus] = -1;
+    receiver->active_mask &= ~(1U << bus);
+    can_receiver_schedule_reconnect(receiver, bus,
+                                     can_receiver_timestamp_us());
 }
 
 static int can_receiver_handle_socket(CanReceiver *receiver, unsigned int bus)
@@ -242,6 +329,7 @@ static int can_receiver_handle_socket(CanReceiver *receiver, unsigned int bus)
                 can_receiver_disable_bus(receiver, bus);
                 LOG_WARN("CAN%u (%s) isolated; other CAN and APP services "
                          "continue", bus, receiver->interface_name[bus]);
+                return 0;
             }
             continue;
         }
@@ -265,6 +353,52 @@ static int can_receiver_handle_socket(CanReceiver *receiver, unsigned int bus)
         if (receiver->message_sink != NULL) {
             receiver->message_sink(&message,
                                    receiver->message_sink_context);
+        }
+    }
+}
+
+static void can_receiver_reconnect_buses(CanReceiver *receiver,
+                                         uint64_t now_us)
+{
+    unsigned int bus;
+
+    if (now_us == 0U) {
+        return;
+    }
+
+    for (bus = 0; bus < CAN_RECEIVER_BUS_COUNT; ++bus) {
+        uint64_t next_attempt_us =
+            receiver->reconnect_next_attempt_us[bus];
+        int error_number;
+
+        if (receiver->socket_fd[bus] >= 0 ||
+            (next_attempt_us != 0U && now_us < next_attempt_us)) {
+            continue;
+        }
+
+        if (receiver->reconnect_attempts[bus] != UINT32_MAX) {
+            receiver->reconnect_attempts[bus]++;
+        }
+        if (can_receiver_open_bus(receiver, bus, true) == 0) {
+            LOG_INFO("CAN%u: reconnected on %s", bus,
+                     receiver->interface_name[bus]);
+            continue;
+        }
+
+        error_number = errno;
+        can_receiver_schedule_reconnect(receiver, bus, now_us);
+        /* A first failure and then one summary every ten seconds is enough
+         * to diagnose a persistent interface problem without filling the
+         * terminal while the other bus continues to run. */
+        if (receiver->reconnect_attempts[bus] == 1U ||
+            (receiver->reconnect_attempts[bus] % 10U) == 0U) {
+            LOG_WARN("CAN%u (%s) reconnect attempt %u failed: %s; "
+                     "retrying in %llu ms", bus,
+                     receiver->interface_name[bus],
+                     receiver->reconnect_attempts[bus],
+                     strerror(error_number),
+                     (unsigned long long)(
+                         CAN_RECEIVER_RECONNECT_INTERVAL_US / 1000ULL));
         }
     }
 }
@@ -293,8 +427,6 @@ int can_receiver_init(CanReceiver *receiver,
     }
 
     for (bus = 0; bus < CAN_RECEIVER_BUS_COUNT; ++bus) {
-        struct epoll_event event;
-
         if (interfaces[bus] == NULL ||
             strlen(interfaces[bus]) >= IF_NAMESIZE) {
             LOG_ERROR("Invalid CAN interface name for CAN%u", bus);
@@ -304,23 +436,13 @@ int can_receiver_init(CanReceiver *receiver,
 
         snprintf(receiver->interface_name[bus], IF_NAMESIZE, "%s",
                  interfaces[bus]);
-        receiver->socket_fd[bus] =
-            can_receiver_open_socket(receiver->interface_name[bus]);
-        if (receiver->socket_fd[bus] < 0) {
-            can_receiver_close(receiver);
-            return -1;
-        }
-
-        memset(&event, 0, sizeof(event));
-        event.events = EPOLLIN | EPOLLERR | EPOLLHUP;
-        event.data.u32 = bus;
-        if (epoll_ctl(receiver->epoll_fd, EPOLL_CTL_ADD,
-                      receiver->socket_fd[bus], &event) < 0) {
-            receiver->stats[bus].epoll_errors++;
+        if (can_receiver_open_bus(receiver, bus, false) < 0) {
             receiver->stats[bus].interface_failed = true;
-            LOG_ERROR("epoll_ctl(CAN%u): %s", bus, strerror(errno));
-            can_receiver_close(receiver);
-            return -1;
+            can_receiver_schedule_reconnect(receiver, bus,
+                                             can_receiver_timestamp_us());
+            LOG_WARN("CAN%u (%s) unavailable; reconnect scheduled", bus,
+                     receiver->interface_name[bus]);
+            continue;
         }
 
         LOG_INFO("CAN%u: listening on %s", bus,
@@ -410,6 +532,12 @@ int can_receiver_run(CanReceiver *receiver)
                 LOG_ERROR("Invalid epoll bus index: %u", bus);
                 return -1;
             }
+            /* An event returned for a socket isolated earlier in this cycle
+             * is stale.  Do not read a reused fd under the old event. */
+            if (receiver->socket_fd[bus] < 0 ||
+                (receiver->active_mask & (1U << bus)) == 0U) {
+                continue;
+            }
             if ((event_flags & (EPOLLERR | EPOLLHUP)) != 0) {
                 receiver->stats[bus].epoll_errors++;
                 LOG_ERROR("CAN%u (%s) interface event: 0x%x", bus,
@@ -429,6 +557,7 @@ int can_receiver_run(CanReceiver *receiver)
         {
             uint64_t now_us = can_receiver_timestamp_us();
 
+            can_receiver_reconnect_buses(receiver, now_us);
             if (now_us != 0U) {
                 can_receiver_log_rate(receiver, now_us);
             }
@@ -467,6 +596,30 @@ void can_receiver_set_tick_callback(CanReceiver *receiver,
 
     receiver->tick = tick;
     receiver->tick_context = context;
+}
+
+uint32_t can_receiver_active_mask(const CanReceiver *receiver)
+{
+    uint32_t active_mask = 0U;
+    unsigned int bus;
+
+    if (receiver == NULL) {
+        return 0U;
+    }
+
+    if (receiver->epoll_fd < 0) {
+        return 0U;
+    }
+
+    for (bus = 0; bus < CAN_RECEIVER_BUS_COUNT; ++bus) {
+        if ((receiver->active_mask & (1U << bus)) != 0U &&
+            receiver->socket_fd[bus] >= 0 &&
+            !receiver->stats[bus].interface_failed) {
+            active_mask |= 1U << bus;
+        }
+    }
+
+    return active_mask;
 }
 
 void can_receiver_print_stats(const CanReceiver *receiver)
@@ -508,9 +661,19 @@ void can_receiver_close(CanReceiver *receiver)
     receiver_running = 0;
     for (bus = 0; bus < CAN_RECEIVER_BUS_COUNT; ++bus) {
         if (receiver->socket_fd[bus] >= 0) {
+            if (receiver->epoll_fd >= 0 &&
+                epoll_ctl(receiver->epoll_fd, EPOLL_CTL_DEL,
+                          receiver->socket_fd[bus], NULL) < 0 &&
+                errno != ENOENT) {
+                receiver->stats[bus].epoll_errors++;
+                LOG_WARN("CAN%u: failed to remove socket during close: %s",
+                         bus, strerror(errno));
+            }
             close(receiver->socket_fd[bus]);
             receiver->socket_fd[bus] = -1;
         }
+        receiver->active_mask &= ~(1U << bus);
+        receiver->reconnect_next_attempt_us[bus] = 0U;
     }
     if (receiver->epoll_fd >= 0) {
         close(receiver->epoll_fd);

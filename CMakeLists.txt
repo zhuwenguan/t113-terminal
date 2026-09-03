@@ -779,6 +779,25 @@ if (BUILD_TESTING)
     target_link_libraries(test_can_decoder PRIVATE race_common Threads::Threads)
     add_test(NAME can_decoder_freshness COMMAND test_can_decoder)
 
+    add_executable(test_can_receiver
+        tests/test_can_receiver.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_receiver.c
+    )
+    target_include_directories(test_can_receiver PRIVATE
+        ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR}
+    )
+    target_compile_options(test_can_receiver PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_can_receiver PRIVATE
+        race_common
+        Threads::Threads
+    )
+    add_test(NAME can_receiver_active_mask_and_reconnect_rate_limit
+             COMMAND test_can_receiver)
+
     add_executable(test_bms_parser
         tests/test_bms_parser.c
         ${RACE_TERMINAL_CORE_SOURCE_DIR}/bms_parser.c
