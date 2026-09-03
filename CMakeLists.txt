@@ -32,6 +32,31 @@ set(T113_HUD_SOURCES
     ${RACE_HUD_DIR}/hud_widget.c
     ${RACE_HUD_DIR}/hud_render.c)
 
+set(_t113_arm_target FALSE)
+if (T113_ARM_TARGET OR CMAKE_SYSTEM_PROCESSOR MATCHES "^[Aa][Rr][Mm]")
+    set(_t113_arm_target TRUE)
+endif()
+
+if (_t113_arm_target)
+    set(_t113_enable_hud_default ON)
+    set(_t113_build_video_default ON)
+else()
+    set(_t113_enable_hud_default OFF)
+    set(_t113_build_video_default OFF)
+endif()
+
+option(T113_ENABLE_HUD "Build FreeType-backed HUD support" ${_t113_enable_hud_default})
+option(T113_BUILD_VIDEO "Build the camera/HUD video targets" ${_t113_build_video_default})
+
+if (T113_BUILD_VIDEO AND NOT T113_ENABLE_HUD)
+    message(FATAL_ERROR
+        "T113_BUILD_VIDEO requires T113_ENABLE_HUD=ON because the video "
+        "pipeline includes the production HUD.")
+endif()
+
+unset(_t113_enable_hud_default)
+unset(_t113_build_video_default)
+
 include_directories(
     ${RACE_COMMON_INCLUDE_DIR}
     ${RACE_IPC_INCLUDE_DIR}
@@ -60,18 +85,16 @@ target_compile_options(ui_image PRIVATE -Wall -Wextra -Wpedantic)
 
 # FreeType is a runtime dependency of the production UI HUD.  Keep the
 # locations overridable for the T113 SDK/sysroot, while making the dependency
-# explicit instead of silently compiling another font implementation.
+# explicit instead of silently compiling another font implementation.  The
+# core daemon and its tests do not need this dependency, so discover it only
+# when HUD support is enabled.
+if (T113_ENABLE_HUD)
 set(T113_FREETYPE_INCLUDE_DIR "" CACHE PATH
     "FreeType include directory containing ft2build.h")
 set(T113_FREETYPE_LIBRARY "" CACHE FILEPATH
     "FreeType library for the selected target architecture")
 set(T113_FREETYPE_DEPENDENCIES "" CACHE STRING
     "Additional libraries required by the selected FreeType build")
-set(_t113_arm_target FALSE)
-if (T113_ARM_TARGET OR CMAKE_SYSTEM_PROCESSOR MATCHES "^[Aa][Rr][Mm]")
-    set(_t113_arm_target TRUE)
-endif()
-
 # The board's FreeType runtime is staged outside the repository for cross
 # builds.  Allow that cache to be selected by an environment variable, and
 # use the conventional per-user cache location when it exists.  This keeps
@@ -207,6 +230,7 @@ target_include_directories(hud_widget PUBLIC
 target_compile_features(hud_widget PUBLIC c_std_11)
 target_compile_options(hud_widget PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(hud_widget PUBLIC ui_draw ui_font)
+endif()
 
 add_executable(g2d_smoke_test
     tools/g2d_smoke_test.c
@@ -386,6 +410,7 @@ target_compile_options(fake_video_producer PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(fake_video_producer PRIVATE
     race_common race_video_ipc Threads::Threads ${CMAKE_DL_LIBS} m)
 
+if (T113_BUILD_VIDEO)
 add_executable(t113_terminal
     ${RACE_TERMINAL_CORE_DIR}/main.c
     ${RACE_TERMINAL_CORE_SOURCE_DIR}/can_receiver.c
@@ -451,6 +476,7 @@ else()
     target_link_libraries(t113_terminal PRIVATE m)
 endif()
 target_link_libraries(t113_terminal PRIVATE t113_freetype)
+endif()
 
 # Phase 1 daemons. race_core deliberately reuses the validated vehicle-data
 # sources, but it must not even link camera/G2D/encoder code: video is a real
@@ -471,6 +497,7 @@ target_include_directories(race_core PRIVATE
 target_compile_options(race_core PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(race_core PRIVATE race_common race_ipc Threads::Threads ${CMAKE_DL_LIBS})
 
+if (T113_BUILD_VIDEO)
 set(RACE_VIDEO_SOURCES
     ${RACE_VIDEO_DIR}/main.c
     ${RACE_VIDEO_SOURCE_DIR}/video_frame.c
@@ -490,18 +517,34 @@ target_link_libraries(race_video PRIVATE t113_freetype)
 
 if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)" OR
     CMAKE_C_COMPILER MATCHES "(arm|aarch64)-linux")
-    target_compile_options(race_core PRIVATE -mfpu=neon -mfloat-abi=hard)
     target_compile_options(race_video PRIVATE -mfpu=neon -mfloat-abi=hard)
 endif()
 if (EXISTS "${T113_LIBM_STATIC}")
-    target_link_libraries(race_core PRIVATE "${T113_LIBM_STATIC}")
     target_link_libraries(race_video PRIVATE "${T113_LIBM_STATIC}")
 else()
-    target_link_libraries(race_core PRIVATE m)
     target_link_libraries(race_video PRIVATE m)
 endif()
+endif()
 
-install(TARGETS race_core race_video race_state_dump race_core_status_dump webd
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64)" OR
+    CMAKE_C_COMPILER MATCHES "(arm|aarch64)-linux")
+    target_compile_options(race_core PRIVATE -mfpu=neon -mfloat-abi=hard)
+endif()
+if (EXISTS "${T113_LIBM_STATIC}")
+    target_link_libraries(race_core PRIVATE "${T113_LIBM_STATIC}")
+else()
+    target_link_libraries(race_core PRIVATE m)
+endif()
+
+set(T113_INSTALL_RUNTIME_TARGETS
+    race_core
+    race_state_dump
+    race_core_status_dump
+    webd)
+if (T113_BUILD_VIDEO)
+    list(APPEND T113_INSTALL_RUNTIME_TARGETS race_video)
+endif()
+install(TARGETS ${T113_INSTALL_RUNTIME_TARGETS}
         RUNTIME DESTINATION bin)
 install(TARGETS race_common ARCHIVE DESTINATION lib)
 install(TARGETS race_ipc ARCHIVE DESTINATION lib)
@@ -557,71 +600,73 @@ if (BUILD_TESTING)
                      ${CMAKE_SOURCE_DIR}/assets/icons/battery-charging-vertical.png
                      ${CMAKE_SOURCE_DIR}/assets/icons/flag-checkered.png)
 
-    add_executable(test_ui_font tests/test_ui_font.c)
-    target_include_directories(test_ui_font PRIVATE ${RACE_UI_DIR})
-    target_compile_options(test_ui_font PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(test_ui_font PRIVATE ui_font)
-    add_test(NAME ui_font_measure_draw_clipping_and_lifecycle
-             COMMAND test_ui_font ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf)
+    if (T113_ENABLE_HUD)
+        add_executable(test_ui_font tests/test_ui_font.c)
+        target_include_directories(test_ui_font PRIVATE ${RACE_UI_DIR})
+        target_compile_options(test_ui_font PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_libraries(test_ui_font PRIVATE ui_font)
+        add_test(NAME ui_font_measure_draw_clipping_and_lifecycle
+                 COMMAND test_ui_font ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf)
 
-    add_executable(test_ui_phase2 tests/test_ui_phase2.c)
-    target_include_directories(test_ui_phase2 PRIVATE
-        ${RACE_UI_DIR}
-        ${RACE_VIDEO_INCLUDE_DIR}
-    )
-    target_compile_options(test_ui_phase2 PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(test_ui_phase2 PRIVATE ui_draw ui_font ui_image)
-    add_test(NAME ui_phase2_geometry_font_and_icon_smoke
-             COMMAND test_ui_phase2
-                     ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf)
+        add_executable(test_ui_phase2 tests/test_ui_phase2.c)
+        target_include_directories(test_ui_phase2 PRIVATE
+            ${RACE_UI_DIR}
+            ${RACE_VIDEO_INCLUDE_DIR}
+        )
+        target_compile_options(test_ui_phase2 PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_libraries(test_ui_phase2 PRIVATE ui_draw ui_font ui_image)
+        add_test(NAME ui_phase2_geometry_font_and_icon_smoke
+                 COMMAND test_ui_phase2
+                         ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf)
 
-    add_executable(test_hud_widget
-        tests/test_hud_widget.c
-        ${RACE_HUD_DIR}/hud_widget.c
-    )
-    target_include_directories(test_hud_widget PRIVATE
-        ${RACE_HUD_DIR}
-        ${RACE_UI_DIR}
-    )
-    target_compile_options(test_hud_widget PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(test_hud_widget PRIVATE ui_draw)
-    add_test(NAME hud_widget_composition_clipping_stride_and_guards
-             COMMAND test_hud_widget)
+        add_executable(test_hud_widget
+            tests/test_hud_widget.c
+            ${RACE_HUD_DIR}/hud_widget.c
+        )
+        target_include_directories(test_hud_widget PRIVATE
+            ${RACE_HUD_DIR}
+            ${RACE_UI_DIR}
+        )
+        target_compile_options(test_hud_widget PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_libraries(test_hud_widget PRIVATE ui_draw)
+        add_test(NAME hud_widget_composition_clipping_stride_and_guards
+                 COMMAND test_hud_widget)
 
-    add_executable(test_hud_render
-        tests/test_hud_render.c
-        ${RACE_HUD_DIR}/hud_render.c
-        ${RACE_HUD_DIR}/hud_widget.c
-    )
-    target_include_directories(test_hud_render PRIVATE
-        ${RACE_HUD_DIR}
-        ${RACE_UI_DIR}
-        ${RACE_COMMON_INCLUDE_DIR}
-        ${RACE_VIDEO_INCLUDE_DIR}
-    )
-    target_compile_options(test_hud_render PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(test_hud_render PRIVATE ui_draw ui_image m)
-    add_test(NAME hud_render_static_state_layout_guard_stride
-             COMMAND test_hud_render)
-    set_tests_properties(hud_render_static_state_layout_guard_stride
-                         PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        add_executable(test_hud_render
+            tests/test_hud_render.c
+            ${RACE_HUD_DIR}/hud_render.c
+            ${RACE_HUD_DIR}/hud_widget.c
+        )
+        target_include_directories(test_hud_render PRIVATE
+            ${RACE_HUD_DIR}
+            ${RACE_UI_DIR}
+            ${RACE_COMMON_INCLUDE_DIR}
+            ${RACE_VIDEO_INCLUDE_DIR}
+        )
+        target_compile_options(test_hud_render PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_libraries(test_hud_render PRIVATE ui_draw ui_image m)
+        add_test(NAME hud_render_static_state_layout_guard_stride
+                 COMMAND test_hud_render)
+        set_tests_properties(hud_render_static_state_layout_guard_stride
+                             PROPERTIES WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-    add_executable(hud_perf_benchmark
-        tests/hud_perf_benchmark.c
-        ${RACE_HUD_DIR}/hud_render.c
-        ${RACE_HUD_DIR}/hud_widget.c
-    )
-    target_include_directories(hud_perf_benchmark PRIVATE
-        ${RACE_HUD_DIR}
-        ${RACE_UI_DIR}
-        ${RACE_COMMON_INCLUDE_DIR}
-    )
-    target_compile_options(hud_perf_benchmark PRIVATE
-        -Wall
-        -Wextra
-        -Wpedantic
-    )
-    target_link_libraries(hud_perf_benchmark PRIVATE ui_draw ui_font ui_image m)
+        add_executable(hud_perf_benchmark
+            tests/hud_perf_benchmark.c
+            ${RACE_HUD_DIR}/hud_render.c
+            ${RACE_HUD_DIR}/hud_widget.c
+        )
+        target_include_directories(hud_perf_benchmark PRIVATE
+            ${RACE_HUD_DIR}
+            ${RACE_UI_DIR}
+            ${RACE_COMMON_INCLUDE_DIR}
+        )
+        target_compile_options(hud_perf_benchmark PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+        )
+        target_link_libraries(hud_perf_benchmark PRIVATE ui_draw ui_font ui_image m)
+    endif()
 
     add_executable(test_video_compositor_argb
         tests/test_video_compositor_argb.c
@@ -898,20 +943,22 @@ if (BUILD_TESTING)
     )
     add_test(NAME hmi_ascii_rs485_protocol COMMAND test_hmi)
 
-    add_executable(test_hud_text
-        tests/test_hud_text.c
-        ${RACE_VIDEO_SOURCE_DIR}/hud_text.c
-        ${RACE_VIDEO_SOURCE_DIR}/hud_blend.c
-    )
-    target_include_directories(test_hud_text PRIVATE
-        ${RACE_VIDEO_INCLUDE_DIR}
-        ${RACE_UI_DIR}
-        ${RACE_HUD_DIR}
-    )
-    target_compile_options(test_hud_text PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(test_hud_text PRIVATE t113_freetype)
-    add_test(NAME hud_text_freetype_cache_metrics_alignment_and_antialias
-             COMMAND test_hud_text ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf)
+    if (T113_ENABLE_HUD)
+        add_executable(test_hud_text
+            tests/test_hud_text.c
+            ${RACE_VIDEO_SOURCE_DIR}/hud_text.c
+            ${RACE_VIDEO_SOURCE_DIR}/hud_blend.c
+        )
+        target_include_directories(test_hud_text PRIVATE
+            ${RACE_VIDEO_INCLUDE_DIR}
+            ${RACE_UI_DIR}
+            ${RACE_HUD_DIR}
+        )
+        target_compile_options(test_hud_text PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_libraries(test_hud_text PRIVATE t113_freetype)
+        add_test(NAME hud_text_freetype_cache_metrics_alignment_and_antialias
+                 COMMAND test_hud_text ${CMAKE_SOURCE_DIR}/assets/fonts/hud.ttf)
+    endif()
 
     add_executable(test_video_recorder_timestamps
         tests/test_video_recorder_timestamps.c
@@ -939,10 +986,12 @@ if (BUILD_TESTING)
     add_test(NAME video_recorder_variable_timestamps
              COMMAND test_video_recorder_timestamps)
 
-    add_test(NAME video_seconds_above_recorder_limit_rejected
-             COMMAND t113_terminal --video-seconds 3601)
-    set_tests_properties(video_seconds_above_recorder_limit_rejected
-                         PROPERTIES WILL_FAIL TRUE)
+    if (T113_BUILD_VIDEO)
+        add_test(NAME video_seconds_above_recorder_limit_rejected
+                 COMMAND t113_terminal --video-seconds 3601)
+        set_tests_properties(video_seconds_above_recorder_limit_rejected
+                             PROPERTIES WILL_FAIL TRUE)
+    endif()
 
     add_executable(test_jpeg_codec
         tests/test_jpeg_codec.c
