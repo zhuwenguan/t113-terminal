@@ -56,21 +56,18 @@ int main(void)
                                          1000000ULL, &finish, &state));
     TEST_CHECK(timer.best_lap_time_s == 4.0);
 
-    /* The learned reference is deliberately slow (4 seconds). This initial
-     * crossing is slower still and therefore remains only the arming lap. */
-    feed_point(&timer, &second, 5250000ULL, &state);
-    feed_point(&timer, &third, 5750000ULL, &state);
-    feed_point(&timer, &fourth, 7250000ULL, &state);
-    feed_point(&timer, &first, 8250000ULL, &state);
+    /* The historical first crossing is settled immediately. No extra
+     * arming lap is needed before measuring a faster second lap. */
     TEST_CHECK(timer.lap_number == 2U);
-    TEST_CHECK(fabs(timer.best_lap_time_s - 4.0) < 0.001);
+    TEST_CHECK(fabs(timer.last_lap_time_s - 4.0) < 0.001);
+    TEST_CHECK(fabs(timer.delta_time_s) < 0.001);
 
     /* Lap 2 takes 3.5 seconds and has a different time distribution: the
      * third point is reached at 1.0s instead of the old reference's 2.0s. */
-    feed_point(&timer, &second, 8750000ULL, &state);
-    feed_point(&timer, &third, 9250000ULL, &state);
-    feed_point(&timer, &fourth, 10750000ULL, &state);
-    feed_point(&timer, &first, 11750000ULL, &state);
+    feed_point(&timer, &second, 5500000ULL, &state);
+    feed_point(&timer, &third, 6000000ULL, &state);
+    feed_point(&timer, &fourth, 7500000ULL, &state);
+    feed_point(&timer, &first, 8500000ULL, &state);
     TEST_CHECK(timer.lap_number == 3U);
     TEST_CHECK(fabs(timer.last_lap_time_s - 3.5) < 0.001);
     TEST_CHECK(fabs(timer.best_lap_time_s - 3.5) < 0.001);
@@ -93,8 +90,8 @@ int main(void)
 
     /* Lap 3 is slower. At its third point, Delta must use Lap 2's 1.0s
      * reference time (+1.00s), not the initial reference's 2.00s. */
-    feed_point(&timer, &second, 12750000ULL, &state);
-    feed_point(&timer, &third, 13750000ULL, &state);
+    feed_point(&timer, &second, 9500000ULL, &state);
+    feed_point(&timer, &third, 10500000ULL, &state);
     TEST_CHECK(fabs(timer.current_time_s - 2.0) < 0.001);
     TEST_CHECK(fabs(timer.delta_time_s - 1.0) < 0.001);
     TEST_CHECK(fabs(state.delta_time_s - timer.delta_time_s) < 0.001);
@@ -107,7 +104,7 @@ int main(void)
 
         for (sample = 1U; sample <= 5000U; ++sample) {
             feed_point(&timer, &third,
-                       13750000ULL + (uint64_t)sample * 20000ULL, &state);
+                       10500000ULL + (uint64_t)sample * 20000ULL, &state);
         }
         TEST_CHECK(!timer.current_lap_overflow);
         TEST_CHECK(timer.current_lap_count < 600U);

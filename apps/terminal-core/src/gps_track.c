@@ -12,6 +12,8 @@
 #define GPS_TRACK_MAX_HACC_M 5.0
 #define GPS_TRACK_STRAIGHT_WINDOW 5U
 #define GPS_TRACK_VIRTUAL_START_FRACTION 0.15
+/* Prefer an earlier gate when straightness differs by less than 0.2%. */
+#define GPS_TRACK_STRAIGHT_SCORE_TOLERANCE 0.002
 
 static double gps_track_radians(double degrees)
 {
@@ -147,6 +149,10 @@ static bool gps_track_is_straight_window(const GpsTrack *track, size_t index,
     if (end > end_index) {
         return false;
     }
+    if (!isfinite(track->points[index].hacc_m) ||
+        track->points[index].hacc_m > GPS_TRACK_MAX_HACC_M) {
+        return false;
+    }
     for (current = index + 1U; current < end; ++current) {
         const GpsTrackPoint *previous = gps_track_at(track, current - 1U);
         const GpsTrackPoint *point = gps_track_at(track, current);
@@ -204,14 +210,14 @@ bool gps_track_find_virtual_start(const GpsTrack *track, size_t begin_index,
         }
         distance_from_loop_begin_m = point->total_distance_m -
                                      loop_begin_point->total_distance_m;
+        if (distance_from_loop_begin_m > selection_distance_m) {
+            break;
+        }
         fallback_error = fabs(distance_from_loop_begin_m -
                               selection_distance_m);
         if (fallback_error < fallback_error_m) {
             fallback_error_m = fallback_error;
             fallback_index = index;
-        }
-        if (distance_from_loop_begin_m > selection_distance_m) {
-            break;
         }
         if (index + GPS_TRACK_STRAIGHT_WINDOW > end_index) {
             continue;
@@ -246,7 +252,7 @@ bool gps_track_find_virtual_start(const GpsTrack *track, size_t begin_index,
                                ? straight_distance_m / path_distance_m
                                : 0.0;
 
-            if (score > best_score) {
+            if (score > best_score + GPS_TRACK_STRAIGHT_SCORE_TOLERANCE) {
                 best_score = score;
                 best_index = index + GPS_TRACK_STRAIGHT_WINDOW / 2U;
             }

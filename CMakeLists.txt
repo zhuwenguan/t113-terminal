@@ -905,6 +905,27 @@ if (BUILD_TESTING)
     )
     add_test(NAME race_event_laptime COMMAND test_race_event_laptime)
 
+    add_executable(test_lap_timer_accuracy
+        tests/test_lap_timer_accuracy.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/race_event.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/lap_timer.c
+        ${RACE_TERMINAL_CORE_SOURCE_DIR}/gps_track.c
+    )
+    target_include_directories(test_lap_timer_accuracy PRIVATE
+        ${RACE_COMMON_LEGACY_INCLUDE_DIR} ${RACE_CORE_INCLUDE_DIR})
+    target_compile_options(test_lap_timer_accuracy PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+    )
+    target_link_libraries(test_lap_timer_accuracy PRIVATE
+        race_common
+        Threads::Threads
+        m
+    )
+    add_test(NAME lap_timer_accuracy COMMAND test_lap_timer_accuracy)
+
     add_executable(test_accel_axis
         tests/test_accel_axis.c
         ${RACE_TERMINAL_CORE_SOURCE_DIR}/accel_test.c

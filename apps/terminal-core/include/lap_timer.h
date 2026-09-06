@@ -38,9 +38,13 @@ typedef struct {
 
 typedef struct {
     bool configured;
-    bool have_projection;
     bool waiting_for_initial_crossing;
-    bool previous_projection_valid;
+    bool previous_point_valid;
+    GpsTrackPoint previous_point;
+    double start_x_m;
+    double start_y_m;
+    double start_direction_x;
+    double start_direction_y;
     char trace_directory[256];
     FILE *trace_file;
     uint32_t trace_file_lap_number;
@@ -63,13 +67,11 @@ typedef struct {
     size_t current_lap_count;
     uint64_t current_lap_start_timestamp_us;
     bool current_lap_overflow;
-    size_t previous_projection_index;
     double reference_lap_time_s;
     double reference_loop_distance_s_m;
     double current_distance_s_m;
     double current_time_s;
     double delta_time_s;
-    uint64_t previous_projection_timestamp_us;
     uint64_t lap_start_timestamp_us;
     uint64_t last_report_timestamp_us;
     uint32_t lap_number;
@@ -79,6 +81,9 @@ typedef struct {
 
 void lap_timer_init(LapTimer *timer, const char *trace_directory);
 
+/* Imports the first historical lap and settles an already observed finish.
+ * The displayed first result starts at movement; its reference starts at the
+ * historical virtual gate. No additional arming lap is required. */
 bool lap_timer_configure_from_loop(LapTimer *timer, const GpsTrack *track,
                                    size_t loop_begin, size_t loop_end,
                                    size_t virtual_start,

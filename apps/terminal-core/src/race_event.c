@@ -235,7 +235,7 @@ void race_event_update(RaceEvent *event, uint64_t timestamp_us,
         sample->fix_type < 3U || !isfinite(sample->latitude) ||
         !isfinite(sample->longitude) || !isfinite(sample->speed_kmh) ||
         !isfinite(sample->heading_deg)) {
-        if (event != NULL) {
+        if (event != NULL && state != NULL) {
             state->event_mode = event->mode;
         }
         return;

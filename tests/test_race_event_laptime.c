@@ -107,7 +107,6 @@ static void test_loop_transition_and_next_lap(void)
 {
     RaceEvent event;
     VehicleState state;
-    double previous_lap_time = 0.0;
     bool saw_circuit = false;
     unsigned int detection_index = 0U;
     unsigned int index;
@@ -119,7 +118,6 @@ static void test_loop_transition_and_next_lap(void)
     for (index = 0U; index < TEST_LOOP_POINTS; ++index) {
         timestamp_us = 2000000ULL + (uint64_t)index * TEST_LOOP_STEP_US;
         update_loop_point(&event, &state, timestamp_us, index);
-        previous_lap_time = state.lap_time_s;
     }
     for (index = 0U; index <= 8U; ++index) {
         timestamp_us = 2000000ULL +
@@ -127,18 +125,18 @@ static void test_loop_transition_and_next_lap(void)
                            TEST_LOOP_STEP_US;
         update_loop_point(&event, &state, timestamp_us, index);
         if (event.mode == RACE_EVENT_CIRCUIT_MODE) {
-            double expected =
-                (double)(timestamp_us - event.movement_start_timestamp_us) /
-                1000000.0;
-
-            TEST_CHECK(fabs(state.lap_time_s - expected) < 0.01);
-            TEST_CHECK(state.lap_time_s >= previous_lap_time);
+            /* The first finish has already happened during confirmation;
+             * publish it immediately and expose the running second lap. */
+            TEST_CHECK(state.lap_number == 2U);
+            TEST_CHECK(state.last_lap_time_s > 30.0);
+            TEST_CHECK(state.last_lap_time_s < 35.0);
+            TEST_CHECK(fabs(state.best_lap_time_s - 30.0) < 0.01);
+            TEST_CHECK(fabs(state.delta_time_s) < 0.01);
             TEST_CHECK(state.lap_valid);
             saw_circuit = true;
             detection_index = index;
             break;
         }
-        previous_lap_time = state.lap_time_s;
     }
     TEST_CHECK(saw_circuit);
 

@@ -87,6 +87,7 @@ int main(void)
     char old_path[PATH_MAX];
     char first_path[PATH_MAX];
     char second_path[PATH_MAX];
+    char third_path[PATH_MAX];
     GpsTrack track;
     GpsTrackPoint first;
     GpsTrackPoint second;
@@ -108,6 +109,9 @@ int main(void)
                     directory) < (int)sizeof(first_path));
     TEST_CHECK(snprintf(second_path, sizeof(second_path), "%s/lap_002.csv",
                     directory) < (int)sizeof(second_path));
+
+    TEST_CHECK(snprintf(third_path, sizeof(third_path), "%s/lap_003.csv",
+                        directory) < (int)sizeof(third_path));
 
     old_file = fopen(old_path, "w");
     TEST_CHECK(old_file != NULL);
@@ -148,6 +152,7 @@ int main(void)
     TEST_CHECK(unlink(old_path) == 0);
     TEST_CHECK(unlink(first_path) == 0);
     TEST_CHECK(unlink(second_path) == 0);
+    TEST_CHECK(unlink(third_path) == 0);
     TEST_CHECK(rmdir(directory) == 0);
     return 0;
 }

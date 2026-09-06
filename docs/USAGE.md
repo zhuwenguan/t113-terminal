@@ -216,7 +216,13 @@ tail -f /mnt/usb/sda/log/session_*/vehicle_state_*.csv
 
 赛事模式不需要手动切换。`event_mode` 只表示赛道检测状态：
 
-- `CIRCUIT_MODE`：检测到重复闭环 GPS 轨迹后自动进入，输出圈时间、最佳圈、Delta 和预计圈速。
+- `CIRCUIT_MODE`：检测到重复闭环 GPS 轨迹后自动进入，输出当前圈时间、上一圈成绩、最佳圈和 Delta。
+
+第一圈返回自动选定的虚拟起终线后便给出成绩并开始第二圈 Delta；
+若检测确认时已经过线，会从历史 GPS 回溯该次过线，不额外等待一圈。
+首圈成绩从首次运动计时，可能包含进入赛道的路段；最佳圈及 Delta
+使用同一条起终线之间的参考时间。具体语义见
+[两圈跑动的圈速与实时 Delta](TRACK_LAP_DELTA_TIMING.md)。
 
 直线加速是与赛道检测、圈速计量并行运行的独立 Run，不改变
 `event_mode`。车辆静止并 Launch 后，从 Launch Point 后 1m 开始计时；

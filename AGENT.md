@@ -25,8 +25,8 @@
 - 每次运行原子创建 `/mnt/usb/sda/log/session_YYYYMMDD_HHMMSS[_NNN]/` 会话目录，并在其中生成 `can_YYYYMMDD_HHMMSS.csv`、`lappro_YYYYMMDD_HHMMSS.csv`、`vehicle_state_YYYYMMDD_HHMMSS.csv` 和 `lap_XXX[_NNN].csv`；所有文件以不覆盖方式创建，文件内记录时间戳仍使用 `CLOCK_MONOTONIC`。
 - Vehicle State 框架包含车速、航向/GPS 坐标、加速度、圈速/赛道字段，以及 `motor_rpm`、`torque_nm`、`motor_temperature_c`、`controller_temperature_c`、`battery_temperature_c`、`hv_voltage_v`、`hv_current_a`、`hv_power_w`、`hv_soc_percent`、`lv_voltage_v`、`mode`、`throttle_percent`、`brake_percent` 和 `drive_state`；`drive_state` 当前定义为 `IDLE`/`READY`；`hacc_m` 与 `altitude` 仅保留在 LapPro 原始日志，`hacc_m` 同时进入 GPS Track 用于虚拟起点质量过滤，不在 Vehicle State 中重复保存；当前 CAN Decoder 在 CAN0 接入 `0x121`、`0x122`、`0x201`，在 CAN1 接入 `0x01e` 和 `0x00e`，`hv_power_w` 由高压电压和电流计算，`mode`、油门、刹车和 `drive_state` 暂未配置 CAN 映射。
 - `race_event` 始终维护闭环检测和圈速状态，`CIRCUIT_MODE` 不会被直线加速测试抢占；初始闭环匹配使用 8m 紧阈值排除近距离赛道交叉点，多个候选同时匹配时按历史时间更早者作为维修区汇入赛道点。
-- `gps_track` 使用固定容量 4096 点缓存将有效 GPS 转换为局部 XY，并保留时间、速度、航向和累计距离；缓存满后仅保留最近一半样本，闭环连续匹配不允许回退到初始历史锚点之前。
-- `lap_timer` 从重复 GPS 轨迹学习临时赛道，只在闭环点沿赛道前进方向的前 15% 范围内选择最直区域作为虚拟起终点；当前圈从车辆首次有效运动开始计时，首次识别后等待真实虚拟起点通过，再输出当前圈、最佳圈、Delta 和圈轨迹。圈轨迹通过固定容量队列和独立 writer 线程异步写入，赛事状态锁内不执行文件 I/O。
+- `gps_track` 使用固定容量 4608 点缓存将有效 GPS 转换为局部 XY，并保留时间、速度、航向和累计距离；缓存满后仅保留最近一半样本，闭环连续匹配不允许回退到初始历史锚点之前。
+- `lap_timer` 从重复 GPS 轨迹学习临时赛道，只在闭环点沿赛道前进方向的前 15% 范围内选择最直区域作为虚拟起终点；首圈从车辆首次有效运动开始计时，识别时复用历史轨迹并回溯已发生的几何过线，首次返回虚拟线便结算首圈并开始第二圈 Delta，无需额外武装圈。同线到同线的首圈历史直接建立参考，Delta 用参考线段投影与时间插值，每个原始 GPS 样本更新。圈轨迹通过固定容量队列和独立 writer 线程异步写入，赛事状态锁内不执行文件 I/O。
 - `accel_test` 是与赛道模式并行的独立 run 状态机：车速低于 3km/h 持续 1.5 秒后 ARM，车速达到 3km/h 或纵向加速度达到 1.5m/s² 时 Launch，从 Launch Point 偏移 1m 后开始计时；沿起步轴持续前进且横向偏差不超过 10m 时有效，在跨越目标的相邻样本间插值并分别保存 50m、75m 成绩及最大纵向加速度。完成后回到 `ACCEL_TEST_IDLE`，结果至少保留 5 秒且期间禁止新 Launch；Vehicle State CSV 使用 `accel_50m_time_s` 和既有 `accel_time_s` 记录两项成绩。
 - logger 不可用时只输出告警，CAN 和 LapPro 仍继续运行；不会在未确认的根分区路径静默写入大量数据。
 - LapPro 使用独立的一个 pthread，不能阻塞 CAN epoll 接收线程。
