@@ -10,7 +10,7 @@
 
 原有设计已经具备 CAN 单路隔离与重连、logger 存储前置检查、MP4 分段、异步 writer、信号退出和状态共享。主要缺口是：启动脚本没有 status/部署回滚入口，supervisor 日志不持久且没有大小限制，没有周期性 health 文件，没有 watchdog 兜底，视频新分段没有剩余空间门禁。
 
-仓库中没有板端原厂 `S39wifi`、`S40network` 或 `S50adb_start` 的实现文件；它们只在项目背景文档中被记录为镜像侧服务。因此本次没有复制或替代 WiFi、网络、ADB 服务，仍让 Buildroot 原有顺序先完成设备/网络，再由本项目的 S75/S95 入口启动终端。
+仓库中没有板端原厂 `S39wifi`、`S40network` 或 `S50adb_start` 的实现文件；它们只在项目背景文档中被记录为镜像侧服务。`t113_ap.sh` 会在本项目的 S75/S95 入口启动时停止 wlan0 客户端、设置静态 AP 地址并启动板端已有的 hostapd/dnsmasq，因此上电和手工重启都会保持 AP 模式。
 
 ## 修改清单
 
@@ -19,8 +19,9 @@
 | `deploy/t113/init.d/S75race` | 增加 `status`，显示 core 状态和各进程 PID | 无 SSH 时确认运行状态 |
 | `deploy/t113/init.d/S95t113-terminal` | 增加标准 P0 SysV 服务名 | 适配需要 S95 启动顺序的镜像 |
 | `scripts/start_race.sh` | 默认使用 USB 日志目录；未挂载时退回 `/tmp/race`；加载 `terminal.conf` | 上电自动启动且避免把大量日志写入根分区 |
+| `scripts/t113_ap.sh` | 将镜像默认的 wlan0 managed 模式切换为板端现有 hostapd/dnsmasq AP | 保证上电和应用重启后持续使用本地 AP |
 | `scripts/race_supervisor.sh` | 启动 health logger/watchdog；异常重启记录；应用日志就地限长；停止时清理子进程 | 自动恢复与低频故障诊断 |
-| `scripts/health_log.sh` | 每秒生成 `health.csv`，包含 uptime、内存、磁盘、core、CAN 计数、进程和重启次数 | 不依赖 SSH 获取运行状态 |
+| `scripts/health_log.sh` | 每秒生成 `health.csv`，包含 uptime、内存（`mem_available_kb`）、磁盘（`disk_available_kb`，KiB）、core、CAN 计数、进程和重启次数 | 不依赖 SSH 获取运行状态，避免把 U 盘空间误读成 RAM |
 | `tools/t113_watchdog.c` | 使用 `/dev/watchdog`，只在 core 心跳失效且 core 进程仍存在时停止喂狗 | 处理进程/系统 hang；core crash 留给 supervisor 恢复 |
 | `libs/ipc/include/race/core_status.h`、`main.c`、`race_core_status_dump.c` | 状态 ABI 升级到 v2，发布 CAN rx/error/bus-off 累计值 | health log 能区分“接口活着”和“有数据/有故障” |
 | `apps/terminal-core/video/*` | 新分段前检查 `statvfs`；最低空间由 `RACE_MIN_FREE_BYTES` 配置，默认 128 MiB | 存储接近耗尽时禁止新录像而不影响核心采集 |
@@ -36,7 +37,7 @@ Buildroot SysV: S39/S40 等基础服务、设备和网络
   ↓
 S75race 或 S95t113-terminal
   ↓
-start_race.sh：加载配置、确认 USB 日志挂载、创建 /run/race
+start_race.sh：切换 wlan0 AP、加载配置、确认 USB 日志挂载、创建 /run/race
   ↓
 race_supervisor.sh + health_log.sh
   ↓
@@ -56,7 +57,7 @@ race_video、webd
 | CAN0/CAN1 bus-off、断开 | 现有 receiver 按 bus 隔离、重连并发布 active mask；另一条总线继续工作；累计 rx/error/bus-off 写入 health |
 | Camera 断开/打开失败 | `race_video` 进程与 core 分离，退出后 supervisor 重启；CAN/logger 不受影响 |
 | LapPro/Bluetooth 不可用 | core 保持运行，LapPro worker 可重连；CAN/logger/video 不依赖有效 fix 才能存活 |
-| HTTP/WiFi/client 异常 | `webd` 独立进程，客户端上限和 IPC 缓冲沿用现有实现；HTTP 退出不影响 core/video |
+| HTTP/WiFi/client 异常 | `webd` 独立进程，应用启动时重新配置 wlan0 AP；HTTP 退出不影响 core/video |
 | 存储低于阈值 | logger 的 USB mount/read-only 检查继续生效；视频不开始新的分段；VehicleState/CAN 仍运行 |
 | 正常 SIGTERM/SIGINT | 现有顺序停止接收、snapshotter、LapPro、视频、logger 并 `sync()`；MP4 finalize 和 logger flush 在各自 stop 中完成 |
 | 暴力断电 | 最后一个 MP4 允许损坏；logger 启动时清理 CSV 不完整尾行，后续 session 使用不覆盖目录；MP4 原有 recover 工具保留 |
@@ -114,5 +115,5 @@ ssh root@BOARD 'rm -rf /tmp/t113-release && mkdir -p /tmp/t113-release && tar -C
 | 实机 watchdog reset 行为 | 主机没有 `/dev/watchdog`，内核 `nowayout` 未知 | 工具已交叉编译；上车前用真实板端做一次“core hang → reset”和一次正常 stop 验证 |
 | camera 自动重连的帧级语义 | video 现有 pipeline 重启由进程级 supervisor 完成 | 可接受为首阶段隔离；若驱动只返回 timeout 而不退出，需要板端确认 pipeline fault 是否触发退出 |
 | logger write failure 后持续恢复 | logger supervisor 会重建 session，但 USB 真正恢复的时序依赖挂载系统 | 板端拔插 USB 后验证；不要把根分区当作隐式 fallback |
-| WiFi AP/DHCP | 由原厂 Buildroot 服务负责，本仓库不重复实现 | 仍需 cold boot 验证 S39/S40 与 S95 顺序 |
+| WiFi AP/DHCP | 使用原厂 hostapd/dnsmasq 配置，由 `t113_ap.sh` 在应用启动时固定切换为 AP | 已在 T113 通过 ADB 确认 wlan0 为 AP、192.168.5.1/24，仍建议随整机做一次 cold boot 验证 |
 | 4G telemetry、复杂 HUD、云端 | 明确不在本次范围 | 未修改 |

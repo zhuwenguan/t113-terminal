@@ -4,8 +4,8 @@ The Phase 1 install includes `race_core`, `webd`, `race_video`, the sample
 `config/webd.conf`, the static dashboard under `web/`, and BusyBox SysV startup
 scripts. `race_video` publishes
 the original camera MJPEG through `/race_latest_jpeg`; `webd` serves it locally
-at `/video/live.mjpg`. The existing AP,
-hostapd, DHCP, and driver setup is deliberately outside this change.
+at `/video/live.mjpg`. At startup `t113_ap.sh` reuses the board's existing
+hostapd, DHCP, and driver configuration and puts `wlan0` into AP mode.
 
 For a prefix of `/opt/t113`, the complete service can be started with:
 

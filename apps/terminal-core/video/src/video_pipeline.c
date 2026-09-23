@@ -37,13 +37,14 @@ static bool video_pipeline_has_free_space(const VideoPipeline *pipeline)
     }
     directory = pipeline->config.record_directory;
     if (directory == NULL || statvfs(directory, &status) < 0) {
-        LOG_WARN("Video: cannot inspect recording space: %s", strerror(errno));
+        LOG_WARN("Video: cannot inspect recording storage: %s",
+                 strerror(errno));
         return false;
     }
     available = (uint64_t)status.f_bavail * (uint64_t)status.f_frsize;
     if (available < pipeline->config.record_min_free_bytes) {
-        LOG_WARN("Video: recording blocked, free=%" PRIu64
-                 " bytes minimum=%" PRIu64,
+        LOG_WARN("Video: recording blocked by storage, available=%" PRIu64
+                 " bytes reserve=%" PRIu64,
                  available, pipeline->config.record_min_free_bytes);
         return false;
     }

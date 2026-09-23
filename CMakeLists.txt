@@ -572,6 +572,7 @@ install(PROGRAMS
     scripts/start_race.sh
     scripts/race_supervisor.sh
     scripts/stop_race.sh
+    scripts/t113_ap.sh
     DESTINATION bin)
 install(PROGRAMS scripts/health_log.sh DESTINATION bin RENAME health_log)
 install(PROGRAMS deploy/t113/init.d/S75race deploy/t113/init.d/S95t113-terminal
