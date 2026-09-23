@@ -1,7 +1,4 @@
 #!/bin/sh
 set -eu
 RACE_PREFIX=${RACE_PREFIX:-/opt/t113}
-if [ -x "$RACE_PREFIX/etc/init.d/S95t113-terminal" ]; then
-    exec "$RACE_PREFIX/etc/init.d/S95t113-terminal" status
-fi
-exec "$RACE_PREFIX/etc/init.d/S75race" status
+exec "$RACE_PREFIX/etc/init.d/S95t113-terminal" status

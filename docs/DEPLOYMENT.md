@@ -4,10 +4,9 @@ Status: onboard hardening implemented; board fault-injection validation pending
 
 The T113 install includes BusyBox SysV startup assets under `etc/init.d`,
 `race_core`, `race_video`, `webd`, `t113_watchdog`, health logging, the race
-supervisor, and the AP setup helper. Enable `S95t113-terminal` (or the
-compatibility `S75race`) in the board's init sequence; enable one of these
-names, not both. See [Onboard hardening](ONBOARD_HARDENING.md) for the
-release/install/rollback procedure.
+supervisor, and the AP setup helper. Enable the single `S95t113-terminal`
+entry in the board's init sequence. See [Onboard hardening](ONBOARD_HARDENING.md)
+for the release/install/rollback procedure.
 
 The supervisor keeps HMI/CAN active while the core is in PRECHECK and starts
 video/web only after `/race_core_status` reports RUNNING. A real board still

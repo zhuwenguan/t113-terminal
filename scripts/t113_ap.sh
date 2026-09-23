@@ -45,7 +45,7 @@ stop_station_wpa() {
 ap_is_ready() {
     iw dev "$T113_WIFI_IFACE" info 2>/dev/null |
         grep -q 'type AP' || return 1
-    ip -4 addr show dev "$T113_WIFI_IFACE" 2>/dev/null |
+    ip -4 addr show "$T113_WIFI_IFACE" 2>/dev/null |
         grep -q "inet ${T113_AP_IP}/" || return 1
     ps 2>/dev/null | grep -q '[h]ostapd' || return 1
     ps 2>/dev/null | grep -q '[d]nsmasq' || return 1
@@ -112,7 +112,7 @@ stop_ap() {
 
 status_ap() {
     iw dev "$T113_WIFI_IFACE" info 2>/dev/null || true
-    ip -4 addr show dev "$T113_WIFI_IFACE" 2>/dev/null || true
+    ip -4 addr show "$T113_WIFI_IFACE" 2>/dev/null || true
     ps 2>/dev/null | grep -E '(hostapd|dnsmasq)' | grep -v grep || true
 }
 

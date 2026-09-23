@@ -48,9 +48,13 @@ if [ "$RACE_AP_ENABLED" = 1 ] && [ -x "$RACE_BIN_DIR/t113_ap.sh" ]; then
     "$RACE_BIN_DIR/t113_ap.sh" start ||
         echo "warning: unable to configure T113 wireless AP" >&2
 fi
+# Keep the service alive when this launcher is called from an SSH/ADB shell;
+# init starts it without a terminal, and nohup makes both paths equivalent.
 RACE_BIN_DIR="$RACE_BIN_DIR" RACE_RUN_DIR="$RACE_RUN_DIR" \
 RACE_LOG_DIR="$RACE_LOG_DIR" \
-    "$RACE_BIN_DIR/race_supervisor.sh" "$@" \
-    >"$RACE_LOG_DIR/race_supervisor.log" 2>&1 &
-echo $! >"$RACE_RUN_DIR/race_supervisor.pid"
+    nohup "$RACE_BIN_DIR/race_supervisor.sh" "$@" \
+    >"$RACE_LOG_DIR/race_supervisor.log" 2>&1 < /dev/null &
+# race_supervisor.sh owns race_supervisor.pid and records its own PID.  Do not
+# overwrite it with the shell launcher PID; doing so makes stop/status target a
+# process that has already exited and leaves the real supervisor orphaned.
 echo "race supervisor started; core waits for CAN and logger readiness"

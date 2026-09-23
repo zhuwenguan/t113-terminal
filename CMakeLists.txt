@@ -575,8 +575,7 @@ install(PROGRAMS
     scripts/t113_ap.sh
     DESTINATION bin)
 install(PROGRAMS scripts/health_log.sh DESTINATION bin RENAME health_log)
-install(PROGRAMS deploy/t113/init.d/S75race deploy/t113/init.d/S95t113-terminal
-        DESTINATION etc/init.d)
+install(PROGRAMS deploy/t113/init.d/S95t113-terminal DESTINATION etc/init.d)
 install(FILES
     assets/icons/car-battery.png
     assets/icons/timer.png

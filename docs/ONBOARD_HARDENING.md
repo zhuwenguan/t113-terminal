@@ -6,19 +6,19 @@
 
 ## 当前架构审查结论
 
-启动入口是 `deploy/t113/init.d/S75race`，它调用 `scripts/start_race.sh`，再由 `scripts/race_supervisor.sh` 管理 `race_core`、`race_video` 和 `webd`。`race_core` 内部拥有双 SocketCAN、CAN 解码、LapPro、VehicleState、HMI、赛事算法和 logger；logger 线程在 USB 存储可用后建立 session。`race_core_status` 共享内存提供 logger、CAN、HMI、LapPro、生命周期和心跳状态，视频/HTTP 只读这些状态，不反向控制采集。
+启动入口是 `deploy/t113/init.d/S95t113-terminal`，它调用 `scripts/start_race.sh`，再由 `scripts/race_supervisor.sh` 管理 `race_core`、`race_video` 和 `webd`。`race_core` 内部拥有双 SocketCAN、CAN 解码、LapPro、VehicleState、HMI、赛事算法和 logger；logger 线程在 USB 存储可用后建立 session。`race_core_status` 共享内存提供 logger、CAN、HMI、LapPro、生命周期和心跳状态，视频/HTTP 只读这些状态，不反向控制采集。
 
 原有设计已经具备 CAN 单路隔离与重连、logger 存储前置检查、MP4 分段、异步 writer、信号退出和状态共享。主要缺口是：启动脚本没有 status/部署回滚入口，supervisor 日志不持久且没有大小限制，没有周期性 health 文件，没有 watchdog 兜底，视频新分段没有剩余空间门禁。
 
-仓库中没有板端原厂 `S39wifi`、`S40network` 或 `S50adb_start` 的实现文件；它们只在项目背景文档中被记录为镜像侧服务。`t113_ap.sh` 会在本项目的 S75/S95 入口启动时停止 wlan0 客户端、设置静态 AP 地址并启动板端已有的 hostapd/dnsmasq，因此上电和手工重启都会保持 AP 模式。
+仓库中没有板端原厂 `S39wifi`、`S40network` 或 `S50adb_start` 的实现文件；它们只在项目背景文档中被记录为镜像侧服务。`t113_ap.sh` 会在唯一的 S95 入口启动时停止 wlan0 客户端、设置静态 AP 地址并启动板端已有的 hostapd/dnsmasq，因此上电和手工重启都会保持 AP 模式。
 
 ## 修改清单
 
 | 文件 | 修改 | 目的 |
 | --- | --- | --- |
-| `deploy/t113/init.d/S75race` | 增加 `status`，显示 core 状态和各进程 PID | 无 SSH 时确认运行状态 |
-| `deploy/t113/init.d/S95t113-terminal` | 增加标准 P0 SysV 服务名 | 适配需要 S95 启动顺序的镜像 |
-| `scripts/start_race.sh` | 默认使用 USB 日志目录；未挂载时退回 `/tmp/race`；加载 `terminal.conf` | 上电自动启动且避免把大量日志写入根分区 |
+| `deploy/t113/init.d/S95t113-terminal` | 唯一的 SysV 入口，提供 start/stop/restart/status | 避免 S75/S95 双入口和路径不一致 |
+| `scripts/start_race.sh` | 默认使用 USB 日志目录；未挂载时退回 `/tmp/race`；加载 `terminal.conf`；用 `nohup` 脱离 SSH/ADB 会话 | 上电自动启动且避免把大量日志写入根分区，手工部署后服务不会因终端退出而被挂断 |
+| `scripts/install.sh` | 安装前后校验关键脚本并 `sync`；拒绝把安装源目录指向当前前缀 | 避免生成空文件或在错误目录自拷贝，保证下次上电可执行 |
 | `scripts/t113_ap.sh` | 将镜像默认的 wlan0 managed 模式切换为板端现有 hostapd/dnsmasq AP | 保证上电和应用重启后持续使用本地 AP |
 | `scripts/race_supervisor.sh` | 启动 health logger/watchdog；异常重启记录；应用日志就地限长；停止时清理子进程 | 自动恢复与低频故障诊断 |
 | `scripts/health_log.sh` | 每秒生成 `health.csv`，包含 uptime、内存（`mem_available_kb`）、磁盘（`disk_available_kb`，KiB）、core、CAN 计数、进程和重启次数 | 不依赖 SSH 获取运行状态，避免把 U 盘空间误读成 RAM |
@@ -35,7 +35,7 @@ Boot
   ↓
 Buildroot SysV: S39/S40 等基础服务、设备和网络
   ↓
-S75race 或 S95t113-terminal
+S95t113-terminal
   ↓
 start_race.sh：切换 wlan0 AP、加载配置、确认 USB 日志挂载、创建 /run/race
   ↓
@@ -92,7 +92,7 @@ ssh root@BOARD 'rm -rf /tmp/t113-release && mkdir -p /tmp/t113-release && tar -C
 /opt/t113/bin/rollback.sh
 ```
 
-`install.sh` 会先停止旧服务并保存 `/opt/t113.previous`，再复制新版本、设置脚本权限、启动并执行一次 status。若新版本不能工作，`rollback.sh` 停止服务、交换回 previous 目录并启动旧版本。安装包不包含密钥、密码或 SSH 配置。
+`install.sh` 会先停止旧服务并保存 `/opt/t113.previous`，再复制新版本、校验关键文件、同步写盘、启动并执行一次 status。安装源必须位于 `/opt/t113` 之外；若新版本不能工作，`rollback.sh` 停止服务、交换回 previous 目录并启动旧版本。安装包不包含密钥、密码或 SSH 配置。
 
 ## 测试报告
 
@@ -101,7 +101,7 @@ ssh root@BOARD 'rm -rf /tmp/t113-release && mkdir -p /tmp/t113-release && tar -C
 | Host build | `cmake --preset host-debug && cmake --build --preset host-debug --parallel 4` | PASS |
 | Host tests | `ctest --preset host-debug` | 23/23 PASS |
 | Shell syntax | `sh -n scripts/*.sh deploy/t113/init.d/*` | PASS |
-| Install tree | `cmake --install out/host-debug --prefix out/review-install` | PASS；包含 watchdog、health、控制脚本、两个 init 名称和配置 |
+| Install tree | `cmake --install out/host-debug --prefix out/review-install` | PASS；包含 watchdog、health、控制脚本、单一 S95 init 入口和配置 |
 | ARM core/video/watchdog build | `cmake --preset arm-release && cmake --build --preset arm-release --target race_core race_video t113_watchdog --parallel 4` | PASS |
 | Cold boot | 板端断电后上电，检查 `status.sh`、CAN、logger、camera、video、HTTP、LapPro | 未在本环境执行 |
 | Process crash | 板端 `kill -9` core，观察 supervisor.log 和 PID | 未在本环境执行 |
