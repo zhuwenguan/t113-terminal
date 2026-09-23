@@ -21,7 +21,9 @@ int main(void)
     }
     state = race_core_lifecycle_name((RaceCoreLifecycleState)data.state);
     printf("state=%s flags=0x%x can_mask=0x%x logger=%s hmi=%s lappro=%s "
-           "stale=%s heartbeat_mono_us=%llu session=%s\n",
+           "stale=%s heartbeat_mono_us=%llu can_rx0=%llu can_rx1=%llu "
+           "can_err0=%llu can_err1=%llu can_busoff0=%llu can_busoff1=%llu "
+           "session=%s\n",
            state, data.flags, data.can_ready_mask,
            (data.flags & RACE_CORE_STATUS_LOGGER_READY) != 0U ? "ready" : "down",
            (data.flags & RACE_CORE_STATUS_HMI_READY) != 0U ? "ready" : "down",
@@ -29,6 +31,12 @@ int main(void)
            race_core_status_is_stale(now_us, data.heartbeat_mono_us,
                                      RACE_CORE_STATUS_STALE_US) ? "yes" : "no",
            (unsigned long long)data.heartbeat_mono_us,
+           (unsigned long long)data.can_rx_frames[0],
+           (unsigned long long)data.can_rx_frames[1],
+           (unsigned long long)data.can_error_frames[0],
+           (unsigned long long)data.can_error_frames[1],
+           (unsigned long long)data.can_bus_off_events[0],
+           (unsigned long long)data.can_bus_off_events[1],
            data.session_directory);
     race_core_status_close(&handle);
     return 0;

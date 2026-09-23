@@ -35,6 +35,8 @@ stop_daemon() {
 }
 
 stop_daemon race_supervisor
+stop_daemon health_log
+stop_daemon t113_watchdog
 stop_daemon race_video
 stop_daemon webd
 stop_daemon race_core

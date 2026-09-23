@@ -4,6 +4,7 @@
 - [Web API](WEB_API.md): Phase 1 local web API and WebSocket schema.
 - [Telemetry protocol](TELEMETRY_PROTOCOL.md): reserved remote protocol design.
 - [Deployment](DEPLOYMENT.md): reserved T113/cloud deployment design.
+- [Onboard hardening](ONBOARD_HARDENING.md): automatic startup, recovery, health, watchdog and deployment.
 - [Usage](USAGE.md): build and runtime commands.
 - [两圈跑动的圈速与实时 Delta](TRACK_LAP_DELTA_TIMING.md): first-lap results, geometric finish timing and continuous Delta.
 - [GPS 赛道、圈速与 Delta 审阅](TRACK_LAP_DELTA_REVIEW.md): current algorithm flow, design findings and validation evidence.

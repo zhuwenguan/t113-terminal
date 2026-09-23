@@ -1,0 +1,6 @@
+#!/bin/sh
+
+# Compatibility name for images whose init ordering reserves S75 for board
+# services.  Keep one implementation so start/stop behavior cannot diverge.
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$SCRIPT_DIR/S75race" "$@"

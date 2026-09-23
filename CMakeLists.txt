@@ -410,6 +410,10 @@ target_compile_options(fake_video_producer PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(fake_video_producer PRIVATE
     race_common race_video_ipc Threads::Threads ${CMAKE_DL_LIBS} m)
 
+add_executable(t113_watchdog tools/t113_watchdog.c)
+target_compile_options(t113_watchdog PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(t113_watchdog PRIVATE race_ipc race_common Threads::Threads)
+
 if (T113_BUILD_VIDEO)
 add_executable(t113_terminal
     ${RACE_TERMINAL_CORE_DIR}/main.c
@@ -541,6 +545,7 @@ set(T113_INSTALL_RUNTIME_TARGETS
     race_state_dump
     race_core_status_dump
     webd)
+list(APPEND T113_INSTALL_RUNTIME_TARGETS t113_watchdog)
 if (T113_BUILD_VIDEO)
     list(APPEND T113_INSTALL_RUNTIME_TARGETS race_video)
 endif()
@@ -559,11 +564,18 @@ install(DIRECTORY configs/t113/ DESTINATION config)
 install(DIRECTORY web/dashboard/dist/ DESTINATION web)
 install(DIRECTORY assets/fonts DESTINATION share/t113-terminal/assets)
 install(PROGRAMS
+    scripts/install.sh
+    scripts/rollback.sh
+    scripts/status.sh
+    scripts/restart.sh
+    scripts/collect_logs.sh
     scripts/start_race.sh
     scripts/race_supervisor.sh
     scripts/stop_race.sh
+    scripts/health_log.sh
     DESTINATION bin)
-install(PROGRAMS deploy/t113/init.d/S75race DESTINATION etc/init.d)
+install(PROGRAMS deploy/t113/init.d/S75race deploy/t113/init.d/S95t113-terminal
+        DESTINATION etc/init.d)
 install(FILES
     assets/icons/car-battery.png
     assets/icons/timer.png

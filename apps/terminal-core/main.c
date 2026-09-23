@@ -251,6 +251,17 @@ static void main_update_core_status(MainCanContext *can_context,
         data.state = RACE_CORE_LIFECYCLE_PRECHECK;
     }
     data.heartbeat_mono_us = main_monotonic_us();
+    if (main_active_receiver != NULL) {
+        unsigned int bus;
+        for (bus = 0U; bus < CAN_RECEIVER_BUS_COUNT; ++bus) {
+            data.can_rx_frames[bus] =
+                main_active_receiver->stats[bus].rx_frames;
+            data.can_error_frames[bus] =
+                main_active_receiver->stats[bus].error_frames;
+            data.can_bus_off_events[bus] =
+                main_active_receiver->stats[bus].bus_off_events;
+        }
+    }
     if (logger_ready) {
         (void)snprintf(data.session_directory,
                        sizeof(data.session_directory), "%s",

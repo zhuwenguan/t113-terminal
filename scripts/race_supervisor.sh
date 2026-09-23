@@ -3,14 +3,23 @@ set -eu
 
 RACE_BIN_DIR=${RACE_BIN_DIR:-"$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"}
 RACE_RUN_DIR=${RACE_RUN_DIR:-/run/race}
-RACE_LOG_DIR=${RACE_LOG_DIR:-/tmp/race}
+RACE_LOG_DIR=${RACE_LOG_DIR:-/mnt/usb/sda/log/app}
 RACE_WEBD_CONFIG=${RACE_WEBD_CONFIG:-"$RACE_BIN_DIR/../config/webd.conf"}
 RACE_WEB_ROOT=${RACE_WEB_ROOT:-"$RACE_BIN_DIR/../web"}
 
 mkdir -p "$RACE_RUN_DIR" "$RACE_LOG_DIR"
 echo $$ >"$RACE_RUN_DIR/race_supervisor.pid"
 stop_requested=0
+restart_count=0
 trap 'stop_requested=1' INT TERM
+
+health_log_running() {
+    daemon_running health_log
+}
+
+watchdog_running() {
+    daemon_running t113_watchdog
+}
 
 pid_is_number() {
     case "$1" in
@@ -44,6 +53,27 @@ start_daemon() {
     echo $! >"$RACE_RUN_DIR/$name.pid"
 }
 
+record_restart() {
+    restart_count=$((restart_count + 1))
+    printf '%s restart=%s service=%s reason=%s\n' \
+        "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$restart_count" "$1" "$2" \
+        >>"$RACE_LOG_DIR/supervisor.log"
+}
+
+limit_log() {
+    path=$1
+    max_bytes=${RACE_APP_LOG_MAX_BYTES:-4194304}
+    if [ -f "$path" ] && [ "$(wc -c <"$path")" -gt "$max_bytes" ]; then
+        # Keep one bounded snapshot, then truncate in place because the daemon
+        # keeps its descriptor open and would otherwise write to a renamed inode.
+        cp "$path" "$path.1" 2>/dev/null || true
+        : >"$path"
+        printf '%s log_truncated=%s\n' \
+            "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$path" \
+            >>"$RACE_LOG_DIR/supervisor.log"
+    fi
+}
+
 stop_daemon() {
     name=$1
     pid_file="$RACE_RUN_DIR/$name.pid"
@@ -75,10 +105,26 @@ core_is_running_state() {
 
 backoff=1
 while [ "$stop_requested" -eq 0 ]; do
+    limit_log "$RACE_LOG_DIR/supervisor.log"
+    limit_log "$RACE_LOG_DIR/race_core.log"
+    limit_log "$RACE_LOG_DIR/race_video.log"
+    limit_log "$RACE_LOG_DIR/webd.log"
+    limit_log "$RACE_LOG_DIR/health_log.log"
+    if ! health_log_running; then
+        start_daemon health_log
+    fi
+    if [ "${RACE_WATCHDOG_ENABLED:-1}" = 1 ] &&
+       [ -c /dev/watchdog ] && [ -x "$RACE_BIN_DIR/t113_watchdog" ] &&
+       ! watchdog_running; then
+        start_daemon t113_watchdog -s /race_core_status \
+            -t "${RACE_WATCHDOG_TIMEOUT_SEC:-15}"
+        record_restart watchdog unavailable
+    fi
     if ! daemon_running race_core; then
         sleep "$backoff"
         [ "$stop_requested" -ne 0 ] && break
         start_daemon race_core "$@"
+        record_restart race_core stopped
         if [ "$backoff" -lt 30 ]; then
             backoff=$((backoff * 2))
             [ "$backoff" -le 30 ] || backoff=30
@@ -102,4 +148,6 @@ done
 stop_daemon race_video
 stop_daemon webd
 stop_daemon race_core
+    stop_daemon health_log
+    stop_daemon t113_watchdog
 rm -f "$RACE_RUN_DIR/race_supervisor.pid"

@@ -20,6 +20,7 @@ typedef bool (*VideoStateSnapshotGetter)(VehicleState *state, void *context);
 #define VIDEO_PIPELINE_DEFAULT_WEB_PUBLISH_FPS 15U
 #define VIDEO_PIPELINE_DEFAULT_RECORD_SEGMENT_SECONDS (30U * 60U)
 #define VIDEO_PIPELINE_DEFAULT_HV_RECORD_THRESHOLD_V 300.0
+#define VIDEO_PIPELINE_DEFAULT_MIN_FREE_BYTES (128ULL * 1024ULL * 1024ULL)
 
 typedef struct {
     uint64_t samples;
@@ -40,6 +41,7 @@ typedef struct {
     uint32_t run_seconds;
     uint32_t record_segment_seconds;
     double record_start_hv_voltage;
+    uint64_t record_min_free_bytes;
     const char *video_ipc_name;
     bool mock_camera;
     VideoCompositorMode compositor_mode;

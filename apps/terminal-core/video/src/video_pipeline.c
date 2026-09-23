@@ -8,8 +8,10 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/statvfs.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -22,6 +24,30 @@ static uint64_t video_pipeline_now_us(void)
     }
     return (uint64_t)now.tv_sec * 1000000ULL +
            (uint64_t)now.tv_nsec / 1000ULL;
+}
+
+static bool video_pipeline_has_free_space(const VideoPipeline *pipeline)
+{
+    struct statvfs status;
+    uint64_t available;
+    const char *directory;
+
+    if (pipeline == NULL || pipeline->config.record_min_free_bytes == 0U) {
+        return true;
+    }
+    directory = pipeline->config.record_directory;
+    if (directory == NULL || statvfs(directory, &status) < 0) {
+        LOG_WARN("Video: cannot inspect recording space: %s", strerror(errno));
+        return false;
+    }
+    available = (uint64_t)status.f_bavail * (uint64_t)status.f_frsize;
+    if (available < pipeline->config.record_min_free_bytes) {
+        LOG_WARN("Video: recording blocked, free=%" PRIu64
+                 " bytes minimum=%" PRIu64,
+                 available, pipeline->config.record_min_free_bytes);
+        return false;
+    }
+    return true;
 }
 
 static uint64_t video_pipeline_rusage_us(const struct rusage *usage)
@@ -314,6 +340,10 @@ static int video_pipeline_start_hv_recording(VideoPipeline *pipeline,
     if (pipeline == NULL || pipeline->config.record_directory == NULL ||
         pipeline->config.record_directory[0] == '\0') {
         errno = EINVAL;
+        return -1;
+    }
+    if (!video_pipeline_has_free_space(pipeline)) {
+        errno = ENOSPC;
         return -1;
     }
     segment_index = pipeline->record_segment_index;
@@ -1208,6 +1238,16 @@ int video_pipeline_init(VideoPipeline *pipeline,
     if (pipeline->config.record_start_hv_voltage <= 0.0) {
         pipeline->config.record_start_hv_voltage =
             VIDEO_PIPELINE_DEFAULT_HV_RECORD_THRESHOLD_V;
+    }
+    if (pipeline->config.record_min_free_bytes == 0U) {
+        const char *configured = getenv("RACE_MIN_FREE_BYTES");
+        char *end = NULL;
+        unsigned long long parsed = configured != NULL
+            ? strtoull(configured, &end, 10) : 0ULL;
+
+        pipeline->config.record_min_free_bytes =
+            configured != NULL && end != configured && *end == '\0'
+                ? (uint64_t)parsed : VIDEO_PIPELINE_DEFAULT_MIN_FREE_BYTES;
     }
     compositor_mode = config->compositor_mode;
     result = pthread_mutex_init(&pipeline->mutex, NULL);

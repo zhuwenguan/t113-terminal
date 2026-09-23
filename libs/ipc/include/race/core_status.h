@@ -11,7 +11,7 @@
  * usable by the other daemons. */
 #define RACE_CORE_STATUS_NAME "/race_core_status"
 #define RACE_CORE_STATUS_MAGIC UINT32_C(0x52435354)
-#define RACE_CORE_STATUS_VERSION 1U
+#define RACE_CORE_STATUS_VERSION 2U
 #define RACE_CORE_STATUS_PATH_MAX 256U
 #define RACE_CORE_STATUS_STALE_US UINT64_C(3000000)
 
@@ -37,6 +37,9 @@ typedef struct {
     uint32_t can_ready_mask;
     uint32_t reserved;
     uint64_t heartbeat_mono_us;
+    uint64_t can_rx_frames[2];
+    uint64_t can_error_frames[2];
+    uint64_t can_bus_off_events[2];
     char session_directory[RACE_CORE_STATUS_PATH_MAX];
 } RaceCoreStatusData;
 
