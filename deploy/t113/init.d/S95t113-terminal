@@ -1,12 +1,71 @@
 #!/bin/sh
 
 PREFIX=${T113_PREFIX:-/opt/t113}
+
+# The awlink CAN devices are created by the board driver, but the stock image
+# leaves them DOWN.  Configure both buses before starting the supervisor so
+# race_core can reach RUNNING and release race_video/webd.  Keep the bitrate
+# overridable for boards with a different CAN bus configuration.
+T113_CAN_BITRATE=${T113_CAN_BITRATE:-500000}
+
+setup_can_interface() {
+    interface=$1
+
+    if ! ip link show "$interface" >/dev/null 2>&1; then
+        echo "S95t113-terminal: CAN interface is not present: $interface" >&2
+        return 1
+    fi
+    # Reapply the bitrate while the interface is down; this also handles a
+    # driver-created interface whose previous configuration is unknown.
+    ip link set "$interface" down >/dev/null 2>&1 || true
+    if ! ip link set "$interface" type can bitrate "$T113_CAN_BITRATE" \
+            >/dev/null 2>&1 ||
+       ! ip link set "$interface" up >/dev/null 2>&1; then
+        echo "S95t113-terminal: cannot configure $interface at ${T113_CAN_BITRATE} bit/s" >&2
+        return 1
+    fi
+    echo "S95t113-terminal: CAN ready: $interface bitrate=$T113_CAN_BITRATE" >&2
+    return 0
+}
+
+setup_can() {
+    can0_ready=0
+    can1_ready=0
+    attempt=1
+
+    # The CAN driver may register shortly after the init script starts. Retry
+    # briefly without preventing the application stack from starting.
+    while [ "$attempt" -le 10 ]; do
+        if [ "$can0_ready" -eq 0 ] &&
+           setup_can_interface awlink0; then
+            can0_ready=1
+        fi
+        if [ "$can1_ready" -eq 0 ] &&
+           setup_can_interface awlink1; then
+            can1_ready=1
+        fi
+        if [ "$can0_ready" -eq 1 ] && [ "$can1_ready" -eq 1 ]; then
+            return 0
+        fi
+        sleep 1
+        attempt=$((attempt + 1))
+    done
+
+    echo "S95t113-terminal: warning: one or more CAN interfaces remain unavailable" >&2
+    return 0
+}
+
+start_stack() {
+    setup_can
+    "$PREFIX/bin/start_race.sh"
+}
+
 case "${1:-start}" in
-    start) "$PREFIX/bin/start_race.sh" ;;
+    start) start_stack ;;
     stop) "$PREFIX/bin/stop_race.sh" ;;
     restart)
         "$PREFIX/bin/stop_race.sh" || true
-        "$PREFIX/bin/start_race.sh"
+        start_stack
         ;;
     status)
         if [ -x "$PREFIX/bin/race_core_status_dump" ]; then
