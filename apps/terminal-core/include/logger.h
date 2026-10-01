@@ -17,6 +17,8 @@
 #define LOGGER_QUEUE_CAPACITY 1024U
 #define LOGGER_BATCH_SIZE 32U
 #define LOGGER_FLUSH_INTERVAL_MS 1000U
+/* Keep user-space buffers current, but avoid forcing the USB device per batch. */
+#define LOGGER_DURABILITY_INTERVAL_MS 5000U
 /* Keep room for the lower-rate records while raw CAN traffic is busy. */
 #define LOGGER_CRITICAL_QUEUE_RESERVE LOGGER_BATCH_SIZE
 
@@ -51,6 +53,8 @@ typedef struct {
     uint64_t dropped_records;
     uint64_t write_errors;
     uint64_t flushes;
+    uint64_t durability_syncs;
+    uint64_t durability_sync_deferred;
     uint64_t can_reserve_drops;
     size_t queue_high_watermark;
     LoggerTypeStats by_type[LOG_RECORD_TYPE_COUNT];
@@ -74,6 +78,8 @@ typedef struct {
     bool started;
     bool stop_requested;
     uint64_t next_sequence;
+    uint64_t last_durability_sync_us;
+    bool sync_pending[LOG_RECORD_TYPE_COUNT];
     bool file_mutex_initialized;
 } Logger;
 

@@ -19,6 +19,17 @@
 _Static_assert(LOGGER_CRITICAL_QUEUE_RESERVE < LOGGER_QUEUE_CAPACITY,
                "logger critical reserve must fit in the queue");
 
+static uint64_t logger_now_us(void)
+{
+    struct timespec now;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) {
+        return 0U;
+    }
+    return (uint64_t)now.tv_sec * 1000000ULL +
+           (uint64_t)now.tv_nsec / 1000ULL;
+}
+
 static bool logger_record_type_valid(LogRecordType type)
 {
     return (int)type >= 0 && type < LOG_RECORD_TYPE_COUNT;
@@ -207,11 +218,16 @@ static FILE *logger_open_exclusive(const char *path)
     return file;
 }
 
-static int logger_flush_and_sync_file(FILE *file)
+static int logger_flush_file(FILE *file)
+{
+    return file != NULL && fflush(file) == 0 ? 0 : -1;
+}
+
+static int logger_sync_file(FILE *file)
 {
     int descriptor;
 
-    if (file == NULL || fflush(file) != 0) {
+    if (file == NULL) {
         return -1;
     }
     descriptor = fileno(file);
@@ -225,6 +241,14 @@ static int logger_flush_and_sync_file(FILE *file)
         return -1;
     }
     return 0;
+}
+
+static int logger_flush_and_sync_file(FILE *file)
+{
+    if (logger_flush_file(file) < 0) {
+        return -1;
+    }
+    return logger_sync_file(file);
 }
 
 /* A power cut can leave the final CSV line unterminated. Preserve every
@@ -468,6 +492,7 @@ int logger_init(Logger *logger)
     logger->file_mutex_initialized = true;
 
     logger->initialized = true;
+    logger->last_durability_sync_us = logger_now_us();
     return 0;
 }
 
@@ -608,6 +633,8 @@ typedef struct {
     uint64_t dropped_records;
     uint64_t write_errors;
     uint64_t flushes;
+    uint64_t durability_syncs;
+    uint64_t durability_sync_deferred;
     LoggerTypeStats by_type[LOG_RECORD_TYPE_COUNT];
     bool file_failed[LOG_RECORD_TYPE_COUNT];
 } LoggerBatchStats;
@@ -626,6 +653,9 @@ static void logger_commit_batch_stats(Logger *logger,
     logger->stats.dropped_records += batch_stats->dropped_records;
     logger->stats.write_errors += batch_stats->write_errors;
     logger->stats.flushes += batch_stats->flushes;
+    logger->stats.durability_syncs += batch_stats->durability_syncs;
+    logger->stats.durability_sync_deferred +=
+        batch_stats->durability_sync_deferred;
     for (type = 0; type < LOG_RECORD_TYPE_COUNT; ++type) {
         logger->stats.by_type[type].written +=
             batch_stats->by_type[type].written;
@@ -639,12 +669,107 @@ static void logger_commit_batch_stats(Logger *logger,
     pthread_mutex_unlock(&logger->mutex);
 }
 
+static bool logger_has_pending_sync(const Logger *logger)
+{
+    unsigned int type;
+
+    for (type = 0U; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        if (logger->sync_pending[type]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool logger_durability_sync_due(const Logger *logger,
+                                       uint64_t now_us)
+{
+    if (!logger_has_pending_sync(logger)) {
+        return false;
+    }
+    if (logger->last_durability_sync_us == 0U || now_us == 0U) {
+        return true;
+    }
+    return now_us >= logger->last_durability_sync_us &&
+           now_us - logger->last_durability_sync_us >=
+               (uint64_t)LOGGER_DURABILITY_INTERVAL_MS * 1000ULL;
+}
+
+static void logger_make_sync_deadline(const Logger *logger,
+                                      struct timespec *deadline)
+{
+    uint64_t deadline_us = logger->last_durability_sync_us +
+                           (uint64_t)LOGGER_DURABILITY_INTERVAL_MS * 1000ULL;
+
+    deadline->tv_sec = (time_t)(deadline_us / 1000000ULL);
+    deadline->tv_nsec = (long)(deadline_us % 1000000ULL) * 1000L;
+}
+
+static bool logger_timespec_before(const struct timespec *left,
+                                   const struct timespec *right)
+{
+    return left->tv_sec < right->tv_sec ||
+           (left->tv_sec == right->tv_sec &&
+            left->tv_nsec < right->tv_nsec);
+}
+
+static void logger_sync_pending(Logger *logger)
+{
+    LoggerBatchStats batch_stats = {0};
+    bool file_failed[LOG_RECORD_TYPE_COUNT];
+    bool attempted = false;
+    unsigned int type;
+
+    if (pthread_mutex_lock(&logger->mutex) != 0) {
+        LOG_ERROR("Cannot lock logger statistics mutex");
+        return;
+    }
+    memcpy(file_failed, logger->stats.file_failed, sizeof(file_failed));
+    pthread_mutex_unlock(&logger->mutex);
+
+    if (!logger->file_mutex_initialized ||
+        pthread_mutex_lock(&logger->file_mutex) != 0) {
+        LOG_ERROR("Cannot lock logger file mutex");
+        return;
+    }
+
+    for (type = 0U; type < LOG_RECORD_TYPE_COUNT; ++type) {
+        if (!logger->sync_pending[type]) {
+            continue;
+        }
+        logger->sync_pending[type] = false;
+        if (logger->file[type] == NULL || file_failed[type]) {
+            continue;
+        }
+        attempted = true;
+        if (logger_sync_file(logger->file[type]) < 0) {
+            batch_stats.write_errors++;
+            batch_stats.by_type[type].write_errors++;
+            file_failed[type] = true;
+        } else {
+            batch_stats.durability_syncs++;
+        }
+    }
+    pthread_mutex_unlock(&logger->file_mutex);
+
+    if (attempted) {
+        uint64_t now_us = logger_now_us();
+
+        if (now_us != 0U) {
+            logger->last_durability_sync_us = now_us;
+        }
+    }
+    memcpy(batch_stats.file_failed, file_failed, sizeof(file_failed));
+    logger_commit_batch_stats(logger, &batch_stats);
+}
+
 static void logger_write_batch(Logger *logger, const LogRecord *batch,
                                size_t count)
 {
     LoggerBatchStats batch_stats = {0};
     bool file_failed[LOG_RECORD_TYPE_COUNT];
     bool touched[LOG_RECORD_TYPE_COUNT] = {false};
+    bool sync_now = false;
     size_t index;
     unsigned int type;
 
@@ -691,18 +816,32 @@ static void logger_write_batch(Logger *logger, const LogRecord *batch,
         if (!touched[type] || file_failed[type]) {
             continue;
         }
-        if (logger_flush_and_sync_file(logger->file[type]) < 0) {
+        if (logger_flush_file(logger->file[type]) < 0) {
             batch_stats.write_errors++;
             batch_stats.by_type[type].write_errors++;
             file_failed[type] = true;
         } else {
             batch_stats.flushes++;
+            logger->sync_pending[type] = true;
+        }
+    }
+
+    if (logger_has_pending_sync(logger)) {
+        uint64_t now_us = logger_now_us();
+
+        if (logger_durability_sync_due(logger, now_us)) {
+            sync_now = true;
+        } else {
+            batch_stats.durability_sync_deferred++;
         }
     }
 
     memcpy(batch_stats.file_failed, file_failed, sizeof(file_failed));
     pthread_mutex_unlock(&logger->file_mutex);
     logger_commit_batch_stats(logger, &batch_stats);
+    if (sync_now) {
+        logger_sync_pending(logger);
+    }
 }
 
 static void logger_make_deadline(uint64_t first_timestamp_us,
@@ -733,7 +872,7 @@ static void *logger_thread_main(void *context)
         LogRecord batch[LOGGER_BATCH_SIZE];
         size_t batch_count = 0;
         bool should_exit;
-        bool deadline_set = false;
+        bool sync_only = false;
         struct timespec deadline;
 
         pthread_mutex_lock(&logger->mutex);
@@ -742,14 +881,33 @@ static void *logger_thread_main(void *context)
             int wait_result;
 
             if (logger->queue_count == 0U) {
-                wait_result = pthread_cond_wait(&logger->condition,
-                                                &logger->mutex);
+                if (logger_durability_sync_due(logger, logger_now_us())) {
+                    sync_only = true;
+                    break;
+                }
+                if (logger_has_pending_sync(logger)) {
+                    logger_make_sync_deadline(logger, &deadline);
+                    wait_result = pthread_cond_timedwait(&logger->condition,
+                                                         &logger->mutex,
+                                                         &deadline);
+                } else {
+                    wait_result = pthread_cond_wait(&logger->condition,
+                                                    &logger->mutex);
+                }
             } else {
-                if (!deadline_set) {
-                    logger_make_deadline(
-                        logger->queue[logger->queue_head].timestamp_us,
-                        &deadline);
-                    deadline_set = true;
+                logger_make_deadline(
+                    logger->queue[logger->queue_head].timestamp_us,
+                    &deadline);
+                if (logger_durability_sync_due(logger, logger_now_us())) {
+                    break;
+                }
+                if (logger_has_pending_sync(logger)) {
+                    struct timespec sync_deadline;
+
+                    logger_make_sync_deadline(logger, &sync_deadline);
+                    if (logger_timespec_before(&sync_deadline, &deadline)) {
+                        deadline = sync_deadline;
+                    }
                 }
                 wait_result = pthread_cond_timedwait(&logger->condition,
                                                      &logger->mutex,
@@ -759,6 +917,13 @@ static void *logger_thread_main(void *context)
                 LOG_ERROR("Logger condition wait failed: %s",
                           strerror(wait_result));
                 logger->stop_requested = true;
+                break;
+            }
+            if (wait_result == ETIMEDOUT) {
+                if (logger->queue_count == 0U &&
+                    logger_durability_sync_due(logger, logger_now_us())) {
+                    sync_only = true;
+                }
                 break;
             }
         }
@@ -774,6 +939,9 @@ static void *logger_thread_main(void *context)
 
         if (batch_count > 0) {
             logger_write_batch(logger, batch, batch_count);
+        }
+        if (sync_only) {
+            logger_sync_pending(logger);
         }
         if (should_exit) {
             break;
@@ -1075,6 +1243,7 @@ void logger_print_stats(const Logger *logger)
     LOG_INFO("Logger statistics: can=%s lappro=%s vehicle_state=%s "
              "enqueued_records=%llu written_records=%llu "
              "dropped_records=%llu write_errors=%llu flushes=%llu "
+             "durability_syncs=%llu durability_sync_deferred=%llu "
              "can_reserve_drops=%llu queue_high_watermark=%zu "
              "can{enqueued=%llu,written=%llu,dropped=%llu,write_errors=%llu} "
              "lappro{enqueued=%llu,written=%llu,dropped=%llu,write_errors=%llu} "
@@ -1088,6 +1257,8 @@ void logger_print_stats(const Logger *logger)
              (unsigned long long)stats.dropped_records,
              (unsigned long long)stats.write_errors,
              (unsigned long long)stats.flushes,
+             (unsigned long long)stats.durability_syncs,
+             (unsigned long long)stats.durability_sync_deferred,
              (unsigned long long)stats.can_reserve_drops,
              stats.queue_high_watermark,
              (unsigned long long)stats.by_type[LOG_RECORD_TYPE_CAN].enqueued,
